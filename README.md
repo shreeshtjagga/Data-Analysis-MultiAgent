@@ -59,13 +59,29 @@ git push origin yourname
 * Keep commits small and focused
 * Create Pull Requests for merging
 
-### Do Not
+### Do Not (Strictly things to follow)
 
 * Do not push directly to `main`
-* Do not use force push
-* Do not work on another member’s branch
-* Do not skip pulling before working
-* Do not commit unnecessary files
+* Do not rename or delete branches without team discussion
+* Do not commit directly to another member’s branch
+* Do not leave unresolved merge conflicts
+* Do not commit broken or non-working code to your branch
+* Do not push large unnecessary files (videos, datasets, node_modules, etc.)
+* Do not hardcode sensitive data (API keys, passwords, tokens)
+* Do not change project structure without informing the team
+* Do not modify shared configuration files without discussion
+* Do not ignore code review comments
+* Do not create unclear or vague commit messages (e.g., "update", "fix")
+* Do not commit commented-out or unused code
+* Do not duplicate code unnecessarily
+* Do not skip testing before pushing changes
+* Do not push incomplete features without marking them clearly
+* Do not overwrite others’ work while resolving conflicts
+* Do not merge your own Pull Request without review
+* Do not create multiple branches for the same task unnecessarily
+* Do not delay Pull Requests for too long after completing work
+* Do not break existing functionality while adding new features
+* Do not ignore coding standards followed by the team
 
 ---
 
@@ -83,4 +99,5 @@ git push
 
 ## Summary
 
-All development must happen in individual branches. Changes should be merged into `main` only through Pull Requests after review.
+All development must happen in individual branches. Changes should be merged into `main` only through Pull Requests after review only.
+Balaji follow these ,don't tell "Naku telvadhi" 
