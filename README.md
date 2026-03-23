@@ -7,10 +7,10 @@
 * `main` - Stable and final code
 * Each member must use their own branch:
 
-  * `shreesht`
-  * `member2`
-  * `member3`
-  * `member4`
+  * `Shreesht`
+  * `Naga Balaji`
+  * `Saketh Ram`
+  * `Vaibhav`
 
 ---
 
