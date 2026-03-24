@@ -96,8 +96,4 @@ git push
 ```
 
 ---
-
-## Summary
-
-All development must happen in individual branches. Changes should be merged into `main` only through Pull Requests after review only.
-Balaji follow these ,don't tell "Naku telvadhi" 
+Lets Build it Guys
