@@ -11,6 +11,9 @@
   - `Saketh Ram`
   - `Vaibhav`
 
+Project Chat link:
+https://claude.ai/project/019d3ebe-0a8d-74d5-b89b-f424f2ad2886
+
 ---
 
 ## Project Structure
@@ -97,7 +100,7 @@ git push origin yourname
 
 ## Rules
 
-### ✅ Do
+### Do
 
 - Work only in your own branch
 - Pull latest code before starting
@@ -105,7 +108,7 @@ git push origin yourname
 - Keep commits small and focused
 - Create Pull Requests for merging
 
-### ❌ Do Not (Strict Rules)
+### Do Not (Strict Rules)
 
 - Do not push directly to `main`
 - Do not rename or delete branches without team discussion
@@ -143,4 +146,4 @@ git push origin yourname
 
 ---
 
-## Let's Build It 🚀
+## Let's Build It
