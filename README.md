@@ -11,7 +11,47 @@
   * `Naga Balaji`
   * `Saketh Ram`
   * `Vaibhav`
-
+---
+Data-Analysis-MultiAgent/
+│
+├── backend/
+│   ├── __init__.py
+│   ├── agents/
+│   │   ├── __init__.py
+│   │   ├── architect.py
+│   │   ├── statistician.py
+│   │   ├── visualizer.py
+│   │   └── insights.py
+│   │
+│   ├── core/
+│   │   ├── __init__.py
+│   │   ├── state.py
+│   │   ├── graph.py
+│   │   └── utils.py
+│   │
+│   ├── models/
+│   │   ├── __init__.py
+│   │   └── schemas.py
+│   │
+│   ├── app.py
+│   └── api.py
+│
+├── data/
+│   ├── sample_data.csv
+│   └── test_data/
+│       ├── good.csv
+│       ├── bad.csv
+│       └── messy.csv
+│
+├── .github/
+│   └── workflows/
+│       └── python-checks.yml
+│
+├── requirements.txt
+├── .env.example
+├── .gitignore
+├── docker-compose.yml
+└── README.md
 ---
 
 ## Workflow
