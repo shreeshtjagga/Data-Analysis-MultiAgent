@@ -11,8 +11,6 @@
   - `Saketh Ram`
   - `Vaibhav`
 
-Project Chat link:
-https://claude.ai/project/019d3ebe-0a8d-74d5-b89b-f424f2ad2886
 
 ---
 
