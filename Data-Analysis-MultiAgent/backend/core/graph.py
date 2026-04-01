@@ -1,4 +1,4 @@
-mport logging
+import logging
 from backend.core.state import AnalysisState
 from backend.agents.architect import architect_agent
 from backend.agents.statistician import statistician_agent
