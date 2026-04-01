@@ -1,6 +1,6 @@
 # Data Analysis Multi-Agent System
 
-## Team Responsibilities
+## Team Responsibilities If anyone is ubale to handle the stuff then share the work 
 
 ### Shreesht
 
