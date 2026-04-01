@@ -1,0 +1,12 @@
+version: "3.8"
+
+services:
+  streamlit:
+    build: .
+    ports:
+      - "8501:8501"
+    volumes:
+      - ./data:/app/data
+    env_file:
+      - .env
+    command: streamlit run backend/app.py --server.port=8501 --server.address=0.0.0.0
