@@ -9,6 +9,7 @@ If anyone is unable to handle the  stuff chill , share the work
 * backend/core/state.py
 * backend/core/utils.py
 * backend/agents/architect.py
+* backend/agents/summary.py // can be changefoor testing 
 * requirements.txt
 * docker-compose.yml
 * .gitignore
@@ -18,7 +19,7 @@ If anyone is unable to handle the  stuff chill , share the work
 ### Vaibhav
 
 * backend/agents/statistician.py
-* backend/agents/insights.py
+* backend/agents/insights.py  // main part of the agent//
 * backend/models/schemas.py
 
 ---
@@ -29,6 +30,7 @@ If anyone is unable to handle the  stuff chill , share the work
 * backend/app.py
 * .env.example
 * .github/workflows/python-checks.yml
+* backend/agents/summary.py // change be changed //
 
 ---
 
@@ -39,6 +41,7 @@ If anyone is unable to handle the  stuff chill , share the work
 * data/test_data/good.csv
 * data/test_data/bad.csv
 * data/test_data/messy.csv
+* backend/agents/summary.py // can be changed //
 
 ---
 
@@ -52,7 +55,9 @@ Data-Analysis-MultiAgent/
 │   │   ├── architect.py
 │   │   ├── statistician.py
 │   │   ├── visualizer.py
+|   |   ├── summary.py
 │   │   └── insights.py
+|   |   
 │   │
 │   ├── core/
 │   │   ├── state.py
