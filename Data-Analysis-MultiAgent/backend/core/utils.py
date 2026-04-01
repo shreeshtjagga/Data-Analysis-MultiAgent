@@ -26,18 +26,16 @@ def clean_dataframe(df: pd.DataFrame) -> pd.DataFrame:
     
     initial_rows = len(df)
 
-    # Strip whitespace from string columns
+
     str_cols = df.select_dtypes(include=["object"]).columns
     for col in str_cols:
         df[col] = df[col].str.strip()
 
-    # Drop fully duplicate rows
     df = df.drop_duplicates()
     dropped = initial_rows - len(df)
     if dropped > 0:
         logger.info("Dropped %d duplicate rows", dropped)
 
-    # Fill missing numeric values with column median
     num_cols = df.select_dtypes(include=[np.number]).columns
     for col in num_cols:
         if df[col].isna().any():
@@ -45,7 +43,6 @@ def clean_dataframe(df: pd.DataFrame) -> pd.DataFrame:
             df[col] = df[col].fillna(median_val)
             logger.info("Filled missing values in '%s' with median: %s", col, median_val)
 
-    # Fill missing categorical values with mode
     cat_cols = df.select_dtypes(include=["object"]).columns
     for col in cat_cols:
         if df[col].isna().any():
@@ -67,7 +64,6 @@ def detect_column_types(df: pd.DataFrame) -> dict[str, str]:
         elif pd.api.types.is_datetime64_any_dtype(df[col]):
             type_map[col] = "datetime"
         else:
-            # Try parsing as datetime
             try:
                 pd.to_datetime(df[col], infer_datetime_format=True)
                 type_map[col] = "datetime"
