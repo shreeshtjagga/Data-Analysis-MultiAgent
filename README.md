@@ -9,7 +9,7 @@ If anyone is unable to handle the  stuff chill , share the work
 * backend/core/state.py
 * backend/core/utils.py
 * backend/agents/architect.py
-* backend/agents/summary.py // can be changefoor testing 
+* backend/agents/summary.py // can be changed for testing //
 * requirements.txt
 * docker-compose.yml
 * .gitignore
@@ -19,7 +19,7 @@ If anyone is unable to handle the  stuff chill , share the work
 ### Vaibhav
 
 * backend/agents/statistician.py
-* backend/agents/insights.py  // main part of the agent//
+* backend/agents/insights.py  // main part of the agent //
 * backend/models/schemas.py
 
 ---
@@ -30,7 +30,7 @@ If anyone is unable to handle the  stuff chill , share the work
 * backend/app.py
 * .env.example
 * .github/workflows/python-checks.yml
-* backend/agents/summary.py // change be changed //
+* backend/agents/summary.py // can be changed //
 
 ---
 
