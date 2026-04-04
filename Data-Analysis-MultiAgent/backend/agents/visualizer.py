@@ -6,17 +6,17 @@ import seaborn as sns
 from langchain_groq import ChatGroq
 from backend.core.state import AnalysisState
 
-# Setup logging to match your project's style
+# Setup logging
 logger = logging.getLogger(__name__)
 
 def visualizer_agent(state: AnalysisState) -> AnalysisState:
     """
-    Visualizer Agent: Converts statistical findings into visual assets using Groq.
+    Visualizer Agent: Dynamically identifies and generates the 5-6 most 
+    statistically significant plots for the given dataset.
     """
     state.current_agent = "visualizer"
-    logger.info("Visualizer Agent: Commencing chart generation via Groq.")
+    logger.info("Visualizer Agent: Orchestrating a multi-plot analytical suite...")
 
-    # 1. Pipeline Check
     if state.clean_df is None or state.clean_df.empty:
         error_msg = "Visualizer Failure: clean_df is missing."
         logger.error(error_msg)
@@ -24,66 +24,76 @@ def visualizer_agent(state: AnalysisState) -> AnalysisState:
         return state
 
     try:
-        # 2. Initialize Groq (Ensure GROQ_API_KEY is in your .env)
-        # Using llama-3.3-70b-versatile or mixtral-8x7b-32768
-        llm = ChatGroq(model_name="llama-3.3-70b-versatile", temperature=0)
+        # 1. Initialize Groq
+        llm = ChatGroq(model_name="llama-3.3-70b-versatile", temperature=0.2)
         
-        # 3. Build Context
+        # 2. Build Context
         columns = list(state.clean_df.columns)
         stats_findings = state.stats_summary 
         
+        # 3. The "Multi-Plot" Strategic Prompt
         prompt = f"""
-        You are a Professional Data Visualizer.
+        You are a Senior Data Scientist. Your task is to produce a comprehensive 
+        visual gallery for the provided dataset.
         
         CONTEXT:
-        - Available Columns: {columns}
+        - Columns: {columns}
         - Column Types: {state.column_types}
-        - Statistical Insights: {stats_findings}
+        - Statistician's Findings: {stats_findings}
         
         TASK:
-        Write Python code using Seaborn to create a visualization that 
-        best represents the Statistical Insights provided above.
+	1. Deeply analyze the Statistical Insights to find the 'Primary Narrative'.
+
+        2. Select the BEST visualization from Seaborn or Matplotlib to represent this. 
+           (Examples: sns.scatterplot, sns.violinplot, sns.heatmap, sns.jointplot, sns.boxenplot, etc.)
+
+        3. Identify the 5-6 most important visual perspectives required to fully 
+           understand this data (e.g., Correlation Heatmap, Distribution of Key Metrics, 
+           Categorical breakdowns, Outlier detection).
+
+        4. Write Python code that generates these 5-6 plots as SUBPLOTS in a single figure.
         
         REQUIREMENTS:
-        - Use `plt.figure(figsize=(10, 6))`
-        - Assume the dataframe is named `df`.
-        - Do NOT use `plt.show()`.
-        - Use `sns.set_theme(style="whitegrid")`.
-        - Return ONLY the executable Python code block. No explanation.
+        - Use `fig, axes = plt.subplots(nrows=3, ncols=2, figsize=(20, 18))` (or similar grid).
+        - Use `plt.tight_layout(pad=5.0)`.
+        - Ensure every plot has a specific title related to the Statistician's findings.
+        - Use sophisticated Seaborn themes and palettes.
+        - Return ONLY the executable Python code block.
         """
 
-        # 4. Generate and Parse Code
+        # 4. Generate and Clean Code
         response = llm.invoke(prompt)
-        # Clean the response to ensure only pure Python code remains
         code = response.content.strip()
+        
         if "```python" in code:
             code = code.split("```python")[1].split("```")[0].strip()
         elif "```" in code:
             code = code.split("```")[1].split("```")[0].strip()
 
         # 5. Execute and Capture
-        plt.clf()  # Clear memory
-        exec_globals = {"df": state.clean_df, "plt": plt, "sns": sns}
+        plt.switch_backend('Agg') 
+        plt.clf() 
         
-        # Execute the Groq-generated code
+        # We pass the dataframe as 'df' to the execution environment
+        exec_globals = {"df": state.clean_df, "plt": plt, "sns": sns}
         exec(code, exec_globals)
         
-        # 6. Convert to Base64 String (The missing part)
+        # 6. Convert the entire Grid to a single Base64 String
         buf = io.BytesIO()
-        plt.savefig(buf, format='png', bbox_inches='tight')
+        plt.savefig(buf, format='png', bbox_inches='tight', dpi=150)
         buf.seek(0)
         img_base64 = base64.b64encode(buf.read()).decode('utf-8')
         plt.close()
 
-        # 7. Update AnalysisState charts dictionary
-        state.charts["primary_analysis"] = img_base64
-        logger.info("Visualizer Agent: Visualization successfully stored in state.")
+        # 7. Update AnalysisState
+        # We store the main dashboard as 'primary_analysis'
+        state.charts["visual_dashboard"] = img_base64
+        logger.info("Visualizer Agent: 5-6 dynamic plots generated and stored as a dashboard.")
 
     except Exception as e:
-        error_msg = f"Visualizer Execution Error: {str(e)}"
+        error_msg = f"Visualizer Suite Error: {str(e)}"
         logger.error(error_msg)
         state.errors.append(error_msg)
 
-    # 8. Finalize progress
     state.completed_agents.append("visualizer")
     return state
