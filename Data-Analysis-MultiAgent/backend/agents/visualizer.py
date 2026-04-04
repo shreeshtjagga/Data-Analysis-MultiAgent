@@ -33,8 +33,8 @@ def visualizer_agent(state: AnalysisState) -> AnalysisState:
         
         # 3. The "Multi-Plot" Strategic Prompt
         prompt = f"""
-        You are a Senior Data Scientist specializing in compelling data visualizations. 
-        Your task is to produce a comprehensive, colorful visual gallery for the provided dataset.
+        You are a Senior Data Scientist. Your task is to produce a comprehensive 
+        visual gallery for the provided dataset.
         
         CONTEXT:
         - Columns: {columns}
@@ -42,7 +42,7 @@ def visualizer_agent(state: AnalysisState) -> AnalysisState:
         - Statistician's Findings: {stats_findings}
         
         TASK:
-        1. Deeply analyze the Statistical Insights to find the 'Primary Narrative'.
+	1. Deeply analyze the Statistical Insights to find the 'Primary Narrative'.
 
         2. Select the BEST visualization from Seaborn or Matplotlib to represent this. 
            (Examples: sns.scatterplot, sns.violinplot, sns.heatmap, sns.jointplot, sns.boxenplot, etc.)
@@ -54,38 +54,10 @@ def visualizer_agent(state: AnalysisState) -> AnalysisState:
         4. Write Python code that generates these 5-6 plots as SUBPLOTS in a single figure.
         
         REQUIREMENTS:
-        
-        ** COLOR STRATEGY **
-        - Use DIFFERENT color schemes for DIFFERENT plot types to avoid monotony
-        - Use a combination of:
-          * "husl" palette (vibrant, rainbow-like for diversity)
-          * "RdYlGn" (red-yellow-green for heatmaps - natural)
-          * "coolwarm" (blue-white-red for correlations)
-          * "YlGnBu" (yellow-green-blue for gradients)
-          * "Set2" (distinct, harmonious pastels)
-          * "tab10" (categorical data)
-        - For heatmaps: Use "RdYlGn" or "coolwarm" to show intensity naturally
-        - For distributions: Use "Set2" or "husl" for aesthetically pleasing colors
-        - For categorical plots: Use "tab10" or "Set3" with natural variation
-        - For scatter plots: Use "viridis" or "plasma" with a colorbar showing intensity
-        
-        ** STYLING REQUIREMENTS **
-        - Use `fig, axes = plt.subplots(nrows=3, ncols=2, figsize=(20, 18))`
-        - Set white background: `fig.patch.set_facecolor('white')`
-        - Apply different sns.set_style or use matplotlib colors strategically
-        - Use `plt.tight_layout(pad=5.0)`
-        - Add grid lines (alpha=0.3) for better readability
-        - Use grid color: #E0E0E0 (light gray) for subtle contrast
-        - Use font sizes: 14px for titles, 12px for axis labels, 10px for ticks
-        - Set line widths to 1.5-2.0 for better visibility
-        - Use edge colors on bar plots (e.g., edgecolor='black', linewidth=0.5)
-        
-        ** VISUAL HIERARCHY **
-        - Ensure each plot has a unique, descriptive title related to Statistician's findings
-        - Add axis labels that are informative
-        - Use color variations to highlight important patterns
-        - Add a colorbar for heatmaps with proper labels
-        
+        - Use `fig, axes = plt.subplots(nrows=3, ncols=2, figsize=(20, 18))` (or similar grid).
+        - Use `plt.tight_layout(pad=5.0)`.
+        - Ensure every plot has a specific title related to the Statistician's findings.
+        - Use sophisticated Seaborn themes and palettes.
         - Return ONLY the executable Python code block.
         """
 
