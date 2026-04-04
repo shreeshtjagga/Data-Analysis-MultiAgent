@@ -6,25 +6,47 @@ import seaborn as sns
 from langchain_groq import ChatGroq
 from core.state import AnalysisState
 
-# Setup logging
 logger = logging.getLogger(__name__)
+
+
+def _build_viz_context(state) -> dict:
+    """
+    Builds a minimal context dict for the visualizer prompt.
+    Avoids sending full stats_summary (can be 2-4k tokens).
+    Only sends what's needed to pick good chart types.
+    """
+    stats = state.stats_summary or {}
+    numeric_cols    = list(stats.get("numeric_columns", {}).keys())
+    categorical_cols = list(stats.get("categorical_columns", {}).keys())
+    strong_corr     = [
+        f"{c['col1']} vs {c['col2']} (r={c['correlation']:.2f})"
+        for c in stats.get("strong_correlations", [])
+    ]
+    outlier_cols    = list(stats.get("outliers", {}).keys())
+
+    return {
+        "numeric_cols":    numeric_cols,
+        "categorical_cols": categorical_cols,
+        "strong_corr":     strong_corr,
+        "outlier_cols":    outlier_cols,
+        "column_types":    state.column_types,
+    }
+
 
 def visualizer_agent(state: AnalysisState) -> AnalysisState:
     """
-    Visualizer Agent: Dynamically identifies and generates the 5-6 most 
-    statistically significant plots for the given dataset.
+    Visualizer Agent — token-efficient version.
+    Sends only a compact context instead of the full stats_summary.
     """
     state.current_agent = "visualizer"
-    logger.info("Visualizer Agent: Orchestrating a multi-plot analytical suite...")
+    logger.info("Visualizer Agent started (token-optimised).")
 
     if state.clean_df is None or state.clean_df.empty:
-        error_msg = "Visualizer Failure: clean_df is missing."
-        logger.error(error_msg)
-        state.errors.append(error_msg)
+        state.errors.append("Visualizer Failure: clean_df is missing.")
+        state.completed_agents.append("visualizer")
         return state
 
     try:
-        # 1. Initialize Groq
         llm = ChatGroq(model_name="llama-3.3-70b-versatile", temperature=0.2)
         
         # 2. Build Context
@@ -92,36 +114,30 @@ def visualizer_agent(state: AnalysisState) -> AnalysisState:
         # 4. Generate and Clean Code
         response = llm.invoke(prompt)
         code = response.content.strip()
-        
+
         if "```python" in code:
             code = code.split("```python")[1].split("```")[0].strip()
         elif "```" in code:
             code = code.split("```")[1].split("```")[0].strip()
 
-        # 5. Execute and Capture
-        plt.switch_backend('Agg') 
-        plt.clf() 
-        
-        # We pass the dataframe as 'df' to the execution environment
+        plt.switch_backend('Agg')
+        plt.clf()
+
         exec_globals = {"df": state.clean_df, "plt": plt, "sns": sns}
         exec(code, exec_globals)
-        
-        # 6. Convert the entire Grid to a single Base64 String
+
         buf = io.BytesIO()
         plt.savefig(buf, format='png', bbox_inches='tight', dpi=150)
         buf.seek(0)
         img_base64 = base64.b64encode(buf.read()).decode('utf-8')
         plt.close()
 
-        # 7. Update AnalysisState
-        # We store the main dashboard as 'primary_analysis'
         state.charts["visual_dashboard"] = img_base64
-        logger.info("Visualizer Agent: 5-6 dynamic plots generated and stored as a dashboard.")
+        logger.info("Visualizer Agent complete.")
 
     except Exception as e:
-        error_msg = f"Visualizer Suite Error: {str(e)}"
-        logger.error(error_msg)
-        state.errors.append(error_msg)
+        state.errors.append(f"Visualizer error: {str(e)}")
+        logger.error("Visualizer error: %s", e)
 
     state.completed_agents.append("visualizer")
     return state

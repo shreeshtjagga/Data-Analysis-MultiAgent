@@ -1,5 +1,5 @@
 """
-AI Data Analyst · Streamlit frontend
+AI Data Analyst · Streamlit frontend — Enhanced UI
 Pipeline: Architect → Statistician → Visualizer → Summary → Insights
 """
 import io
@@ -33,131 +33,400 @@ st.set_page_config(
 # ── Global CSS ────────────────────────────────────────────────────────────────
 st.markdown("""
 <style>
-@import url('https://fonts.googleapis.com/css2?family=DM+Sans:wght@300;400;500;600;700&family=DM+Mono:wght@400;500&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Syne:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&family=Outfit:wght@300;400;500;600&display=swap');
 
-html, body, [class*="css"] { font-family: 'DM Sans', sans-serif; }
-.block-container { padding-top: 2rem; max-width: 1280px; }
+/* ── Reset & Base ── */
+html, body, [class*="css"] {
+    font-family: 'Outfit', sans-serif;
+    background-color: #080c14;
+    color: #e2e8f0;
+}
 
+.block-container {
+    padding-top: 1.5rem;
+    max-width: 1400px;
+}
+
+/* ── Sidebar ── */
 [data-testid="stSidebar"] {
-    background: linear-gradient(160deg, #0f172a 0%, #1e293b 100%);
+    background: #080c14;
+    border-right: 1px solid rgba(99, 102, 241, 0.15);
 }
 [data-testid="stSidebar"] * { color: #e2e8f0 !important; }
-
-div[data-testid="stMetric"] {
-    background: var(--secondary-background-color);
-    border: 1px solid rgba(148,163,184,0.15);
-    border-radius: 12px;
-    padding: 18px 22px;
-    box-shadow: 0 1px 4px rgba(0,0,0,0.06);
-    transition: box-shadow 0.2s;
-}
-div[data-testid="stMetric"]:hover { box-shadow: 0 6px 16px rgba(0,0,0,0.1); }
-div[data-testid="stMetric"] label {
-    font-size: 0.78rem !important;
-    font-weight: 600 !important;
-    letter-spacing: 0.06em;
+[data-testid="stSidebar"] .stFileUploader label {
+    color: #94a3b8 !important;
+    font-size: 0.8rem;
     text-transform: uppercase;
-    opacity: 0.55;
+    letter-spacing: 0.1em;
+}
+
+/* ── App background ── */
+.stApp {
+    background: #080c14;
+    background-image: radial-gradient(ellipse at 20% 10%, rgba(99,102,241,0.08) 0%, transparent 60%),
+                      radial-gradient(ellipse at 80% 80%, rgba(16,185,129,0.05) 0%, transparent 60%);
+}
+
+/* ── Metric cards ── */
+div[data-testid="stMetric"] {
+    background: rgba(15, 23, 42, 0.8);
+    border: 1px solid rgba(99, 102, 241, 0.2);
+    border-top: 2px solid #6366f1;
+    border-radius: 8px;
+    padding: 16px 18px;
+    transition: border-color 0.2s, transform 0.2s;
+    backdrop-filter: blur(8px);
+}
+div[data-testid="stMetric"]:hover {
+    border-top-color: #a5b4fc;
+    transform: translateY(-2px);
+    box-shadow: 0 8px 24px rgba(99,102,241,0.15);
+}
+div[data-testid="stMetric"] label {
+    font-size: 0.68rem !important;
+    font-weight: 600 !important;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: #64748b !important;
 }
 div[data-testid="stMetric"] [data-testid="stMetricValue"] {
-    font-size: 1.9rem !important;
-    font-weight: 700 !important;
+    font-family: 'Syne', sans-serif !important;
+    font-size: 1.8rem !important;
+    font-weight: 800 !important;
+    color: #e2e8f0 !important;
 }
 
-.health-badge {
-    display: inline-flex;
-    align-items: center;
-    gap: 10px;
-    padding: 10px 20px;
-    border-radius: 999px;
-    font-weight: 700;
-    font-size: 1.05rem;
+/* ── Tabs ── */
+.stTabs [data-baseweb="tab-list"] {
+    gap: 0;
+    border-bottom: 1px solid rgba(99,102,241,0.2);
+    background: transparent;
+    padding: 0;
 }
-.health-great  { background:#dcfce7; color:#166534; }
-.health-ok     { background:#fef9c3; color:#854d0e; }
-.health-poor   { background:#fee2e2; color:#991b1b; }
-
-.stat-card {
-    background: var(--secondary-background-color);
-    border: 1px solid rgba(148,163,184,0.15);
-    border-left: 4px solid #6366f1;
-    border-radius: 10px;
-    padding: 16px 20px;
-    margin-bottom: 12px;
-}
-.stat-card h5 {
-    margin: 0 0 6px 0;
-    font-size: 0.75rem;
-    font-weight: 600;
-    letter-spacing: 0.08em;
-    text-transform: uppercase;
-    opacity: 0.5;
-}
-.stat-card .val { font-size: 1.45rem; font-weight: 700; }
-.stat-card .sub { font-size: 0.83rem; opacity: 0.6; margin-top: 4px; }
-
-.insight-card {
-    background: var(--secondary-background-color);
-    border-radius: 12px;
-    padding: 22px 24px;
-    border-top: 4px solid;
-    border-left: 1px solid rgba(148,163,184,0.12);
-    border-right: 1px solid rgba(148,163,184,0.12);
-    border-bottom: 1px solid rgba(148,163,184,0.12);
-    min-height: 220px;
-}
-.insight-card.findings        { border-top-color: #6366f1; }
-.insight-card.anomalies       { border-top-color: #f43f5e; }
-.insight-card.recommendations { border-top-color: #10b981; }
-.insight-card h4 {
-    margin: 0 0 14px 0;
-    font-size: 0.95rem;
-    font-weight: 700;
-    letter-spacing: 0.04em;
-    text-transform: uppercase;
-    color: var(--text-color);
-}
-.insight-card ul {
-    padding-left: 18px;
-    margin: 0;
-    font-size: 0.93rem;
-    line-height: 1.75;
-    color: var(--text-color);
-}
-.insight-card li { margin-bottom: 6px; }
-
-.stTabs [data-baseweb="tab-list"] { gap: 8px; border-bottom: 2px solid rgba(148,163,184,0.15); }
 .stTabs [data-baseweb="tab"] {
-    height: 44px;
-    border-radius: 8px 8px 0 0;
-    padding: 0 18px;
+    height: 42px;
+    padding: 0 22px;
+    font-size: 0.82rem;
     font-weight: 500;
-    font-size: 0.9rem;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: #64748b !important;
+    border-bottom: 2px solid transparent;
+    border-radius: 0;
+    background: transparent;
+    transition: all 0.2s;
 }
-.stTabs [aria-selected="true"] { font-weight: 700 !important; }
+.stTabs [data-baseweb="tab"]:hover {
+    color: #a5b4fc !important;
+    border-bottom-color: rgba(99,102,241,0.4);
+}
+.stTabs [aria-selected="true"] {
+    color: #6366f1 !important;
+    font-weight: 700 !important;
+    border-bottom: 2px solid #6366f1 !important;
+    background: transparent !important;
+}
+[data-testid="stTabsContent"] {
+    padding-top: 1.5rem;
+}
 
+/* ── Buttons ── */
 .stButton > button {
     width: 100%;
-    border-radius: 10px;
-    background: linear-gradient(135deg, #6366f1 0%, #8b5cf6 100%);
+    border-radius: 6px;
+    background: linear-gradient(135deg, #6366f1 0%, #4f46e5 100%);
     color: white !important;
     border: none;
-    font-weight: 600;
-    font-size: 0.95rem;
-    padding: 0.6rem 1.2rem;
-    transition: opacity 0.2s, transform 0.15s;
-}
-.stButton > button:hover { opacity: 0.88; transform: translateY(-1px); }
-
-.section-title {
-    font-size: 1.1rem;
+    font-family: 'Syne', sans-serif;
     font-weight: 700;
-    margin-bottom: 14px;
-    padding-bottom: 6px;
-    border-bottom: 2px solid rgba(99,102,241,0.25);
-    color: var(--text-color);
+    font-size: 0.85rem;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    padding: 0.65rem 1.2rem;
+    transition: all 0.2s;
+    box-shadow: 0 4px 15px rgba(99,102,241,0.3);
 }
-code { font-family: 'DM Mono', monospace; }
+.stButton > button:hover {
+    background: linear-gradient(135deg, #818cf8 0%, #6366f1 100%);
+    box-shadow: 0 6px 20px rgba(99,102,241,0.45);
+    transform: translateY(-1px);
+}
+
+/* ── Divider ── */
+hr { border-color: rgba(99,102,241,0.15) !important; }
+
+/* ── DataFrames ── */
+[data-testid="stDataFrame"] {
+    border: 1px solid rgba(99,102,241,0.15);
+    border-radius: 8px;
+    overflow: hidden;
+}
+
+/* ── Expander ── */
+[data-testid="stExpander"] {
+    border: 1px solid rgba(99,102,241,0.15) !important;
+    border-radius: 8px !important;
+    background: rgba(15, 23, 42, 0.5) !important;
+}
+
+/* ── Custom components ── */
+.page-header {
+    display: flex;
+    align-items: baseline;
+    gap: 14px;
+    margin-bottom: 1.5rem;
+    padding-bottom: 1rem;
+    border-bottom: 1px solid rgba(99,102,241,0.15);
+}
+.page-header .title {
+    font-family: 'Syne', sans-serif;
+    font-size: 1.6rem;
+    font-weight: 800;
+    color: #f1f5f9;
+    margin: 0;
+}
+.page-header .subtitle {
+    font-size: 0.85rem;
+    color: #475569;
+    font-weight: 400;
+}
+
+.section-label {
+    font-family: 'Syne', sans-serif;
+    font-size: 0.72rem;
+    font-weight: 700;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    color: #475569;
+    margin-bottom: 10px;
+    padding-bottom: 6px;
+    border-bottom: 1px solid rgba(99,102,241,0.12);
+}
+
+.kpi-card {
+    background: rgba(15, 23, 42, 0.7);
+    border: 1px solid rgba(99,102,241,0.18);
+    border-radius: 8px;
+    padding: 14px 16px;
+    margin-bottom: 10px;
+    transition: border-color 0.2s;
+    backdrop-filter: blur(4px);
+}
+.kpi-card:hover { border-color: rgba(99,102,241,0.4); }
+.kpi-card .label {
+    font-size: 0.65rem;
+    font-weight: 700;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: #475569;
+    margin-bottom: 6px;
+}
+.kpi-card .value {
+    font-family: 'Syne', sans-serif;
+    font-size: 1.35rem;
+    font-weight: 800;
+    color: #e2e8f0;
+    line-height: 1.2;
+}
+.kpi-card .meta {
+    font-size: 0.78rem;
+    color: #64748b;
+    margin-top: 4px;
+    font-family: 'JetBrains Mono', monospace;
+}
+.kpi-card.accent-green  { border-left: 3px solid #10b981; }
+.kpi-card.accent-red    { border-left: 3px solid #f43f5e; }
+.kpi-card.accent-blue   { border-left: 3px solid #38bdf8; }
+.kpi-card.accent-amber  { border-left: 3px solid #f59e0b; }
+.kpi-card.accent-purple { border-left: 3px solid #a78bfa; }
+
+.insight-panel {
+    background: rgba(15, 23, 42, 0.7);
+    border: 1px solid rgba(99,102,241,0.18);
+    border-radius: 10px;
+    padding: 20px 22px;
+    min-height: 240px;
+    backdrop-filter: blur(4px);
+}
+.insight-panel .panel-title {
+    font-family: 'Syne', sans-serif;
+    font-size: 0.75rem;
+    font-weight: 700;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    margin-bottom: 16px;
+    padding-bottom: 10px;
+    border-bottom: 1px solid rgba(99,102,241,0.12);
+}
+.insight-panel.findings   .panel-title { color: #818cf8; border-bottom-color: rgba(99,102,241,0.25); }
+.insight-panel.anomalies  .panel-title { color: #fb7185; border-bottom-color: rgba(244,63,94,0.25); }
+.insight-panel.recs       .panel-title { color: #34d399; border-bottom-color: rgba(16,185,129,0.25); }
+.insight-panel ul { list-style: none; padding: 0; margin: 0; }
+.insight-panel ul li {
+    font-size: 0.88rem;
+    color: #94a3b8;
+    line-height: 1.7;
+    padding: 6px 0;
+    border-bottom: 1px solid rgba(99,102,241,0.07);
+    display: flex;
+    gap: 10px;
+    align-items: flex-start;
+}
+.insight-panel ul li::before { content: '→'; color: #4f46e5; flex-shrink: 0; margin-top: 1px; }
+.insight-panel ul li:last-child { border-bottom: none; }
+.insight-panel .empty-state { color: #334155; font-size: 0.85rem; font-style: italic; }
+
+.exec-summary-box {
+    background: linear-gradient(135deg, rgba(99,102,241,0.06) 0%, rgba(16,185,129,0.04) 100%);
+    border: 1px solid rgba(99,102,241,0.2);
+    border-left: 4px solid #6366f1;
+    border-radius: 8px;
+    padding: 20px 24px;
+    margin-bottom: 24px;
+    font-size: 0.96rem;
+    line-height: 1.8;
+    color: #cbd5e1;
+}
+
+.quality-bar-row {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    margin-bottom: 8px;
+}
+.quality-bar-label {
+    font-size: 0.78rem;
+    color: #64748b;
+    width: 90px;
+    flex-shrink: 0;
+}
+.quality-bar-track {
+    flex: 1;
+    height: 6px;
+    background: rgba(99,102,241,0.1);
+    border-radius: 3px;
+    overflow: hidden;
+}
+.quality-bar-fill {
+    height: 100%;
+    border-radius: 3px;
+    background: linear-gradient(90deg, #6366f1, #10b981);
+}
+.quality-bar-value {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.75rem;
+    color: #94a3b8;
+    width: 42px;
+    text-align: right;
+    flex-shrink: 0;
+}
+
+.corr-pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    background: rgba(15, 23, 42, 0.7);
+    border: 1px solid rgba(99,102,241,0.18);
+    border-radius: 6px;
+    padding: 10px 14px;
+    margin-bottom: 8px;
+    width: 100%;
+}
+.corr-pill .cols { font-size: 0.88rem; color: #e2e8f0; font-weight: 500; flex: 1; }
+.corr-pill .cols span { color: #475569; margin: 0 6px; }
+.corr-pill .r-val {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.8rem;
+    font-weight: 600;
+    padding: 2px 8px;
+    border-radius: 4px;
+}
+.corr-pill .r-val.pos { background: rgba(16,185,129,0.15); color: #34d399; }
+.corr-pill .r-val.neg { background: rgba(244,63,94,0.15);  color: #fb7185; }
+
+.sidebar-logo {
+    font-family: 'Syne', sans-serif;
+    font-size: 1.3rem;
+    font-weight: 800;
+    color: #f1f5f9;
+    letter-spacing: -0.02em;
+    margin: 0;
+}
+.sidebar-tagline { font-size: 0.72rem; color: #334155; margin: 3px 0 0 0; letter-spacing: 0.06em; }
+
+.pipeline-step {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 5px 0;
+    font-size: 0.77rem;
+    color: #475569;
+}
+.pipeline-step .dot {
+    width: 6px; height: 6px;
+    border-radius: 50%;
+    background: #6366f1;
+    flex-shrink: 0;
+}
+
+.warning-block {
+    background: rgba(251,191,36,0.07);
+    border: 1px solid rgba(251,191,36,0.2);
+    border-left: 3px solid #fbbf24;
+    border-radius: 6px;
+    padding: 10px 14px;
+    font-size: 0.83rem;
+    color: #fde68a;
+    margin-bottom: 8px;
+}
+
+.chart-frame {
+    background: rgba(15, 23, 42, 0.5);
+    border: 1px solid rgba(99,102,241,0.15);
+    border-radius: 10px;
+    padding: 16px;
+    margin-bottom: 16px;
+}
+.chart-title {
+    font-family: 'Syne', sans-serif;
+    font-size: 0.75rem;
+    font-weight: 700;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: #475569;
+    margin-bottom: 12px;
+}
+
+.empty-state-box {
+    text-align: center;
+    padding: 60px 40px;
+    background: rgba(15, 23, 42, 0.4);
+    border: 1px dashed rgba(99,102,241,0.2);
+    border-radius: 12px;
+}
+.empty-state-box .icon { font-size: 2.5rem; margin-bottom: 16px; }
+.empty-state-box h2 {
+    font-family: 'Syne', sans-serif;
+    font-size: 1.4rem;
+    font-weight: 800;
+    color: #e2e8f0;
+    margin: 0 0 10px 0;
+}
+.empty-state-box p { font-size: 0.9rem; color: #475569; max-width: 380px; margin: 0 auto; line-height: 1.7; }
+
+code, .mono { font-family: 'JetBrains Mono', monospace !important; }
+
+/* Streamlit overrides */
+[data-testid="stWarning"] {
+    background: rgba(251,191,36,0.07) !important;
+    border: 1px solid rgba(251,191,36,0.2) !important;
+    color: #fde68a !important;
+}
+[data-testid="stInfo"] {
+    background: rgba(56,189,248,0.06) !important;
+    border: 1px solid rgba(56,189,248,0.2) !important;
+    color: #7dd3fc !important;
+}
 </style>
 """, unsafe_allow_html=True)
 
@@ -174,69 +443,70 @@ for k, v in _DEFAULTS.items():
 # ── Sidebar ───────────────────────────────────────────────────────────────────
 with st.sidebar:
     st.markdown("""
-    <div style="padding:16px 4px 8px 4px">
-        <p style="font-size:1.55rem;font-weight:800;margin:0;color:#f1f5f9;letter-spacing:-0.01em">
-            📊 AI Data Analyst
-        </p>
-        <p style="font-size:0.82rem;color:#94a3b8;margin:4px 0 0 0">
-            Powered by LangGraph + Groq
-        </p>
+    <div style="padding:20px 4px 12px 4px">
+        <p class="sidebar-logo">◈ Data Analyst</p>
+        <p class="sidebar-tagline">POWERED BY LANGGRAPH + GROQ</p>
     </div>
     """, unsafe_allow_html=True)
     st.divider()
 
     uploaded_file = st.file_uploader(
-        "Upload Dataset (CSV)",
+        "Upload Dataset",
         type=["csv"],
         help="CSV files up to 200 MB.",
+        label_visibility="visible",
     )
 
-    # Persist file bytes in session state so reruns don't lose the file
     if uploaded_file is not None:
         current_bytes = uploaded_file.getvalue()
-        # Only update if a new file was uploaded
         if st.session_state["uploaded_file_name"] != uploaded_file.name:
             st.session_state["file_bytes"] = current_bytes
             st.session_state["uploaded_file_name"] = uploaded_file.name
-            st.session_state["analysis_result"] = None  # clear old results
+            st.session_state["analysis_result"] = None
         elif st.session_state["file_bytes"] is None:
             st.session_state["file_bytes"] = current_bytes
 
-    # Show currently loaded file
     if st.session_state["uploaded_file_name"]:
-        st.success(f"✅ **{st.session_state['uploaded_file_name']}**")
+        st.markdown(f"""
+        <div style="background:rgba(16,185,129,0.08);border:1px solid rgba(16,185,129,0.25);
+                    border-radius:6px;padding:8px 12px;margin:8px 0;font-size:0.78rem;color:#34d399;">
+            ✓ &nbsp;<code style="color:#6ee7b7;font-size:0.76rem">{st.session_state['uploaded_file_name']}</code>
+        </div>
+        """, unsafe_allow_html=True)
 
     st.markdown("<br>", unsafe_allow_html=True)
 
-    # Button is enabled as long as we have file bytes stored
     has_file = st.session_state["file_bytes"] is not None
     run_clicked = st.button(
-        "⚡ Generate Analysis",
+        "⚡  Run Analysis",
         type="primary",
         disabled=not has_file,
     )
 
     st.divider()
+
     st.markdown("""
-    <div style="font-size:0.78rem;color:#64748b;line-height:1.6">
-        <strong style="color:#94a3b8">Pipeline</strong><br>
-        🏗 Architect &nbsp;→&nbsp; 📐 Statistician<br>
-        🎨 Visualizer &nbsp;→&nbsp; 📝 Summary<br>
-        💡 Insights
+    <div style="padding:4px 0">
+        <p style="font-family:'Syne',sans-serif;font-size:0.65rem;font-weight:700;
+                  letter-spacing:0.14em;text-transform:uppercase;color:#334155;margin-bottom:10px">
+            Pipeline
+        </p>
+        <div class="pipeline-step"><span class="dot"></span> Architect — data cleaning</div>
+        <div class="pipeline-step"><span class="dot"></span> Statistician — deep stats</div>
+        <div class="pipeline-step"><span class="dot"></span> Visualizer — chart suite</div>
+        <div class="pipeline-step"><span class="dot"></span> Summary — executive brief</div>
+        <div class="pipeline-step"><span class="dot"></span> Insights — AI strategy</div>
     </div>
     """, unsafe_allow_html=True)
 
 # ── Run pipeline ──────────────────────────────────────────────────────────────
 if run_clicked and st.session_state["file_bytes"] is not None:
-    with st.spinner("🤖 Running analysis pipeline…"):
+    with st.spinner("Running analysis pipeline…"):
         try:
             df = pd.read_csv(io.BytesIO(st.session_state["file_bytes"]))
-
             state = run_pipeline(df)
             result = state.model_dump()
-
             st.session_state["analysis_result"] = result
-
         except Exception as exc:
             st.error(f"Pipeline error: {exc}")
             logger.exception("Pipeline error")
@@ -247,39 +517,37 @@ result = st.session_state.get("analysis_result")
 # ── Empty state ───────────────────────────────────────────────────────────────
 if result is None:
     st.markdown("<br><br>", unsafe_allow_html=True)
-    _, mid, _ = st.columns([1, 2, 1])
+    _, mid, _ = st.columns([1, 2.2, 1])
     with mid:
         st.markdown("""
-        <div style="text-align:center;padding:48px 32px;
-                    background:var(--secondary-background-color);
-                    border-radius:16px;border:1.5px dashed rgba(148,163,184,0.25)">
-            <div style="font-size:3rem">📊</div>
-            <h2 style="margin:12px 0 8px 0;font-weight:800">Welcome to AI Data Analyst</h2>
-            <p style="opacity:0.65;font-size:1rem;max-width:380px;margin:0 auto;line-height:1.6">
-                Upload a CSV file in the sidebar, then click
-                <strong>Generate Analysis</strong> to get smart visualisations,
-                statistical summaries, and AI-driven insights.
-            </p>
+        <div class="empty-state-box">
+            <div class="icon">◈</div>
+            <h2>AI Data Analyst</h2>
+            <p>Upload a CSV file in the sidebar, then click
+            <strong style="color:#818cf8">Run Analysis</strong> to get visualisations,
+            statistical breakdowns, and AI-driven strategic insights.</p>
         </div>
         """, unsafe_allow_html=True)
     st.stop()
 
 # ── Header ────────────────────────────────────────────────────────────────────
 file_name = st.session_state.get("uploaded_file_name", "Dataset")
-st.markdown(
-    f"<h1 style='font-size:1.7rem;font-weight:800;margin-bottom:4px'>"
-    f"Analysis: <code style='font-size:1.4rem'>{file_name}</code></h1>",
-    unsafe_allow_html=True,
-)
+st.markdown(f"""
+<div class="page-header">
+    <p class="title">Analysis</p>
+    <code style="font-size:1rem;color:#6366f1;background:rgba(99,102,241,0.1);
+                 padding:3px 10px;border-radius:4px">{file_name}</code>
+</div>
+""", unsafe_allow_html=True)
 
-# Warnings banner
+# ── Warnings ──────────────────────────────────────────────────────────────────
 errors = result.get("errors", [])
 if errors:
-    with st.expander("⚠️ Processing warnings", expanded=True):
+    with st.expander("⚠️  Processing warnings", expanded=False):
         for err in errors:
-            st.warning(err)
+            st.markdown(f'<div class="warning-block">{err}</div>', unsafe_allow_html=True)
 
-# ── Top metrics row ───────────────────────────────────────────────────────────
+# ── Top metrics ───────────────────────────────────────────────────────────────
 stats = result.get("stats_summary", {})
 insights = result.get("insights", {})
 row_count = stats.get("row_count", 0)
@@ -289,7 +557,6 @@ completeness = stats.get("data_quality", {}).get("completeness", 100)
 outlier_cols = len(stats.get("outliers", {}))
 strong_corrs = len(stats.get("strong_correlations", []))
 
-st.markdown("<br>", unsafe_allow_html=True)
 c1, c2, c3, c4, c5, c6 = st.columns(6)
 c1.metric("Rows",             f"{row_count:,}")
 c2.metric("Columns",          col_count)
@@ -300,9 +567,9 @@ c6.metric("Completeness",     f"{completeness:.1f}%")
 st.markdown("<br>", unsafe_allow_html=True)
 
 # ── Tabs ──────────────────────────────────────────────────────────────────────
-tab_summary, tab_charts, tab_insights, tab_stats, tab_data = st.tabs(
-    ["📝 Summary", "📊 Charts", "💡 AI Insights", "📈 Statistics", "🔍 Data Preview"]
-)
+tab_summary, tab_charts, tab_insights, tab_stats, tab_data = st.tabs([
+    "SUMMARY", "CHARTS", "AI INSIGHTS", "STATISTICS", "DATA PREVIEW"
+])
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # TAB 1 · SUMMARY
@@ -343,9 +610,8 @@ with tab_summary:
 # ═══════════════════════════════════════════════════════════════════════════════
 with tab_charts:
     charts = result.get("charts") or {}
-    chart_list = list(charts.values())
-    if not chart_list:
-        st.info("No visualisations could be generated from this dataset.", icon="ℹ️")
+    if not charts:
+        st.info("No visualisations could be generated from this dataset.")
     else:
         # Display the visual dashboard (base64 encoded image)
         if "visual_dashboard" in charts:
@@ -495,22 +761,34 @@ with tab_stats:
 with tab_data:
     raw   = result.get("raw_df")
     clean = result.get("clean_df")
-    col_l, col_r = st.columns(2)
+
+    if isinstance(raw, dict):
+        try: raw = pd.DataFrame(raw)
+        except Exception: raw = None
+    if isinstance(clean, dict):
+        try: clean = pd.DataFrame(clean)
+        except Exception: clean = None
+
+    col_l, col_r = st.columns(2, gap="large")
 
     with col_l:
+        st.markdown('<p class="section-label">Raw Dataset</p>', unsafe_allow_html=True)
+        st.caption("First 100 rows before processing")
         if raw is not None:
-            st.markdown('<p class="section-title">Raw Dataset</p>', unsafe_allow_html=True)
-            st.caption("First 100 rows before processing")
             st.dataframe(raw.head(100), use_container_width=True)
             buf = io.BytesIO()
             raw.to_csv(buf, index=False)
-            st.download_button("📥 Download Raw CSV", buf.getvalue(), "raw_data.csv", "text/csv")
+            st.download_button("↓  Download Raw CSV", buf.getvalue(), "raw_data.csv", "text/csv")
+        else:
+            st.info("Raw data not available.")
 
     with col_r:
+        st.markdown('<p class="section-label">Cleaned Dataset</p>', unsafe_allow_html=True)
+        st.caption("First 100 rows after processing")
         if clean is not None:
-            st.markdown('<p class="section-title">Cleaned Dataset</p>', unsafe_allow_html=True)
-            st.caption("First 100 rows after processing")
             st.dataframe(clean.head(100), use_container_width=True)
             buf = io.BytesIO()
             clean.to_csv(buf, index=False)
-            st.download_button("📥 Download Cleaned CSV", buf.getvalue(), "cleaned_data.csv", "text/csv")
+            st.download_button("↓  Download Cleaned CSV", buf.getvalue(), "cleaned_data.csv", "text/csv")
+        else:
+            st.info("Cleaned data not available.")
