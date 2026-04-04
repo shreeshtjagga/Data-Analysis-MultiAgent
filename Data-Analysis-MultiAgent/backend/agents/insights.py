@@ -1,6 +1,6 @@
 import logging
 from langchain_groq import ChatGroq
-from backend.core.state import AnalysisState
+from core.state import AnalysisState
 
 # Setup logging to match project standards
 logger = logging.getLogger(__name__)

@@ -1,7 +1,7 @@
 import logging
 import os
 from groq import Groq
-from backend.core.state import AnalysisState
+from core.state import AnalysisState
 
 logger = logging.getLogger(__name__)
 
