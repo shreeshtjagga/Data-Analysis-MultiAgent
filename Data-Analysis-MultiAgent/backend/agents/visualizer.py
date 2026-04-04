@@ -1,143 +1,436 @@
+"""
+Visualizer Agent
+----------------
+Strategy:
+  1. Generate every chart type the data supports.
+  2. Score each chart for reliability (completeness, sample size,
+     statistical signal, cardinality).
+  3. Enforce one-per-type diversity, then rank by score.
+  4. Return the top MAX_OUTPUT_CHARTS most reliable charts.
+"""
 import logging
-import io
-import base64
-import matplotlib.pyplot as plt
-import seaborn as sns
-from langchain_groq import ChatGroq
+from dataclasses import dataclass
+from typing import Optional
+
+import numpy as np
+import pandas as pd
+import plotly.express as px
+import plotly.graph_objects as go
+
 from core.state import AnalysisState
 
 logger = logging.getLogger(__name__)
 
+COLOR_PALETTE     = px.colors.qualitative.Set2
+TEMPLATE          = "plotly_white"
+MAX_OUTPUT_CHARTS = 6
 
-def _build_viz_context(state) -> dict:
-    """
-    Builds a minimal context dict for the visualizer prompt.
-    Avoids sending full stats_summary (can be 2-4k tokens).
-    Only sends what's needed to pick good chart types.
-    """
-    stats = state.stats_summary or {}
-    numeric_cols    = list(stats.get("numeric_columns", {}).keys())
-    categorical_cols = list(stats.get("categorical_columns", {}).keys())
-    strong_corr     = [
-        f"{c['col1']} vs {c['col2']} (r={c['correlation']:.2f})"
-        for c in stats.get("strong_correlations", [])
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Scored chart wrapper
+# ─────────────────────────────────────────────────────────────────────────────
+
+@dataclass
+class ScoredChart:
+    key:    str
+    fig:    go.Figure
+    score:  float      # 0–100; higher = more reliable / informative
+    reason: str = ""   # logged only, not shown in UI
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Helpers
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _str_cols(df: pd.DataFrame) -> list:
+    """Categorical string columns — excludes booleans and hidden numerics."""
+    return [
+        col for col in df.columns
+        if pd.api.types.is_string_dtype(df[col])
+        and not pd.api.types.is_bool_dtype(df[col])
+        and not pd.api.types.is_numeric_dtype(df[col])
     ]
-    outlier_cols    = list(stats.get("outliers", {}).keys())
-
-    return {
-        "numeric_cols":    numeric_cols,
-        "categorical_cols": categorical_cols,
-        "strong_corr":     strong_corr,
-        "outlier_cols":    outlier_cols,
-        "column_types":    state.column_types,
-    }
 
 
-def visualizer_agent(state: AnalysisState) -> AnalysisState:
+def _style(fig: go.Figure, height: int = 420) -> go.Figure:
+    fig.update_layout(
+        template=TEMPLATE,
+        height=height,
+        font=dict(family="'DM Sans', sans-serif", size=12),
+        title_font_size=14,
+        title_font_color="#1e293b",
+        margin=dict(l=40, r=40, t=55, b=40),
+        colorway=COLOR_PALETTE,
+        plot_bgcolor="rgba(0,0,0,0)",
+        paper_bgcolor="rgba(0,0,0,0)",
+        legend=dict(font=dict(size=11)),
+    )
+    return fig
+
+
+def _completeness(series: pd.Series) -> float:
+    """Fraction of non-null values (0–1)."""
+    return 1.0 - float(series.isna().mean())
+
+
+def _coerce_types(df: pd.DataFrame) -> pd.DataFrame:
+    """Try to parse string cols as datetime, then numeric."""
+    df = df.copy()
+    for col in _str_cols(df):
+        try:
+            df[col] = pd.to_datetime(df[col], format="mixed", dayfirst=False)
+            continue
+        except Exception:
+            pass
+        try:
+            df[col] = pd.to_numeric(df[col], errors="raise")
+        except (ValueError, TypeError):
+            pass
+    return df
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Chart builders — each returns ScoredChart | None
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _try_timeseries(
+    df: pd.DataFrame, date_cols: list, num_cols: list
+) -> Optional[ScoredChart]:
+    """Line chart — reliable only with enough rows and high completeness."""
+    if not date_cols or not num_cols:
+        return None
+    dcol, ncol = date_cols[0], num_cols[0]
+    comp = min(_completeness(df[dcol]), _completeness(df[ncol]))
+    n    = len(df)
+    if n < 5 or comp < 0.80:
+        return None
+    score = 40 + min(n / 10, 30) + comp * 30
+    fig   = px.line(
+        df.sort_values(dcol), x=dcol, y=ncol,
+        title=f"{ncol} Over Time",
+        markers=(n <= 60),
+    )
+    return ScoredChart("timeseries", _style(fig), round(score, 1),
+                       f"date={dcol}, val={ncol}, rows={n}, comp={comp:.0%}")
+
+
+def _try_bar_mean(
+    df: pd.DataFrame, cat_cols: list, num_cols: list
+) -> Optional[ScoredChart]:
+    """Bar: mean of numeric grouped by categorical."""
+    if not cat_cols or not num_cols:
+        return None
+    best_cat, best_s = None, -1.0
+    for col in cat_cols:
+        n_uniq = df[col].nunique()
+        if not (2 <= n_uniq <= 15):
+            continue
+        c     = _completeness(df[col])
+        bonus = 1.0 if 4 <= n_uniq <= 8 else 0.6
+        s     = c * bonus
+        if s > best_s:
+            best_cat, best_s = col, s
+    if best_cat is None:
+        return None
+    num_col  = num_cols[0]
+    comp     = min(_completeness(df[best_cat]), _completeness(df[num_col]))
+    n_groups = df[best_cat].nunique()
+    score    = 35 + comp * 40 + min(n_groups * 2, 20)
+    grouped  = (
+        df.groupby(best_cat)[num_col].mean()
+        .reset_index().sort_values(num_col, ascending=False)
+    )
+    fig = px.bar(
+        grouped, x=best_cat, y=num_col,
+        title=f"Average {num_col} by {best_cat}",
+        color=best_cat, color_discrete_sequence=COLOR_PALETTE,
+    )
+    fig.update_layout(showlegend=False)
+    return ScoredChart("bar_mean", _style(fig), round(score, 1),
+                       f"cat={best_cat}({n_groups}), num={num_col}, comp={comp:.0%}")
+
+
+def _try_donut(df: pd.DataFrame, cat_cols: list) -> Optional[ScoredChart]:
+    """Donut pie — only for 2–6 distinct, well-populated categories."""
+    best_col, best_s = None, -1.0
+    for col in cat_cols:
+        n    = df[col].nunique()
+        comp = _completeness(df[col])
+        if not (2 <= n <= 6) or comp < 0.90:
+            continue
+        top_pct = df[col].value_counts(normalize=True).iloc[0]
+        if top_pct > 0.95:          # one category dominates → not useful
+            continue
+        s = comp + (1 - top_pct)
+        if s > best_s:
+            best_col, best_s = col, s
+    if best_col is None:
+        return None
+    n     = df[best_col].nunique()
+    comp  = _completeness(df[best_col])
+    score = 30 + comp * 40 + (6 - n) * 3
+    counts = df[best_col].value_counts().reset_index()
+    counts.columns = [best_col, "count"]
+    fig = px.pie(
+        counts, names=best_col, values="count",
+        title=f"Composition of {best_col}",
+        hole=0.45, color_discrete_sequence=COLOR_PALETTE,
+    )
+    fig.update_traces(textposition="outside", textinfo="percent+label")
+    return ScoredChart("donut", _style(fig, 420), round(score, 1),
+                       f"col={best_col}, unique={n}, comp={comp:.0%}")
+
+
+def _try_scatter(
+    df: pd.DataFrame, num_cols: list, cat_cols: list, stats: dict
+) -> Optional[ScoredChart]:
+    """Scatter for the strongest numeric correlation."""
+    if len(df) < 10 or len(num_cols) < 2:
+        return None
+    top_corr = stats.get("top_correlations", [])
+    if top_corr:
+        best      = max(top_corr, key=lambda x: abs(x[2]))
+        x_col, y_col, r = best
+    else:
+        x_col, y_col = num_cols[0], num_cols[1]
+        r = float(df[[x_col, y_col]].corr().iloc[0, 1])
+    if x_col not in df.columns or y_col not in df.columns:
+        return None
+    comp  = min(_completeness(df[x_col]), _completeness(df[y_col]))
+    abs_r = abs(r)
+    # Require at least weak correlation
+    if abs_r < 0.20 and not top_corr:
+        return None
+    score = abs_r * 50 + min(len(df) / 20, 20) + comp * 30
+    color_arg = cat_cols[0] if cat_cols else None
+    fig = px.scatter(
+        df, x=x_col, y=y_col, color=color_arg,
+        title=f"{x_col} vs {y_col}   (r = {r:.2f})",
+        trendline="ols" if len(df) > 5 else None,
+        opacity=0.70, color_discrete_sequence=COLOR_PALETTE,
+    )
+    return ScoredChart("scatter", _style(fig), round(score, 1),
+                       f"x={x_col}, y={y_col}, r={r:.2f}, comp={comp:.0%}")
+
+
+def _try_histogram(
+    df: pd.DataFrame, num_cols: list, stats: dict, used: set
+) -> Optional[ScoredChart]:
     """
-    Visualizer Agent — token-efficient version.
-    Sends only a compact context instead of the full stats_summary.
+    Histogram + box for the most statistically interesting numeric column.
+    Priority: outlier cols → high skew → high completeness.
+    Skips columns already featured in other charts.
     """
+    if not num_cols:
+        return None
+    outlier_keys = set(stats.get("outliers", {}).keys())
+    num_stats    = stats.get("numeric_stats", {})
+
+    def _col_score(col: str) -> float:
+        if col in used:
+            return -999.0
+        s    = _completeness(df[col]) * 30
+        s   += 25 if col in outlier_keys else 0
+        skew = abs(num_stats.get(col, {}).get("skewness", 0.0))
+        s   += min(skew * 5, 20)
+        return s
+
+    best = max(num_cols, key=_col_score)
+    if _col_score(best) < 0:
+        return None
+
+    comp  = _completeness(df[best])
+    skew  = abs(num_stats.get(best, {}).get("skewness", 0.0))
+    score = comp * 30 + min(skew * 5, 20) + (25 if best in outlier_keys else 0)
+    title = f"Distribution of {best}"
+    if best in outlier_keys:
+        title += "  ⚠ outliers present"
+    fig = px.histogram(
+        df, x=best, nbins=30, title=title,
+        marginal="box",
+        color_discrete_sequence=[COLOR_PALETTE[0]],
+    )
+    return ScoredChart(f"histogram_{best}", _style(fig), round(score, 1),
+                       f"col={best}, comp={comp:.0%}, skew={skew:.2f}")
+
+
+def _try_boxplot(
+    df: pd.DataFrame, num_cols: list, used: set
+) -> Optional[ScoredChart]:
+    """Side-by-side box plots for numeric cols not yet featured."""
+    remaining = [c for c in num_cols if c not in used]
+    if len(remaining) < 2:
+        return None
+    cols_to_plot = remaining[:6]
+    comp_avg     = float(np.mean([_completeness(df[c]) for c in cols_to_plot]))
+    if comp_avg < 0.70:
+        return None
+    score = comp_avg * 40 + min(len(cols_to_plot) * 5, 25)
+    fig   = go.Figure()
+    for col in cols_to_plot:
+        fig.add_trace(go.Box(y=df[col], name=col, boxmean=True))
+    fig.update_layout(title="Numeric Columns — Distribution Overview", showlegend=False)
+    return ScoredChart("boxplots", _style(fig), round(score, 1),
+                       f"cols={cols_to_plot}, avg_comp={comp_avg:.0%}")
+
+
+def _try_heatmap(
+    df: pd.DataFrame, num_cols: list, stats: dict
+) -> Optional[ScoredChart]:
+    """Correlation heatmap — needs ≥ 3 numeric cols with high completeness."""
+    if len(num_cols) < 3:
+        return None
+    comp_avg = float(np.mean([_completeness(df[c]) for c in num_cols]))
+    if comp_avg < 0.80:
+        return None
+    n_corr = len(stats.get("top_correlations", []))
+    score  = comp_avg * 40 + min(len(num_cols) * 3, 20) + min(n_corr * 5, 20)
+    corr   = df[num_cols].corr().round(2)
+    fig    = px.imshow(
+        corr, text_auto=True, title="Correlation Heatmap",
+        color_continuous_scale="RdBu_r", zmin=-1, zmax=1, aspect="auto",
+    )
+    return ScoredChart("heatmap", _style(fig, 480), round(score, 1),
+                       f"num_cols={len(num_cols)}, avg_comp={comp_avg:.0%}")
+
+
+def _try_bar_counts(
+    df: pd.DataFrame, cat_cols: list, used: set
+) -> Optional[ScoredChart]:
+    """Frequency bar for a cat col not yet shown — reliable fallback."""
+    for col in cat_cols:
+        if col in used:
+            continue
+        n    = df[col].nunique()
+        comp = _completeness(df[col])
+        if not (2 <= n <= 20) or comp < 0.75:
+            continue
+        score = comp * 35 + min(n * 2, 20)
+        vc    = df[col].value_counts().head(15).reset_index()
+        vc.columns = [col, "count"]
+        fig = px.bar(
+            vc, x=col, y="count",
+            title=f"Frequency of {col}",
+            color=col, color_discrete_sequence=COLOR_PALETTE,
+        )
+        fig.update_layout(showlegend=False)
+        return ScoredChart(f"bar_counts_{col}", _style(fig), round(score, 1),
+                           f"col={col}, unique={n}, comp={comp:.0%}")
+    return None
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Orchestrator
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _select_charts(df: pd.DataFrame, stats: dict) -> dict:
+    """
+    1. Run all generators to build a candidate pool.
+    2. Track which columns are already "starred" so later generators
+       pick different columns (diversity).
+    3. Enforce one chart per base type.
+    4. Rank by reliability score and return top MAX_OUTPUT_CHARTS.
+    """
+    num_cols  = df.select_dtypes(include=np.number).columns.tolist()
+    cat_cols  = _str_cols(df)
+    date_cols = df.select_dtypes(include="datetime").columns.tolist()
+
+    logger.info(
+        "Column inventory — numeric: %d | categorical: %d | datetime: %d",
+        len(num_cols), len(cat_cols), len(date_cols),
+    )
+
+    candidates: list = []
+    used: set        = set()   # columns already featured in top candidates
+
+    def _add(result: Optional[ScoredChart]) -> None:
+        if result is not None:
+            candidates.append(result)
+            logger.debug(
+                "Candidate %-22s score=%5.1f  [%s]",
+                result.key, result.score, result.reason,
+            )
+
+    # Generate in priority order so `used` set is populated correctly
+    ts = _try_timeseries(df, date_cols, num_cols)
+    _add(ts)
+    if ts and date_cols and num_cols:
+        used.update([date_cols[0], num_cols[0]])
+
+    sc = _try_scatter(df, num_cols, cat_cols, stats)
+    _add(sc)
+    if sc:
+        top_corr = stats.get("top_correlations", [])
+        if top_corr:
+            used.update([top_corr[0][0], top_corr[0][1]])
+
+    _add(_try_bar_mean(df, cat_cols, num_cols))
+    _add(_try_donut(df, cat_cols))
+    _add(_try_heatmap(df, num_cols, stats))
+    _add(_try_histogram(df, num_cols, stats, used))
+    _add(_try_boxplot(df, num_cols, used))
+    _add(_try_bar_counts(df, cat_cols, used))
+
+    # Absolute fallback — always emit at least one chart
+    if not candidates and len(df.columns) >= 2:
+        fig = px.bar(
+            df.head(30), x=df.columns[0], y=df.columns[1],
+            title=f"{df.columns[1]} by {df.columns[0]}",
+        )
+        candidates.append(ScoredChart("fallback", _style(fig), 10.0))
+
+    # ── Deduplicate by base chart type ────────────────────────────────────
+    def _base_type(key: str) -> str:
+        for prefix in ("histogram_", "bar_counts_"):
+            if key.startswith(prefix):
+                return prefix.rstrip("_")
+        return key
+
+    seen_types: set          = set()
+    unique: list[ScoredChart] = []
+    for chart in sorted(candidates, key=lambda c: c.score, reverse=True):
+        t = _base_type(chart.key)
+        if t not in seen_types:
+            seen_types.add(t)
+            unique.append(chart)
+
+    # ── Pick top N by score ───────────────────────────────────────────────
+    selected = sorted(unique, key=lambda c: c.score, reverse=True)[:MAX_OUTPUT_CHARTS]
+
+    logger.info(
+        "Selected %d/%d charts: %s",
+        len(selected), len(candidates),
+        [(c.key, c.score) for c in selected],
+    )
+    return {c.key: c.fig for c in selected}
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Agent entry point
+# ─────────────────────────────────────────────────────────────────────────────
+
+def run(state: AnalysisState) -> AnalysisState:
+    """Score and select the most reliable diverse charts."""
+    logger.info("Visualizer starting")
     state.current_agent = "visualizer"
-    logger.info("Visualizer Agent started (token-optimised).")
 
     if state.clean_df is None or state.clean_df.empty:
-        state.errors.append("Visualizer Failure: clean_df is missing.")
+        state.errors.append("visualizer skipped: no clean_df available")
         state.completed_agents.append("visualizer")
         return state
 
     try:
-        llm = ChatGroq(model_name="llama-3.3-70b-versatile", temperature=0.2)
-        
-        # 2. Build Context
-        columns = list(state.clean_df.columns)
-        stats_findings = state.stats_summary 
-        
-        # 3. The "Multi-Plot" Strategic Prompt
-        prompt = f"""
-        You are a Senior Data Scientist specializing in compelling data visualizations. 
-        Your task is to produce a comprehensive, colorful visual gallery for the provided dataset.
-        
-        CONTEXT:
-        - Columns: {columns}
-        - Column Types: {state.column_types}
-        - Statistician's Findings: {stats_findings}
-        
-        TASK:
-        1. Deeply analyze the Statistical Insights to find the 'Primary Narrative'.
+        df             = _coerce_types(state.clean_df)
+        state.charts   = _select_charts(df, state.stats_summary)
+        logger.info("Visualizer done — %d charts emitted", len(state.charts))
 
-        2. Select the BEST visualization from Seaborn or Matplotlib to represent this. 
-           (Examples: sns.scatterplot, sns.violinplot, sns.heatmap, sns.jointplot, sns.boxenplot, etc.)
-
-        3. Identify the 5-6 most important visual perspectives required to fully 
-           understand this data (e.g., Correlation Heatmap, Distribution of Key Metrics, 
-           Categorical breakdowns, Outlier detection).
-
-        4. Write Python code that generates these 5-6 plots as SUBPLOTS in a single figure.
-        
-        REQUIREMENTS:
-        
-        ** COLOR STRATEGY **
-        - Use DIFFERENT color schemes for DIFFERENT plot types to avoid monotony
-        - Use a combination of:
-          * "husl" palette (vibrant, rainbow-like for diversity)
-          * "RdYlGn" (red-yellow-green for heatmaps - natural)
-          * "coolwarm" (blue-white-red for correlations)
-          * "YlGnBu" (yellow-green-blue for gradients)
-          * "Set2" (distinct, harmonious pastels)
-          * "tab10" (categorical data)
-        - For heatmaps: Use "RdYlGn" or "coolwarm" to show intensity naturally
-        - For distributions: Use "Set2" or "husl" for aesthetically pleasing colors
-        - For categorical plots: Use "tab10" or "Set3" with natural variation
-        - For scatter plots: Use "viridis" or "plasma" with a colorbar showing intensity
-        
-        ** STYLING REQUIREMENTS **
-        - Use `fig, axes = plt.subplots(nrows=3, ncols=2, figsize=(20, 18))`
-        - Set white background: `fig.patch.set_facecolor('white')`
-        - Apply different sns.set_style or use matplotlib colors strategically
-        - Use `plt.tight_layout(pad=5.0)`
-        - Add grid lines (alpha=0.3) for better readability
-        - Use grid color: #E0E0E0 (light gray) for subtle contrast
-        - Use font sizes: 14px for titles, 12px for axis labels, 10px for ticks
-        - Set line widths to 1.5-2.0 for better visibility
-        - Use edge colors on bar plots (e.g., edgecolor='black', linewidth=0.5)
-        
-        ** VISUAL HIERARCHY **
-        - Ensure each plot has a unique, descriptive title related to Statistician's findings
-        - Add axis labels that are informative
-        - Use color variations to highlight important patterns
-        - Add a colorbar for heatmaps with proper labels
-        
-        - Return ONLY the executable Python code block.
-        """
-
-        # 4. Generate and Clean Code
-        response = llm.invoke(prompt)
-        code = response.content.strip()
-
-        if "```python" in code:
-            code = code.split("```python")[1].split("```")[0].strip()
-        elif "```" in code:
-            code = code.split("```")[1].split("```")[0].strip()
-
-        plt.switch_backend('Agg')
-        plt.clf()
-
-        exec_globals = {"df": state.clean_df, "plt": plt, "sns": sns}
-        exec(code, exec_globals)
-
-        buf = io.BytesIO()
-        plt.savefig(buf, format='png', bbox_inches='tight', dpi=150)
-        buf.seek(0)
-        img_base64 = base64.b64encode(buf.read()).decode('utf-8')
-        plt.close()
-
-        state.charts["visual_dashboard"] = img_base64
-        logger.info("Visualizer Agent complete.")
-
-    except Exception as e:
-        state.errors.append(f"Visualizer error: {str(e)}")
-        logger.error("Visualizer error: %s", e)
+    except Exception as exc:
+        state.errors.append(f"visualizer error: {exc}")
+        logger.exception("Visualizer error")
 
     state.completed_agents.append("visualizer")
     return state
+
+
+# Alias — graph.py calls visualizer_agent(state) with no changes needed
+visualizer_agent = run

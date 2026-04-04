@@ -610,16 +610,15 @@ with tab_summary:
 # ═══════════════════════════════════════════════════════════════════════════════
 with tab_charts:
     charts = result.get("charts") or {}
-    if not charts:
-        st.info("No visualisations could be generated from this dataset.")
+    chart_list = list(charts.values())
+    if not chart_list:
+        st.info("No visualisations could be generated from this dataset.", icon="ℹ️")
     else:
-        # Display the visual dashboard (base64 encoded image)
-        if "visual_dashboard" in charts:
-            st.image(f"data:image/png;base64,{charts['visual_dashboard']}", width=1000)
-        else:
-            for chart in chart_list:
-                st.image(f"data:image/png;base64,{chart}", width=1000)
-
+        for i in range(0, len(chart_list), 2):
+            row = st.columns(2)
+            row[0].plotly_chart(chart_list[i], use_container_width=True)
+            if i + 1 < len(chart_list):
+                row[1].plotly_chart(chart_list[i + 1], use_container_width=True)
 # ═══════════════════════════════════════════════════════════════════════════════
 # TAB 3 · AI INSIGHTS
 # ═══════════════════════════════════════════════════════════════════════════════
