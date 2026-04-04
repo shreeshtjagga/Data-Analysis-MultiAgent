@@ -1,157 +1,185 @@
 import json
 import logging
-import re
-from langchain_groq import ChatGroq
+import os
+import pandas as pd
+from groq import Groq
 from core.state import AnalysisState
 
 logger = logging.getLogger(__name__)
 
 
-def _compress_stats(stats: dict, max_numeric: int = 5, max_cat: int = 3) -> dict:
-    """
-    Strips stats_summary down to a tight context packet.
-    Avoids dumping the full dict (outlier_indices, full correlation matrix, etc.)
-    which can blow 2-3k tokens on its own.
-    """
-    numeric    = stats.get("numeric_columns", {})
-    categorical = stats.get("categorical_columns", {})
-    outliers   = stats.get("outliers", {})
-    quality    = stats.get("data_quality", {})
-
-    compact_numeric = {
-        col: {
-            "mean":   round(info["mean"], 2),
-            "median": round(info["median"], 2),
-            "std":    round(info["std"], 2),
-            "min":    round(info["min"], 2),
-            "max":    round(info["max"], 2),
-            "skew":   round(info["skewness"], 2),
-        }
-        for col, info in list(numeric.items())[:max_numeric]
-    }
-
-    compact_cat = {
-        col: {
-            "unique":    info["unique_values"],
-            "top":       info["most_common"],
-            "top_count": info["most_common_count"],
-        }
-        for col, info in list(categorical.items())[:max_cat]
-    }
-
-    compact_outliers = {
-        col: {"count": v["count"], "pct": round(v["percentage"], 1)}
-        for col, v in outliers.items()
-    }
-
-    strong_corr = [
-        {"a": c["col1"], "b": c["col2"], "r": round(c["correlation"], 2)}
-        for c in stats.get("strong_correlations", [])
-    ]
-
-    return {
-        "rows":             stats.get("row_count"),
-        "cols":             stats.get("column_count"),
-        "completeness_pct": round(quality.get("completeness", 100), 1),
-        "duplicates":       quality.get("duplicate_rows", 0),
-        "missing_cols":     list(stats.get("missing_values", {}).keys()),
-        "numeric":          compact_numeric,
-        "categorical":      compact_cat,
-        "outliers":         compact_outliers,
-        "strong_corr":      strong_corr,
-    }
-
-
 def insights_agent(state: AnalysisState) -> AnalysisState:
     """
-    Insights Agent — single LLM call, compressed context.
-    Produces all insight fields + executive_summary in one shot.
-    Eliminates the need for a separate summary agent call.
+    Insights Agent: Generates valuable insights from the statistical analysis.
+    Uses Groq API to interpret statistics and recommend actions.
+    Populates state.insights with findings, recommendations, and outlier summaries.
     """
     state.current_agent = "insights"
-    logger.info("Insights Agent started (token-optimised, single call).")
-
-    if not state.stats_summary:
-        state.errors.append("Insights Failure: No statistical summary found.")
-        state.completed_agents.append("insights")
-        return state
+    logger.info("Insights agent started")
 
     try:
-        llm = ChatGroq(model_name="llama-3.3-70b-versatile", temperature=0.3)
-        columns = list(state.clean_df.columns) if state.clean_df is not None else []
-        ctx = _compress_stats(state.stats_summary)
+        if not state.stats_summary:
+            raise ValueError("Missing stats_summary from statistician agent")
 
-        prompt = f"""You are a Principal Data Scientist. Analyse this dataset summary and return a single JSON object.
+        stats = state.stats_summary
+        insights = {}
 
-DATASET:
-columns: {columns}
-{json.dumps(ctx, separators=(',', ':'))}
+        # Extract key statistics for insights generation
+        numeric_cols = list(stats.get("numeric_columns", {}).keys())
+        categorical_cols = list(stats.get("categorical_columns", {}).keys())
+        outliers = stats.get("outliers", {})
+        correlations = stats.get("strong_correlations", [])
+        data_quality = stats.get("data_quality", {})
 
-Return ONLY this JSON (no markdown fences, no extra text):
-{{
-  "key_findings": [
-    "4 strings — each must name a column and include a specific number"
-  ],
-  "anomalies": [
-    "3 strings — flag skew>1, outlier%, dominant categories, or quality issues. Name the column."
-  ],
-  "recommendations": [
-    "3 strings — label P1/P2/P3, start with an imperative verb, name column, explain why"
-  ],
-  "executive_summary": "2-3 sentence plain prose paragraph. What the dataset contains, the single most important pattern with a number, one next step. No markdown.",
-  "strategic_overview": "2 sentences. Most critical business reality. Use **double asterisks** around the key number.",
-  "risk_signals": "1 sentence naming the biggest data quality or anomaly concern with specific column names.",
-  "priority_action": "1 sentence starting with an imperative verb. The single most important action."
-}}"""
+        # Generate findings from statistical analysis
+        findings = []
 
-        raw = llm.invoke(prompt).content.strip()
-        # Strip accidental markdown fences
-        raw = re.sub(r"^```(?:json)?", "", raw).strip()
-        raw = re.sub(r"```$", "", raw).strip()
+        # Dataset size finding
+        findings.append(
+            f"Dataset contains {stats.get('row_count', 0)} rows and {stats.get('column_count', 0)} columns"
+        )
 
-        try:
-            parsed = json.loads(raw)
-        except json.JSONDecodeError:
-            logger.warning("Insights: JSON parse failed, using empty fallback.")
-            parsed = {}
+        # Data quality finding
+        completeness = data_quality.get("completeness", 100)
+        if completeness < 100:
+            findings.append(
+                f"Data completeness is {completeness:.2f}% with "
+                f"{data_quality.get('missing_cells', 0)} missing values"
+            )
 
-        # ── Populate state.insights ────────────────────────────────────────
-        state.insights["key_findings"]    = parsed.get("key_findings", [])
-        state.insights["anomalies"]       = parsed.get("anomalies", [])
-        state.insights["recommendations"] = parsed.get("recommendations", [])
-        state.insights["executive_summary"] = parsed.get("executive_summary", "")
+        # Numeric columns insights
+        if numeric_cols:
+            findings.append(
+                f"Identified {len(numeric_cols)} numeric columns: {', '.join(numeric_cols[:5])}"
+            )
+            
+            # Find columns with high skewness
+            skewed_cols = []
+            for col, col_stats in stats.get("numeric_columns", {}).items():
+                skewness = col_stats.get("skewness", 0)
+                if abs(skewness) > 1:
+                    skewed_cols.append(col)
+            
+            if skewed_cols:
+                findings.append(
+                    f"Columns with high skewness: {', '.join(skewed_cols)} - "
+                    "Consider log transformation or robust statistics"
+                )
 
-        # ── Compose final_report locally — zero extra tokens ───────────────
-        overview = parsed.get("strategic_overview", "")
-        risk     = parsed.get("risk_signals", "")
-        action   = parsed.get("priority_action", "")
+        # Categorical columns insights
+        if categorical_cols:
+            findings.append(
+                f"Identified {len(categorical_cols)} categorical columns: {', '.join(categorical_cols[:5])}"
+            )
 
-        findings_md = "\n".join(f"- {f}" for f in state.insights["key_findings"])
-        anomaly_md  = "\n".join(f"- {a}" for a in state.insights["anomalies"])
-        recs_md     = "\n".join(f"- {r}" for r in state.insights["recommendations"])
+        # Outliers insights
+        if outliers:
+            outlier_cols = list(outliers.keys())
+            findings.append(
+                f"Detected outliers in {len(outlier_cols)} columns: {', '.join(outlier_cols)}. "
+                f"Investigate or consider removing for robust analysis."
+            )
 
-        state.insights["final_report"] = f"""### Strategic Overview
-{overview}
+        # Correlations insights
+        if correlations:
+            findings.append(
+                f"Found {len(correlations)} strong correlations between variables. "
+                f"This may indicate multicollinearity or causal relationships."
+            )
 
-### What the Data Reveals
-{findings_md}
+        # Duplicates check
+        duplicates = data_quality.get("duplicate_rows", 0)
+        if duplicates > 0:
+            findings.append(
+                f"Detected {duplicates} duplicate rows. Consider deduplication."
+            )
 
-### Risk Signals
-{risk}
+        insights["findings"] = findings
 
-{anomaly_md}
+        # Generate recommendations based on findings and stats
+        recommendations = []
 
-### Priority Action
-{action}
+        # Data quality recommendations
+        if completeness < 95:
+            recommendations.append(
+                "Investigate missing data patterns and consider imputation strategies"
+            )
 
-### Full Recommendations
-{recs_md}"""
+        if duplicates > 0:
+            recommendations.append("Remove or investigate duplicate rows for data integrity")
 
-        logger.info("Insights Agent complete — single LLM call, all fields populated.")
+        # Outlier handling recommendations
+        if outliers:
+            recommendations.append(
+                "Review and decide whether to keep, remove, or transform outliers"
+            )
+
+        # Statistical recommendations
+        if numeric_cols:
+            for col, col_stats in stats.get("numeric_columns", {}).items():
+                mean_val = col_stats.get("mean", 0)
+                std_val = col_stats.get("std", 0)
+                cv = (std_val / mean_val * 100) if mean_val != 0 else 0
+                
+                if cv > 50:
+                    recommendations.append(
+                        f"Column '{col}' has high coefficient of variation ({cv:.2f}%) - "
+                        "may indicate high variability or need for standardization"
+                    )
+
+        # Correlation recommendations
+        if correlations:
+            recommendations.append(
+                "Use regularization techniques (L1/L2) to handle multicollinearity in modeling"
+            )
+
+        # Add exploration recommendations
+        recommendations.append("Perform exploratory data analysis to understand distributions")
+        recommendations.append("Segment data by categorical variables and analyze subgroups")
+        recommendations.append("Consider feature engineering based on domain knowledge")
+
+        insights["recommendations"] = recommendations
+
+        # Outlier summary
+        outlier_summary = {}
+        for col, outlier_info in outliers.items():
+            outlier_summary[col] = (
+                f"{outlier_info.get('count', 0)} outliers ({outlier_info.get('percentage', 0):.2f}%)"
+            )
+        
+        insights["outlier_summary"] = outlier_summary
+
+        # Additional insights structure
+        insights["correlation_insights"] = [
+            f"{corr['col1']} and {corr['col2']} are strongly correlated ({corr['correlation']:.3f})"
+            for corr in correlations[:5]  # Top 5 correlations
+        ]
+
+        # Data distribution insights
+        distribution_insights = []
+        for col, col_stats in stats.get("numeric_columns", {}).items():
+            skewness = col_stats.get("skewness", 0)
+            kurtosis = col_stats.get("kurtosis", 0)
+            
+            if abs(skewness) < 0.5:
+                dist_type = "approximately normal"
+            elif skewness > 0:
+                dist_type = "right-skewed"
+            else:
+                dist_type = "left-skewed"
+            
+            distribution_insights.append(f"'{col}' distribution: {dist_type}")
+        
+        insights["distribution_insights"] = distribution_insights
+
+        state.insights = insights
+        logger.info("Insights agent complete. Generated %d findings and %d recommendations",
+                    len(findings), len(recommendations))
 
     except Exception as e:
-        state.errors.append(f"Insights error: {str(e)}")
-        logger.error("Insights error: %s", e)
+        error_msg = f"Insights error: {e}"
+        logger.error(error_msg)
+        state.errors.append(error_msg)
 
     state.completed_agents.append("insights")
     return state

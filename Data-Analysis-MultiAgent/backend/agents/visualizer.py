@@ -48,26 +48,70 @@ def visualizer_agent(state: AnalysisState) -> AnalysisState:
 
     try:
         llm = ChatGroq(model_name="llama-3.3-70b-versatile", temperature=0.2)
-        ctx = _build_viz_context(state)
+        
+        # 2. Build Context
+        columns = list(state.clean_df.columns)
+        stats_findings = state.stats_summary 
+        
+        # 3. The "Multi-Plot" Strategic Prompt
+        prompt = f"""
+        You are a Senior Data Scientist specializing in compelling data visualizations. 
+        Your task is to produce a comprehensive, colorful visual gallery for the provided dataset.
+        
+        CONTEXT:
+        - Columns: {columns}
+        - Column Types: {state.column_types}
+        - Statistician's Findings: {stats_findings}
+        
+        TASK:
+        1. Deeply analyze the Statistical Insights to find the 'Primary Narrative'.
 
-        prompt = f"""You are a Senior Data Scientist. Write Python code to generate a 3×2 subplot dashboard.
+        2. Select the BEST visualization from Seaborn or Matplotlib to represent this. 
+           (Examples: sns.scatterplot, sns.violinplot, sns.heatmap, sns.jointplot, sns.boxenplot, etc.)
 
-DATASET CONTEXT:
-- Numeric columns: {ctx['numeric_cols']}
-- Categorical columns: {ctx['categorical_cols']}
-- Strong correlations: {ctx['strong_corr']}
-- Outlier columns: {ctx['outlier_cols']}
-- Column types: {ctx['column_types']}
+        3. Identify the 5-6 most important visual perspectives required to fully 
+           understand this data (e.g., Correlation Heatmap, Distribution of Key Metrics, 
+           Categorical breakdowns, Outlier detection).
 
-REQUIREMENTS:
-- Use: fig, axes = plt.subplots(nrows=3, ncols=2, figsize=(20, 18))
-- Use plt.tight_layout(pad=5.0)
-- Use seaborn with a dark theme: sns.set_theme(style="darkgrid", palette="muted")
-- Plot the 6 most informative charts for this data (distributions, correlations, categoricals, outliers)
-- Every plot needs a descriptive title
-- The dataframe is available as `df`
-- Return ONLY executable Python code, no explanation"""
+        4. Write Python code that generates these 5-6 plots as SUBPLOTS in a single figure.
+        
+        REQUIREMENTS:
+        
+        ** COLOR STRATEGY **
+        - Use DIFFERENT color schemes for DIFFERENT plot types to avoid monotony
+        - Use a combination of:
+          * "husl" palette (vibrant, rainbow-like for diversity)
+          * "RdYlGn" (red-yellow-green for heatmaps - natural)
+          * "coolwarm" (blue-white-red for correlations)
+          * "YlGnBu" (yellow-green-blue for gradients)
+          * "Set2" (distinct, harmonious pastels)
+          * "tab10" (categorical data)
+        - For heatmaps: Use "RdYlGn" or "coolwarm" to show intensity naturally
+        - For distributions: Use "Set2" or "husl" for aesthetically pleasing colors
+        - For categorical plots: Use "tab10" or "Set3" with natural variation
+        - For scatter plots: Use "viridis" or "plasma" with a colorbar showing intensity
+        
+        ** STYLING REQUIREMENTS **
+        - Use `fig, axes = plt.subplots(nrows=3, ncols=2, figsize=(20, 18))`
+        - Set white background: `fig.patch.set_facecolor('white')`
+        - Apply different sns.set_style or use matplotlib colors strategically
+        - Use `plt.tight_layout(pad=5.0)`
+        - Add grid lines (alpha=0.3) for better readability
+        - Use grid color: #E0E0E0 (light gray) for subtle contrast
+        - Use font sizes: 14px for titles, 12px for axis labels, 10px for ticks
+        - Set line widths to 1.5-2.0 for better visibility
+        - Use edge colors on bar plots (e.g., edgecolor='black', linewidth=0.5)
+        
+        ** VISUAL HIERARCHY **
+        - Ensure each plot has a unique, descriptive title related to Statistician's findings
+        - Add axis labels that are informative
+        - Use color variations to highlight important patterns
+        - Add a colorbar for heatmaps with proper labels
+        
+        - Return ONLY the executable Python code block.
+        """
 
+        # 4. Generate and Clean Code
         response = llm.invoke(prompt)
         code = response.content.strip()
 

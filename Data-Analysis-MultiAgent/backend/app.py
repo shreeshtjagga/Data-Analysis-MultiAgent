@@ -4,11 +4,15 @@ Pipeline: Architect → Statistician → Visualizer → Summary → Insights
 """
 import io
 import logging
+import os
+from dotenv import load_dotenv
 
 import pandas as pd
 import streamlit as st
-from dotenv import load_dotenv
+
+# Load environment variables from .env file
 load_dotenv()
+
 from core.graph import run_pipeline
 
 # ── Logging ───────────────────────────────────────────────────────────────────
@@ -545,17 +549,21 @@ if errors:
 
 # ── Top metrics ───────────────────────────────────────────────────────────────
 stats = result.get("stats_summary", {})
-insights_data = result.get("insights") or {}
+insights = result.get("insights", {})
+row_count = stats.get("row_count", 0)
+col_count = stats.get("column_count", 0)
+missing_cells = stats.get("data_quality", {}).get("missing_cells", 0)
+completeness = stats.get("data_quality", {}).get("completeness", 100)
+outlier_cols = len(stats.get("outliers", {}))
+strong_corrs = len(stats.get("strong_correlations", []))
 
 c1, c2, c3, c4, c5, c6 = st.columns(6)
-c1.metric("Rows",          f"{stats.get('row_count', 0):,}")
-c2.metric("Columns",       stats.get("column_count", 0))
-c3.metric("Missing Vals",  sum(stats.get("missing_values", {}).values()))
-c4.metric("Outlier Cols",  len(stats.get("outliers", {})))
-c5.metric("Strong Corrs",  len(stats.get("strong_correlations", [])))
-quality = stats.get("data_quality", {})
-c6.metric("Completeness",  f"{quality.get('completeness', 0):.1f}%")
-
+c1.metric("Rows",             f"{row_count:,}")
+c2.metric("Columns",          col_count)
+c3.metric("Missing Values",   missing_cells)
+c4.metric("Outlier Cols",     outlier_cols)
+c5.metric("Correlations",     strong_corrs)
+c6.metric("Completeness",     f"{completeness:.1f}%")
 st.markdown("<br>", unsafe_allow_html=True)
 
 # ── Tabs ──────────────────────────────────────────────────────────────────────
@@ -567,211 +575,35 @@ tab_summary, tab_charts, tab_insights, tab_stats, tab_data = st.tabs([
 # TAB 1 · SUMMARY
 # ═══════════════════════════════════════════════════════════════════════════════
 with tab_summary:
-    executive_summary = insights_data.get("executive_summary")
-
-    if not executive_summary:
-        st.warning("Summary agent did not return data. Check processing warnings or re-run.")
+    if not insights:
+        st.warning(
+            "⚠️ Summary data not yet available. "
+            "Check the **Processing warnings** expander above for error details."
+        )
     else:
-        # ── Executive Summary callout ──────────────────────────────────────
-        # FIX: executive_summary is plain prose from the LLM — safe to inject.
-        # Escape only angle brackets to prevent any accidental tag interpretation.
-        safe_summary = executive_summary.replace("<", "&lt;").replace(">", "&gt;")
-        st.markdown(f'<div class="exec-summary-box">{safe_summary}</div>', unsafe_allow_html=True)
-
-        col_ov, col_q = st.columns([1.1, 1], gap="large")
-
-        with col_ov:
-            st.markdown('<p class="section-label">Dataset At a Glance</p>', unsafe_allow_html=True)
-            r1, r2, r3 = st.columns(3)
-            r1.metric("Rows",        f"{stats.get('row_count', 0):,}")
-            r2.metric("Columns",     stats.get("column_count", 0))
-            r3.metric("Missing",     len(stats.get("missing_values", {})))
-            st.markdown("<div style='height:10px'></div>", unsafe_allow_html=True)
-            r4, r5, r6 = st.columns(3)
-            r4.metric("Numeric",     len(stats.get("numeric_columns", {})))
-            r5.metric("Categorical", len(stats.get("categorical_columns", {})))
-            r6.metric("Outlier Cols",len(stats.get("outliers", {})))
-
-        with col_q:
-            if quality:
-                st.markdown('<p class="section-label">Data Quality</p>', unsafe_allow_html=True)
-                completeness = quality.get("completeness", 0)
-                total = stats.get("row_count", 1)
-                dupe = quality.get("duplicate_rows", 0)
-                dupe_pct = 100 - ((dupe / total) * 100) if total > 0 else 100
-
-                for label, val, color in [
-                    ("Completeness",  completeness, "#6366f1"),
-                    ("No Duplicates", dupe_pct,     "#10b981"),
-                ]:
-                    bar_color = color if val >= 80 else ("#f59e0b" if val >= 60 else "#f43f5e")
-                    st.markdown(f"""
-                    <div class="quality-bar-row">
-                        <span class="quality-bar-label">{label}</span>
-                        <div class="quality-bar-track">
-                            <div class="quality-bar-fill"
-                                 style="width:{min(val,100):.1f}%;background:{bar_color}"></div>
-                        </div>
-                        <span class="quality-bar-value">{val:.1f}%</span>
-                    </div>
-                    """, unsafe_allow_html=True)
-
-                st.markdown("<div style='height:10px'></div>", unsafe_allow_html=True)
-                qa, qb, qc = st.columns(3)
-                qa.metric("Duplicate Rows",  quality.get("duplicate_rows", 0))
-                qb.metric("Missing Cells",   quality.get("missing_cells", 0))
-                qc.metric("Total Cells",     f"{quality.get('total_cells', 0):,}")
-
-        st.markdown("<div style='height:24px'></div>", unsafe_allow_html=True)
-
-        col_num, col_corr = st.columns([1.2, 1], gap="large")
-
-        with col_num:
-            numeric_stats = stats.get("numeric_columns", {})
-            if numeric_stats:
-                st.markdown('<p class="section-label">Numeric Column Breakdown</p>', unsafe_allow_html=True)
-                for col_name, info in list(numeric_stats.items())[:5]:
-                    skew = info.get("skewness", 0)
-                    skew_label = "right-skewed" if skew > 1 else ("left-skewed" if skew < -1 else "normal")
-                    skew_color = "#f59e0b" if abs(skew) > 1 else "#10b981"
-                    iqr = info.get("iqr", 0)
-                    spread = min((iqr / (info["max"] - info["min"] + 1e-9)) * 100, 100) if info["max"] != info["min"] else 0
-                    st.markdown(f"""
-                    <div class="kpi-card accent-purple" style="padding:12px 16px">
-                        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">
-                            <span class="label" style="margin:0">{col_name}</span>
-                            <span style="font-size:0.68rem;padding:2px 8px;border-radius:4px;
-                                         background:rgba(99,102,241,0.1);color:{skew_color}">
-                                {skew_label}
-                            </span>
-                        </div>
-                        <div style="display:flex;align-items:baseline;gap:14px">
-                            <div>
-                                <span style="font-size:0.68rem;color:#475569;text-transform:uppercase;
-                                             letter-spacing:0.08em">mean</span>
-                                <span class="value" style="font-size:1.2rem;margin-left:5px">{info['mean']:.2f}</span>
-                            </div>
-                            <div>
-                                <span style="font-size:0.68rem;color:#475569;text-transform:uppercase;
-                                             letter-spacing:0.08em">median</span>
-                                <span style="font-family:'Syne',sans-serif;font-size:1.0rem;
-                                             font-weight:700;color:#94a3b8;margin-left:5px">{info['median']:.2f}</span>
-                            </div>
-                        </div>
-                        <div class="meta" style="margin-top:6px">
-                            σ {info['std']:.2f} &nbsp;·&nbsp;
-                            [{info['min']:.2f} – {info['max']:.2f}] &nbsp;·&nbsp;
-                            IQR {iqr:.2f}
-                        </div>
-                        <div style="margin-top:8px;height:3px;background:rgba(99,102,241,0.1);
-                                    border-radius:2px;overflow:hidden">
-                            <div style="width:{spread:.0f}%;height:100%;
-                                        background:linear-gradient(90deg,#6366f1,#a78bfa)"></div>
-                        </div>
-                    </div>
-                    """, unsafe_allow_html=True)
-
-        with col_corr:
-            strong_corr = stats.get("strong_correlations", [])
-            if strong_corr:
-                st.markdown('<p class="section-label">Strong Correlations</p>', unsafe_allow_html=True)
-                for pair in strong_corr[:6]:
-                    r = pair["correlation"]
-                    cls = "pos" if r > 0 else "neg"
-                    bar_w = int(abs(r) * 100)
-                    bar_col = "#10b981" if r > 0 else "#f43f5e"
-                    st.markdown(f"""
-                    <div class="corr-pill" style="flex-direction:column;align-items:stretch;gap:6px">
-                        <div style="display:flex;justify-content:space-between;align-items:center">
-                            <span class="cols" style="font-size:0.83rem">
-                                {pair['col1']}<span style="color:#334155;margin:0 6px">↔</span>{pair['col2']}
-                            </span>
-                            <span class="r-val {cls}">r = {r:.2f}</span>
-                        </div>
-                        <div style="height:3px;background:rgba(99,102,241,0.1);
-                                    border-radius:2px;overflow:hidden">
-                            <div style="width:{bar_w}%;height:100%;
-                                        background:{bar_col};opacity:0.7"></div>
-                        </div>
-                    </div>
-                    """, unsafe_allow_html=True)
-            else:
-                st.markdown('<p class="section-label">Strong Correlations</p>', unsafe_allow_html=True)
-                st.markdown('<p style="color:#334155;font-size:0.85rem;font-style:italic">No strong correlations (|r| > 0.7) found.</p>', unsafe_allow_html=True)
-
-            outliers_dict = stats.get("outliers", {})
-            if outliers_dict:
-                st.markdown("<div style='height:20px'></div>", unsafe_allow_html=True)
-                st.markdown('<p class="section-label">Outlier Hotspots</p>', unsafe_allow_html=True)
-                for col_name, ov in list(outliers_dict.items())[:4]:
-                    pct = ov.get("percentage", 0)
-                    severity_color = "#f43f5e" if pct > 10 else ("#f59e0b" if pct > 5 else "#6366f1")
-                    st.markdown(f"""
-                    <div class="kpi-card" style="border-left-color:{severity_color};padding:10px 14px;margin-bottom:8px">
-                        <div style="display:flex;justify-content:space-between;align-items:center">
-                            <span class="label" style="margin:0">{col_name}</span>
-                            <span style="font-family:'JetBrains Mono',monospace;font-size:0.75rem;
-                                         color:{severity_color};font-weight:600">{pct:.1f}%</span>
-                        </div>
-                        <div class="meta">{ov['count']} outlier rows · bounds [{ov['lower_bound']:.2f}, {ov['upper_bound']:.2f}]</div>
-                    </div>
-                    """, unsafe_allow_html=True)
-
-        st.markdown("<div style='height:24px'></div>", unsafe_allow_html=True)
-
-        # ── Categorical breakdown ──────────────────────────────────────────
-        # FIX: bars_html was built inside a nested f-string, causing Streamlit's
-        # HTML sanitizer to escape the injected markup. Solution: build the entire
-        # card as a plain string concatenation, then call st.markdown once per card.
-        cat_stats = stats.get("categorical_columns", {})
-        if cat_stats:
-            st.markdown('<p class="section-label">Categorical Breakdown</p>', unsafe_allow_html=True)
-            cat_col_list = list(cat_stats.items())[:4]
-            cat_grid = st.columns(min(len(cat_col_list), 4), gap="small")
-            total_rows = stats.get("row_count", 1)
-
-            for i, (col_name, info) in enumerate(cat_col_list):
-                top_pct = (info["most_common_count"] / total_rows) * 100
-                diversity = info.get("diversity_ratio", 0)
-                top5 = info.get("top_5_values", {})
-
-                # Build bar rows as a list then join — avoids nested f-string interpolation
-                bar_rows = []
-                for val, cnt in list(top5.items())[:4]:
-                    bar_pct = min((cnt / total_rows) * 100, 100)
-                    bar_rows.append(
-                        '<div style="margin-bottom:5px">'
-                        '<div style="display:flex;justify-content:space-between;'
-                        'font-size:0.72rem;color:#64748b;margin-bottom:2px">'
-                        '<span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:70%">'
-                        + str(val) +
-                        '</span>'
-                        '<span style="color:#94a3b8;font-family:\'JetBrains Mono\',monospace">'
-                        + f"{bar_pct:.0f}%" +
-                        '</span></div>'
-                        '<div style="height:3px;background:rgba(99,102,241,0.1);'
-                        'border-radius:2px;overflow:hidden">'
-                        '<div style="width:' + f"{bar_pct:.0f}" + '%;height:100%;'
-                        'background:#f59e0b;opacity:0.7"></div>'
-                        '</div></div>'
-                    )
-
-                card = (
-                    '<div class="kpi-card accent-amber" style="padding:14px 16px">'
-                    '<div class="label">' + str(col_name) + '</div>'
-                    '<div class="value" style="font-size:1.1rem;margin-bottom:2px;'
-                    'overflow:hidden;text-overflow:ellipsis;white-space:nowrap">'
-                    + str(info["most_common"]) +
-                    '</div>'
-                    '<div class="meta" style="margin-bottom:12px">'
-                    + f"{info['unique_values']} unique · {top_pct:.0f}% top value · diversity {diversity:.2f}" +
-                    '</div>'
-                    + "".join(bar_rows) +
-                    '</div>'
-                )
-
-                with cat_grid[i]:
-                    st.markdown(card, unsafe_allow_html=True)
+        # Get executive summary if available
+        exec_summary = insights.get("executive_summary", "")
+        if exec_summary:
+            st.markdown("### Executive Summary")
+            st.info(exec_summary)
+        
+        # Show findings
+        st.markdown("### Key Findings")
+        findings = insights.get("findings", [])
+        if findings:
+            for i, finding in enumerate(findings, 1):
+                st.markdown(f"**{i}. {finding}**")
+        else:
+            st.info("No findings generated yet.")
+        
+        # Show recommendations
+        st.markdown("### Recommendations")
+        recommendations = insights.get("recommendations", [])
+        if recommendations:
+            for i, rec in enumerate(recommendations, 1):
+                st.markdown(f"✓ {rec}")
+        else:
+            st.info("No recommendations available.")
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # TAB 2 · CHARTS
@@ -781,118 +613,147 @@ with tab_charts:
     if not charts:
         st.info("No visualisations could be generated from this dataset.")
     else:
-        for chart_name, chart_data in charts.items():
-            label = chart_name.replace("_", " ").title()
-            st.markdown(f"""
-            <div class="chart-frame">
-                <div class="chart-title">{label}</div>
-            """, unsafe_allow_html=True)
-            st.image(
-                f"data:image/png;base64,{chart_data}",
-                use_column_width=True,
-            )
-            st.markdown("</div>", unsafe_allow_html=True)
+        # Display the visual dashboard (base64 encoded image)
+        if "visual_dashboard" in charts:
+            st.image(f"data:image/png;base64,{charts['visual_dashboard']}", width=1000)
+        else:
+            for chart in chart_list:
+                st.image(f"data:image/png;base64,{chart}", width=1000)
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # TAB 3 · AI INSIGHTS
 # ═══════════════════════════════════════════════════════════════════════════════
 with tab_insights:
-    key_findings    = insights_data.get("key_findings", [])
-    anomalies       = insights_data.get("anomalies", [])
-    recommendations = insights_data.get("recommendations", [])
-
-    has_structured = any([key_findings, anomalies, recommendations])
-
-    if not has_structured:
-        st.warning("Insights agent did not return data. Check processing warnings or re-run.")
+    insights_data = result.get("insights") or {}
+    
+    if not insights_data:
+        st.warning("No insights generated yet. Please analyze a dataset first.")
     else:
-        # ── Three-panel layout ────────────────────────────────────────────
-        # FIX: removed strategic report block — st.markdown cannot render
-        # markdown content inside an HTML div opened/closed across separate calls.
-        # The structured cards below carry the full story.
-        c1, c2, c3 = st.columns(3, gap="medium")
-
-        def _panel(col, css_cls, icon, title, items):
-            bullets = "".join(f"<li>{item}</li>" for item in items) if items else \
-                      '<li class="empty-state">None detected.</li>'
-            col.markdown(f"""
-            <div class="insight-panel {css_cls}">
-                <div class="panel-title">{icon}&nbsp;&nbsp;{title}</div>
-                <ul>{bullets}</ul>
-            </div>
-            """, unsafe_allow_html=True)
-
-        _panel(c1, "findings",  "◈", "Key Findings",    key_findings)
-        _panel(c2, "anomalies", "⚑", "Anomalies",       anomalies)
-        _panel(c3, "recs",      "→", "Recommendations", recommendations)
+        # Key Findings
+        st.markdown("### 🔎 Key Findings")
+        findings = insights_data.get("findings", [])
+        if findings:
+            for finding in findings:
+                st.markdown(f"• {finding}")
+        else:
+            st.info("No findings available.")
+        
+        st.divider()
+        
+        # Correlation Insights
+        st.markdown("### 📊 Correlation Insights")
+        corr_insights = insights_data.get("correlation_insights", [])
+        if corr_insights:
+            for corr in corr_insights:
+                st.markdown(f"• {corr}")
+        else:
+            st.info("No strong correlations detected.")
+        
+        st.divider()
+        
+        # Distribution Insights
+        st.markdown("### 📈 Distribution Patterns")
+        dist_insights = insights_data.get("distribution_insights", [])
+        if dist_insights:
+            for dist in dist_insights:
+                st.markdown(f"• {dist}")
+        else:
+            st.info("No distributions analyzed.")
+        
+        st.divider()
+        
+        # Outlier Summary
+        st.markdown("### ⚠️ Outlier Summary")
+        outlier_summary = insights_data.get("outlier_summary", {})
+        if outlier_summary:
+            for col, summary in outlier_summary.items():
+                st.markdown(f"• **{col}**: {summary}")
+        else:
+            st.info("No outliers detected.")
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # TAB 4 · STATISTICS
 # ═══════════════════════════════════════════════════════════════════════════════
 with tab_stats:
-    col_l, col_r = st.columns(2, gap="large")
-
-    with col_l:
-        numeric_stats = stats.get("numeric_columns", {})
-        if numeric_stats:
-            st.markdown('<p class="section-label">Numeric Column Stats</p>', unsafe_allow_html=True)
-            rows = []
-            for col_name, info in numeric_stats.items():
-                rows.append({
+    if not stats:
+        st.warning("No statistics available yet.")
+    else:
+        # Data Overview
+        st.markdown("### 📐 Data Overview")
+        col1, col2, col3, col4 = st.columns(4)
+        col1.metric("Rows", f"{stats.get('row_count', 0):,}")
+        col2.metric("Columns", stats.get('column_count', 0))
+        col3.metric("Memory (MB)", f"{stats.get('memory_usage_mb', 0):.2f}")
+        completeness = stats.get('data_quality', {}).get('completeness', 100)
+        col4.metric("Completeness", f"{completeness:.1f}%")
+        
+        st.divider()
+        
+        # Numeric Columns
+        numeric_cols = stats.get("numeric_columns", {})
+        if numeric_cols:
+            st.markdown("### 🔢 Numeric Columns Statistics")
+            numeric_stats_list = []
+            for col_name, col_stats in numeric_cols.items():
+                numeric_stats_list.append({
                     "Column": col_name,
-                    "Mean": f"{info['mean']:.3f}",
-                    "Median": f"{info['median']:.3f}",
-                    "Std": f"{info['std']:.3f}",
-                    "Min": f"{info['min']:.3f}",
-                    "Max": f"{info['max']:.3f}",
-                    "Skew": f"{info['skewness']:.3f}",
+                    "Mean": f"{col_stats.get('mean', 0):.2f}",
+                    "Median": f"{col_stats.get('median', 0):.2f}",
+                    "Std Dev": f"{col_stats.get('std', 0):.2f}",
+                    "Min": f"{col_stats.get('min', 0):.2f}",
+                    "Max": f"{col_stats.get('max', 0):.2f}",
                 })
-            st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
-
+            st.dataframe(pd.DataFrame(numeric_stats_list), use_container_width=True)
+            st.divider()
+        
+        # Categorical Columns
+        categorical_cols = stats.get("categorical_columns", {})
+        if categorical_cols:
+            st.markdown("### 📋 Categorical Columns")
+            for col_name, col_stats in categorical_cols.items():
+                st.markdown(f"**{col_name}**")
+                st.markdown(f"Unique Values: {col_stats.get('unique_values', 0)}")
+                st.markdown(f"Most Common: {col_stats.get('most_common', 'N/A')} ({col_stats.get('most_common_count', 0)} times)")
+                st.markdown(f"Diversity Ratio: {col_stats.get('diversity_ratio', 0):.3f}")
+                st.divider()
+        
+        # Data Quality
+        st.markdown("### ✅ Data Quality")
+        dq = stats.get('data_quality', {})
+        col1, col2, col3 = st.columns(3)
+        col1.metric("Missing Cells", dq.get('missing_cells', 0))
+        col2.metric("Duplicate Rows", dq.get('duplicate_rows', 0))
+        col3.metric("Total Cells", dq.get('total_cells', 0))
+        
+        # Outliers
         outliers = stats.get("outliers", {})
         if outliers:
-            st.markdown("<br>", unsafe_allow_html=True)
-            st.markdown('<p class="section-label">Outlier Summary</p>', unsafe_allow_html=True)
-            rows = [{
-                "Column": c,
-                "Count": v["count"],
-                "Pct (%)": f"{v['percentage']:.2f}",
-                "Lower Bound": f"{v['lower_bound']:.3f}",
-                "Upper Bound": f"{v['upper_bound']:.3f}",
-            } for c, v in outliers.items()]
-            st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
-
-    with col_r:
-        dtypes = stats.get("dtypes", {})
-        if dtypes:
-            st.markdown('<p class="section-label">Column Data Types</p>', unsafe_allow_html=True)
-            st.dataframe(
-                pd.DataFrame.from_dict(dtypes, orient="index", columns=["Type"]),
-                use_container_width=True,
-            )
-
-        cat_stats = stats.get("categorical_columns", {})
-        if cat_stats:
-            st.markdown("<br>", unsafe_allow_html=True)
-            st.markdown('<p class="section-label">Categorical Columns</p>', unsafe_allow_html=True)
-            rows = [{
-                "Column": c,
-                "Unique": v["unique_values"],
-                "Most Common": v["most_common"],
-                "Count": v["most_common_count"],
-                "Diversity": f"{v['diversity_ratio']:.3f}",
-            } for c, v in cat_stats.items()]
-            st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
-
-        strong_corr = stats.get("strong_correlations", [])
-        if strong_corr:
-            st.markdown("<br>", unsafe_allow_html=True)
-            st.markdown('<p class="section-label">Strong Correlations (|r| > 0.7)</p>', unsafe_allow_html=True)
-            st.dataframe(
-                pd.DataFrame(strong_corr),
-                use_container_width=True,
-                hide_index=True,
-            )
+            st.divider()
+            st.markdown("### ⚠️ Outliers Detected")
+            outlier_list = []
+            for col, info in outliers.items():
+                outlier_list.append({
+                    "Column": col,
+                    "Count": info.get('count', 0),
+                    "Percentage": f"{info.get('percentage', 0):.2f}%",
+                    "Lower Bound": f"{info.get('lower_bound', 0):.2f}",
+                    "Upper Bound": f"{info.get('upper_bound', 0):.2f}",
+                })
+            st.dataframe(pd.DataFrame(outlier_list), use_container_width=True)
+        
+        # Strong Correlations
+        strong_corrs = stats.get("strong_correlations", [])
+        if strong_corrs:
+            st.divider()
+            st.markdown("### 🔗 Strong Correlations")
+            corr_list = []
+            for corr in strong_corrs:
+                corr_list.append({
+                    "Column 1": corr.get("col1", ""),
+                    "Column 2": corr.get("col2", ""),
+                    "Correlation": f"{corr.get('correlation', 0):.3f}",
+                })
+            st.dataframe(pd.DataFrame(corr_list), use_container_width=True)
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # TAB 5 · DATA PREVIEW
