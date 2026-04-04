@@ -2,7 +2,7 @@ import logging
 import pandas as pd
 import numpy as np
 from scipy import stats as scipy_stats
-from backend.core.state import AnalysisState
+from core.state import AnalysisState
 
 logger = logging.getLogger(__name__)
 

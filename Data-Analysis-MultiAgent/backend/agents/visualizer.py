@@ -4,7 +4,7 @@ import base64
 import matplotlib.pyplot as plt
 import seaborn as sns
 from langchain_groq import ChatGroq
-from backend.core.state import AnalysisState
+from core.state import AnalysisState
 
 # Setup logging
 logger = logging.getLogger(__name__)

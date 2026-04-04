@@ -1,17 +1,16 @@
 import logging
-from backend.core.state import AnalysisState
-from backend.agents.architect import architect_agent
-from backend.agents.statistician import statistician_agent
-from backend.agents.visualizer import visualizer_agent
-from backend.agents.insights import insights_agent
-from backend.agents.summary import summary_agent
+from core.state import AnalysisState
+from agents.architect import architect_agent
+from agents.statistician import statistician_agent
+from agents.visualizer import visualizer_agent
+from agents.insights import insights_agent
+from agents.summary import summary_agent
 
 logger = logging.getLogger(__name__)
 
 
 def run_pipeline(df) -> AnalysisState:
-    state = AnalysisState(data=df)
-
+    state = AnalysisState(raw_df=df)
     logger.info("Starting analysis pipeline")
 
     agents = [
@@ -25,9 +24,13 @@ def run_pipeline(df) -> AnalysisState:
     for name, agent_fn in agents:
         logger.info("Running agent: %s", name)
 
+        state.current_agent = name
+
         error_count_before = len(state.errors)
 
         state = agent_fn(state)
+
+        state.completed_agents.append(name)
 
         if len(state.errors) > error_count_before:
             logger.warning(
