@@ -4,9 +4,14 @@ Pipeline: Architect → Statistician → Visualizer → Summary → Insights
 """
 import io
 import logging
+import os
+from dotenv import load_dotenv
 
 import pandas as pd
 import streamlit as st
+
+# Load environment variables from .env file
+load_dotenv()
 
 from core.graph import run_pipeline
 
@@ -276,17 +281,22 @@ if errors:
 
 # ── Top metrics row ───────────────────────────────────────────────────────────
 stats = result.get("stats_summary", {})
-summ  = result.get("summary") or {}
-shape = stats.get("shape") or [0, 0]
+insights = result.get("insights", {})
+row_count = stats.get("row_count", 0)
+col_count = stats.get("column_count", 0)
+missing_cells = stats.get("data_quality", {}).get("missing_cells", 0)
+completeness = stats.get("data_quality", {}).get("completeness", 100)
+outlier_cols = len(stats.get("outliers", {}))
+strong_corrs = len(stats.get("strong_correlations", []))
 
 st.markdown("<br>", unsafe_allow_html=True)
 c1, c2, c3, c4, c5, c6 = st.columns(6)
-c1.metric("Rows",             f"{shape[0]:,}")
-c2.metric("Columns",          shape[1])
-c3.metric("Missing Values",   sum(stats.get("nulls", {}).values()))
-c4.metric("Outlier Cols",     len(stats.get("outliers", {})))
-c5.metric("Correlations",     len(stats.get("top_correlations", [])))
-c6.metric("Health Score",     f"{summ.get('health_score', '—')}/100")
+c1.metric("Rows",             f"{row_count:,}")
+c2.metric("Columns",          col_count)
+c3.metric("Missing Values",   missing_cells)
+c4.metric("Outlier Cols",     outlier_cols)
+c5.metric("Correlations",     strong_corrs)
+c6.metric("Completeness",     f"{completeness:.1f}%")
 st.markdown("<br>", unsafe_allow_html=True)
 
 # ── Tabs ──────────────────────────────────────────────────────────────────────
@@ -298,108 +308,35 @@ tab_summary, tab_charts, tab_insights, tab_stats, tab_data = st.tabs(
 # TAB 1 · SUMMARY
 # ═══════════════════════════════════════════════════════════════════════════════
 with tab_summary:
-    if not summ:
+    if not insights:
         st.warning(
-            "⚠️ Summary agent did not return data. "
-            "Check the **Processing warnings** expander above for error details. "
-            "If no warnings are shown, try clicking **Generate Analysis** again.",
+            "⚠️ Summary data not yet available. "
+            "Check the **Processing warnings** expander above for error details."
         )
-
     else:
-        hs = summ.get("health_score", 0)
-        if hs >= 75:
-            hclass, hicon, hlabel = "health-great", "✅", "Great"
-        elif hs >= 50:
-            hclass, hicon, hlabel = "health-ok", "⚠️", "Fair"
+        # Get executive summary if available
+        exec_summary = insights.get("executive_summary", "")
+        if exec_summary:
+            st.markdown("### Executive Summary")
+            st.info(exec_summary)
+        
+        # Show findings
+        st.markdown("### Key Findings")
+        findings = insights.get("findings", [])
+        if findings:
+            for i, finding in enumerate(findings, 1):
+                st.markdown(f"**{i}. {finding}**")
         else:
-            hclass, hicon, hlabel = "health-poor", "🚨", "Needs Attention"
-
-        st.markdown(
-            f'<span class="health-badge {hclass}">{hicon} Data Health: {hlabel} — {hs}/100</span>',
-            unsafe_allow_html=True,
-        )
-        st.markdown("<br>", unsafe_allow_html=True)
-
-        col_l, col_r = st.columns(2)
-
-        with col_l:
-            st.markdown('<p class="section-title">📐 Dataset Overview</p>', unsafe_allow_html=True)
-            ov1, ov2, ov3 = st.columns(3)
-            ov1.metric("Rows",          f"{summ.get('rows', 0):,}")
-            ov2.metric("Columns",       summ.get("cols", 0))
-            ov3.metric("Missing %",     f"{summ.get('missing_rate_pct', 0)}%")
-            ov4, ov5, ov6 = st.columns(3)
-            ov4.metric("Numeric cols",  len(summ.get("numeric_cols", [])))
-            ov5.metric("Category cols", len(summ.get("cat_cols", [])))
-            ov6.metric("Date cols",     len(summ.get("date_cols", [])))
-
-            dr = summ.get("date_range")
-            if dr:
-                st.markdown("<br>", unsafe_allow_html=True)
-                st.markdown(f"""
-                <div class="stat-card" style="border-left-color:#0ea5e9">
-                    <h5>📅 Date Range — {dr['column']}</h5>
-                    <div class="val">{dr['from']} → {dr['to']}</div>
-                    <div class="sub">Span: {dr['span_days']:,} days</div>
-                </div>
-                """, unsafe_allow_html=True)
-
-        with col_r:
-            st.markdown('<p class="section-title">🔢 Numeric Highlights</p>', unsafe_allow_html=True)
-            highlights = summ.get("highlights", [])
-            if highlights:
-                for h in highlights:
-                    st.markdown(f"""
-                    <div class="stat-card">
-                        <h5>{h['column']}</h5>
-                        <div class="val">μ = {h['mean']:,}</div>
-                        <div class="sub">
-                            Min {h['min']:,} &nbsp;·&nbsp;
-                            Max {h['max']:,} &nbsp;·&nbsp;
-                            σ {h['std']:,}
-                        </div>
-                    </div>
-                    """, unsafe_allow_html=True)
-            else:
-                st.info("No numeric columns found.")
-
-        st.markdown("<br>", unsafe_allow_html=True)
-        col_l2, col_r2 = st.columns(2)
-
-        with col_l2:
-            top_cats = summ.get("top_categories", {})
-            if top_cats:
-                st.markdown('<p class="section-title">🏷️ Top Categories</p>', unsafe_allow_html=True)
-                for col, info in top_cats.items():
-                    st.markdown(f"""
-                    <div class="stat-card" style="border-left-color:#f59e0b">
-                        <h5>{col}</h5>
-                        <div class="val">{info['top_value']}</div>
-                        <div class="sub">
-                            Top value · {info['top_pct']}% of rows &nbsp;·&nbsp;
-                            {info['unique']} unique values
-                        </div>
-                    </div>
-                    """, unsafe_allow_html=True)
-
-        with col_r2:
-            top_corr = summ.get("top_correlations", [])
-            st.markdown('<p class="section-title">🔗 Strong Correlations</p>', unsafe_allow_html=True)
-            if top_corr:
-                for pair in top_corr:
-                    a, b, r = pair
-                    strength  = "Strong" if abs(r) >= 0.8 else "Moderate"
-                    direction = "positive" if r > 0 else "negative"
-                    color     = "#10b981" if r > 0 else "#f43f5e"
-                    st.markdown(f"""
-                    <div class="stat-card" style="border-left-color:{color}">
-                        <h5>{strength} {direction} correlation</h5>
-                        <div class="val">{a} ↔ {b}</div>
-                        <div class="sub">r = {r:.2f}</div>
-                    </div>
-                    """, unsafe_allow_html=True)
-            else:
-                st.info("No strong correlations (|r| > 0.5) found.")
+            st.info("No findings generated yet.")
+        
+        # Show recommendations
+        st.markdown("### Recommendations")
+        recommendations = insights.get("recommendations", [])
+        if recommendations:
+            for i, rec in enumerate(recommendations, 1):
+                st.markdown(f"✓ {rec}")
+        else:
+            st.info("No recommendations available.")
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # TAB 2 · CHARTS
@@ -410,83 +347,147 @@ with tab_charts:
     if not chart_list:
         st.info("No visualisations could be generated from this dataset.", icon="ℹ️")
     else:
-        for i in range(0, len(chart_list), 2):
-            row = st.columns(2)
-            row[0].plotly_chart(chart_list[i], use_container_width=True)
-            if i + 1 < len(chart_list):
-                row[1].plotly_chart(chart_list[i + 1], use_container_width=True)
+        # Display the visual dashboard (base64 encoded image)
+        if "visual_dashboard" in charts:
+            st.image(f"data:image/png;base64,{charts['visual_dashboard']}", width=1000)
+        else:
+            for chart in chart_list:
+                st.image(f"data:image/png;base64,{chart}", width=1000)
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # TAB 3 · AI INSIGHTS
 # ═══════════════════════════════════════════════════════════════════════════════
 with tab_insights:
     insights_data = result.get("insights") or {}
-    c1, c2, c3 = st.columns(3)
-
-    def _insight_card(col, css_cls, icon, title, items):
-        bullets = "".join(f"<li>{item}</li>" for item in items) if items else "<li>None detected.</li>"
-        col.markdown(f"""
-        <div class="insight-card {css_cls}">
-            <h4>{icon} {title}</h4>
-            <ul>{bullets}</ul>
-        </div>
-        """, unsafe_allow_html=True)
-
-    _insight_card(c1, "findings",        "🔎", "Key Findings",    insights_data.get("key_findings", []))
-    _insight_card(c2, "anomalies",       "🚨", "Anomalies",       insights_data.get("anomalies", []))
-    _insight_card(c3, "recommendations", "🎯", "Recommendations", insights_data.get("recommendations", []))
+    
+    if not insights_data:
+        st.warning("No insights generated yet. Please analyze a dataset first.")
+    else:
+        # Key Findings
+        st.markdown("### 🔎 Key Findings")
+        findings = insights_data.get("findings", [])
+        if findings:
+            for finding in findings:
+                st.markdown(f"• {finding}")
+        else:
+            st.info("No findings available.")
+        
+        st.divider()
+        
+        # Correlation Insights
+        st.markdown("### 📊 Correlation Insights")
+        corr_insights = insights_data.get("correlation_insights", [])
+        if corr_insights:
+            for corr in corr_insights:
+                st.markdown(f"• {corr}")
+        else:
+            st.info("No strong correlations detected.")
+        
+        st.divider()
+        
+        # Distribution Insights
+        st.markdown("### 📈 Distribution Patterns")
+        dist_insights = insights_data.get("distribution_insights", [])
+        if dist_insights:
+            for dist in dist_insights:
+                st.markdown(f"• {dist}")
+        else:
+            st.info("No distributions analyzed.")
+        
+        st.divider()
+        
+        # Outlier Summary
+        st.markdown("### ⚠️ Outlier Summary")
+        outlier_summary = insights_data.get("outlier_summary", {})
+        if outlier_summary:
+            for col, summary in outlier_summary.items():
+                st.markdown(f"• **{col}**: {summary}")
+        else:
+            st.info("No outliers detected.")
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # TAB 4 · STATISTICS
 # ═══════════════════════════════════════════════════════════════════════════════
 with tab_stats:
-    describe = stats.get("describe", {})
-    if describe:
-        st.markdown('<p class="section-title">Descriptive Statistics</p>', unsafe_allow_html=True)
-        st.dataframe(pd.DataFrame(describe).T, use_container_width=True)
+    if not stats:
+        st.warning("No statistics available yet.")
+    else:
+        # Data Overview
+        st.markdown("### 📐 Data Overview")
+        col1, col2, col3, col4 = st.columns(4)
+        col1.metric("Rows", f"{stats.get('row_count', 0):,}")
+        col2.metric("Columns", stats.get('column_count', 0))
+        col3.metric("Memory (MB)", f"{stats.get('memory_usage_mb', 0):.2f}")
+        completeness = stats.get('data_quality', {}).get('completeness', 100)
+        col4.metric("Completeness", f"{completeness:.1f}%")
+        
         st.divider()
-
-    col_l, col_r = st.columns(2)
-
-    with col_l:
+        
+        # Numeric Columns
+        numeric_cols = stats.get("numeric_columns", {})
+        if numeric_cols:
+            st.markdown("### 🔢 Numeric Columns Statistics")
+            numeric_stats_list = []
+            for col_name, col_stats in numeric_cols.items():
+                numeric_stats_list.append({
+                    "Column": col_name,
+                    "Mean": f"{col_stats.get('mean', 0):.2f}",
+                    "Median": f"{col_stats.get('median', 0):.2f}",
+                    "Std Dev": f"{col_stats.get('std', 0):.2f}",
+                    "Min": f"{col_stats.get('min', 0):.2f}",
+                    "Max": f"{col_stats.get('max', 0):.2f}",
+                })
+            st.dataframe(pd.DataFrame(numeric_stats_list), use_container_width=True)
+            st.divider()
+        
+        # Categorical Columns
+        categorical_cols = stats.get("categorical_columns", {})
+        if categorical_cols:
+            st.markdown("### 📋 Categorical Columns")
+            for col_name, col_stats in categorical_cols.items():
+                st.markdown(f"**{col_name}**")
+                st.markdown(f"Unique Values: {col_stats.get('unique_values', 0)}")
+                st.markdown(f"Most Common: {col_stats.get('most_common', 'N/A')} ({col_stats.get('most_common_count', 0)} times)")
+                st.markdown(f"Diversity Ratio: {col_stats.get('diversity_ratio', 0):.3f}")
+                st.divider()
+        
+        # Data Quality
+        st.markdown("### ✅ Data Quality")
+        dq = stats.get('data_quality', {})
+        col1, col2, col3 = st.columns(3)
+        col1.metric("Missing Cells", dq.get('missing_cells', 0))
+        col2.metric("Duplicate Rows", dq.get('duplicate_rows', 0))
+        col3.metric("Total Cells", dq.get('total_cells', 0))
+        
+        # Outliers
         outliers = stats.get("outliers", {})
         if outliers:
-            st.markdown('<p class="section-title">Outlier Summary</p>', unsafe_allow_html=True)
-            st.dataframe(
-                pd.DataFrame.from_dict(
-                    {c: info["count"] for c, info in outliers.items()},
-                    orient="index", columns=["Count"],
-                ),
-                use_container_width=True,
-            )
-
-        dtypes = stats.get("dtypes", {})
-        if dtypes:
-            st.markdown('<p class="section-title">Column Data Types</p>', unsafe_allow_html=True)
-            st.dataframe(
-                pd.DataFrame.from_dict(dtypes, orient="index", columns=["Type"]),
-                use_container_width=True,
-            )
-
-    with col_r:
-        top_corr = stats.get("top_correlations", [])
-        if top_corr:
-            st.markdown('<p class="section-title">Top Correlations (|r| > 0.5)</p>', unsafe_allow_html=True)
-            st.dataframe(
-                pd.DataFrame(top_corr, columns=["Feature A", "Feature B", "r"]),
-                use_container_width=True,
-                hide_index=True,
-            )
-
-        cat_counts = stats.get("category_counts", {})
-        if cat_counts:
-            st.markdown('<p class="section-title">Category Value Counts (top 10)</p>', unsafe_allow_html=True)
-            for col, counts in list(cat_counts.items())[:3]:
-                with st.expander(f"📌 {col}"):
-                    st.dataframe(
-                        pd.DataFrame.from_dict(counts, orient="index", columns=["Count"]),
-                        use_container_width=True,
-                    )
+            st.divider()
+            st.markdown("### ⚠️ Outliers Detected")
+            outlier_list = []
+            for col, info in outliers.items():
+                outlier_list.append({
+                    "Column": col,
+                    "Count": info.get('count', 0),
+                    "Percentage": f"{info.get('percentage', 0):.2f}%",
+                    "Lower Bound": f"{info.get('lower_bound', 0):.2f}",
+                    "Upper Bound": f"{info.get('upper_bound', 0):.2f}",
+                })
+            st.dataframe(pd.DataFrame(outlier_list), use_container_width=True)
+        
+        # Strong Correlations
+        strong_corrs = stats.get("strong_correlations", [])
+        if strong_corrs:
+            st.divider()
+            st.markdown("### 🔗 Strong Correlations")
+            corr_list = []
+            for corr in strong_corrs:
+                corr_list.append({
+                    "Column 1": corr.get("col1", ""),
+                    "Column 2": corr.get("col2", ""),
+                    "Correlation": f"{corr.get('correlation', 0):.3f}",
+                })
+            st.dataframe(pd.DataFrame(corr_list), use_container_width=True)
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # TAB 5 · DATA PREVIEW
