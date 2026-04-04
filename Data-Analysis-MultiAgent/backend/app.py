@@ -7,7 +7,8 @@ import logging
 
 import pandas as pd
 import streamlit as st
-
+from dotenv import load_dotenv
+load_dotenv()
 from core.graph import run_pipeline
 
 # ── Logging ───────────────────────────────────────────────────────────────────
@@ -298,26 +299,20 @@ tab_summary, tab_charts, tab_insights, tab_stats, tab_data = st.tabs(
 # TAB 1 · SUMMARY
 # ═══════════════════════════════════════════════════════════════════════════════
 with tab_summary:
-    if not summ:
+    insights_data = result.get("insights") or {}
+    executive_summary = insights_data.get("executive_summary")
+    stats = result.get("stats_summary", {})
+
+    if not executive_summary:
         st.warning(
             "⚠️ Summary agent did not return data. "
             "Check the **Processing warnings** expander above for error details. "
             "If no warnings are shown, try clicking **Generate Analysis** again.",
         )
-
     else:
-        hs = summ.get("health_score", 0)
-        if hs >= 75:
-            hclass, hicon, hlabel = "health-great", "✅", "Great"
-        elif hs >= 50:
-            hclass, hicon, hlabel = "health-ok", "⚠️", "Fair"
-        else:
-            hclass, hicon, hlabel = "health-poor", "🚨", "Needs Attention"
-
-        st.markdown(
-            f'<span class="health-badge {hclass}">{hicon} Data Health: {hlabel} — {hs}/100</span>',
-            unsafe_allow_html=True,
-        )
+        # Executive Summary Text
+        st.markdown("### 📝 Executive Summary")
+        st.markdown(executive_summary)
         st.markdown("<br>", unsafe_allow_html=True)
 
         col_l, col_r = st.columns(2)
@@ -325,38 +320,26 @@ with tab_summary:
         with col_l:
             st.markdown('<p class="section-title">📐 Dataset Overview</p>', unsafe_allow_html=True)
             ov1, ov2, ov3 = st.columns(3)
-            ov1.metric("Rows",          f"{summ.get('rows', 0):,}")
-            ov2.metric("Columns",       summ.get("cols", 0))
-            ov3.metric("Missing %",     f"{summ.get('missing_rate_pct', 0)}%")
-            ov4, ov5, ov6 = st.columns(3)
-            ov4.metric("Numeric cols",  len(summ.get("numeric_cols", [])))
-            ov5.metric("Category cols", len(summ.get("cat_cols", [])))
-            ov6.metric("Date cols",     len(summ.get("date_cols", [])))
-
-            dr = summ.get("date_range")
-            if dr:
-                st.markdown("<br>", unsafe_allow_html=True)
-                st.markdown(f"""
-                <div class="stat-card" style="border-left-color:#0ea5e9">
-                    <h5>📅 Date Range — {dr['column']}</h5>
-                    <div class="val">{dr['from']} → {dr['to']}</div>
-                    <div class="sub">Span: {dr['span_days']:,} days</div>
-                </div>
-                """, unsafe_allow_html=True)
+            ov1.metric("Rows",            stats.get("row_count", 0))
+            ov2.metric("Columns",         stats.get("column_count", 0))
+            ov3.metric("Missing Values",  len(stats.get("missing_values", {})))
+            ov4, ov5 = st.columns(2)
+            ov4.metric("Numeric Cols",    len(stats.get("numeric_columns", {})))
+            ov5.metric("Categorical Cols",len(stats.get("categorical_columns", {})))
 
         with col_r:
             st.markdown('<p class="section-title">🔢 Numeric Highlights</p>', unsafe_allow_html=True)
-            highlights = summ.get("highlights", [])
-            if highlights:
-                for h in highlights:
+            numeric_stats = stats.get("numeric_columns", {})
+            if numeric_stats:
+                for col, info in list(numeric_stats.items())[:3]:
                     st.markdown(f"""
                     <div class="stat-card">
-                        <h5>{h['column']}</h5>
-                        <div class="val">μ = {h['mean']:,}</div>
+                        <h5>{col}</h5>
+                        <div class="val">μ = {info['mean']:.2f}</div>
                         <div class="sub">
-                            Min {h['min']:,} &nbsp;·&nbsp;
-                            Max {h['max']:,} &nbsp;·&nbsp;
-                            σ {h['std']:,}
+                            Min {info['min']:.2f} &nbsp;·&nbsp;
+                            Max {info['max']:.2f} &nbsp;·&nbsp;
+                            σ {info['std']:.2f}
                         </div>
                     </div>
                     """, unsafe_allow_html=True)
@@ -367,55 +350,63 @@ with tab_summary:
         col_l2, col_r2 = st.columns(2)
 
         with col_l2:
-            top_cats = summ.get("top_categories", {})
-            if top_cats:
+            cat_stats = stats.get("categorical_columns", {})
+            if cat_stats:
                 st.markdown('<p class="section-title">🏷️ Top Categories</p>', unsafe_allow_html=True)
-                for col, info in top_cats.items():
+                for col, info in list(cat_stats.items())[:3]:
                     st.markdown(f"""
                     <div class="stat-card" style="border-left-color:#f59e0b">
                         <h5>{col}</h5>
-                        <div class="val">{info['top_value']}</div>
+                        <div class="val">{info['most_common']}</div>
                         <div class="sub">
-                            Top value · {info['top_pct']}% of rows &nbsp;·&nbsp;
-                            {info['unique']} unique values
+                            Top value · {info['unique_values']} unique values
                         </div>
                     </div>
                     """, unsafe_allow_html=True)
 
         with col_r2:
-            top_corr = summ.get("top_correlations", [])
+            strong_corr = stats.get("strong_correlations", [])
             st.markdown('<p class="section-title">🔗 Strong Correlations</p>', unsafe_allow_html=True)
-            if top_corr:
-                for pair in top_corr:
-                    a, b, r = pair
+            if strong_corr:
+                for pair in strong_corr:
+                    r = pair["correlation"]
                     strength  = "Strong" if abs(r) >= 0.8 else "Moderate"
                     direction = "positive" if r > 0 else "negative"
                     color     = "#10b981" if r > 0 else "#f43f5e"
                     st.markdown(f"""
                     <div class="stat-card" style="border-left-color:{color}">
                         <h5>{strength} {direction} correlation</h5>
-                        <div class="val">{a} ↔ {b}</div>
+                        <div class="val">{pair['col1']} ↔ {pair['col2']}</div>
                         <div class="sub">r = {r:.2f}</div>
                     </div>
                     """, unsafe_allow_html=True)
             else:
-                st.info("No strong correlations (|r| > 0.5) found.")
+                st.info("No strong correlations (|r| > 0.7) found.")
+
+        # Data Quality
+        st.markdown("<br>", unsafe_allow_html=True)
+        quality = stats.get("data_quality", {})
+        if quality:
+            st.markdown('<p class="section-title">🏥 Data Quality</p>', unsafe_allow_html=True)
+            q1, q2, q3 = st.columns(3)
+            q1.metric("Completeness",  f"{quality.get('completeness', 0):.1f}%")
+            q2.metric("Duplicate Rows", quality.get("duplicate_rows", 0))
+            q3.metric("Missing Cells",  quality.get("missing_cells", 0))
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # TAB 2 · CHARTS
 # ═══════════════════════════════════════════════════════════════════════════════
 with tab_charts:
     charts = result.get("charts") or {}
-    chart_list = list(charts.values())
-    if not chart_list:
+    if not charts:
         st.info("No visualisations could be generated from this dataset.", icon="ℹ️")
     else:
-        for i in range(0, len(chart_list), 2):
-            row = st.columns(2)
-            row[0].plotly_chart(chart_list[i], use_container_width=True)
-            if i + 1 < len(chart_list):
-                row[1].plotly_chart(chart_list[i + 1], use_container_width=True)
-
+        for chart_name, chart_data in charts.items():
+            st.markdown(f'<p class="section-title">{chart_name.replace("_", " ").title()}</p>', unsafe_allow_html=True)
+            st.image(
+                f"data:image/png;base64,{chart_data}",
+                use_column_width=True
+            )
 # ═══════════════════════════════════════════════════════════════════════════════
 # TAB 3 · AI INSIGHTS
 # ═══════════════════════════════════════════════════════════════════════════════

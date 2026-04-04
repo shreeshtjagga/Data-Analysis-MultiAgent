@@ -26,58 +26,76 @@ def visualizer_agent(state: AnalysisState) -> AnalysisState:
     try:
         # 1. Initialize Groq
         llm = ChatGroq(model_name="llama-3.3-70b-versatile", temperature=0.2)
-        
-        # 2. Build Context
-        columns = list(state.clean_df.columns)
-        stats_findings = state.stats_summary 
-        
-        # 3. The "Multi-Plot" Strategic Prompt
+
+        # 2. Separate numeric and categorical columns explicitly
+        df = state.clean_df
+        numeric_cols = df.select_dtypes(include=['number']).columns.tolist()
+        categorical_cols = df.select_dtypes(include=['object']).columns.tolist()
+        stats_findings = state.stats_summary
+
+        # 3. The "Multi-Plot" Strategic Prompt with strict column rules
         prompt = f"""
-        You are a Senior Data Scientist. Your task is to produce a comprehensive 
-        visual gallery for the provided dataset.
-        
-        CONTEXT:
-        - Columns: {columns}
-        - Column Types: {state.column_types}
-        - Statistician's Findings: {stats_findings}
-        
-        TASK:
-	1. Deeply analyze the Statistical Insights to find the 'Primary Narrative'.
 
-        2. Select the BEST visualization from Seaborn or Matplotlib to represent this. 
-           (Examples: sns.scatterplot, sns.violinplot, sns.heatmap, sns.jointplot, sns.boxenplot, etc.)
+IMPORTANT: The dataframe is already loaded as `df`. Do NOT read any CSV file.
 
-        3. Identify the 5-6 most important visual perspectives required to fully 
-           understand this data (e.g., Correlation Heatmap, Distribution of Key Metrics, 
-           Categorical breakdowns, Outlier detection).
+You are a Senior Data Scientist. Your task is to produce a comprehensive
+visual gallery for the provided dataset.
 
-        4. Write Python code that generates these 5-6 plots as SUBPLOTS in a single figure.
-        
-        REQUIREMENTS:
-        - Use `fig, axes = plt.subplots(nrows=3, ncols=2, figsize=(20, 18))` (or similar grid).
-        - Use `plt.tight_layout(pad=5.0)`.
-        - Ensure every plot has a specific title related to the Statistician's findings.
-        - Use sophisticated Seaborn themes and palettes.
-        - Return ONLY the executable Python code block.
-        """
+CONTEXT:
+- All Columns: {list(df.columns)}
+- NUMERIC columns ONLY (use these for histograms, scatter, box, violin, heatmap): {numeric_cols}
+- CATEGORICAL columns ONLY (use these for bar/count plots): {categorical_cols}
+- Statistician's Findings: {stats_findings}
+
+STRICT RULES:
+- NEVER use categorical columns for scatter, histogram, violin, box, or heatmap plots
+- ONLY use numeric columns for any plot that requires float/int values
+- For bar/count plots, ONLY use categorical columns
+- NEVER load any file, NEVER use pd.read_csv(), NEVER use open()
+- The dataframe is ALREADY loaded and available as `df` — use it directly
+- DO NOT import pandas, DO NOT import numpy — they are not needed
+- Always use `df` as the dataframe variable name
+- If numeric_cols has fewer than 2 columns, skip correlation heatmap
+- All axes must be referenced as axes[row][col] or axes[index] depending on grid shape
+
+TASK:
+1. Deeply analyze the Statistical Insights to find the Primary Narrative.
+2. Identify the 5-6 most important visual perspectives to understand this data.
+3. Write Python code that generates these plots as SUBPLOTS in a single figure.
+
+REQUIREMENTS:
+- Use `fig, axes = plt.subplots(nrows=3, ncols=2, figsize=(20, 18))`
+- Flatten axes with `axes = axes.flatten()`
+- Use `plt.tight_layout(pad=5.0)`
+- Every plot must have a descriptive title
+- Use seaborn themes and palettes
+- Return ONLY executable Python code, no explanation, no markdown
+"""
 
         # 4. Generate and Clean Code
         response = llm.invoke(prompt)
         code = response.content.strip()
-        
+
         if "```python" in code:
             code = code.split("```python")[1].split("```")[0].strip()
         elif "```" in code:
             code = code.split("```")[1].split("```")[0].strip()
 
+        logger.info("Generated visualization code:\n%s", code)
+
         # 5. Execute and Capture
-        plt.switch_backend('Agg') 
-        plt.clf() 
-        
-        # We pass the dataframe as 'df' to the execution environment
-        exec_globals = {"df": state.clean_df, "plt": plt, "sns": sns}
+        plt.switch_backend('Agg')
+        plt.clf()
+
+        exec_globals = {
+            "df": df,
+            "plt": plt,
+            "sns": sns,
+            "numeric_cols": numeric_cols,
+            "categorical_cols": categorical_cols,
+        }
         exec(code, exec_globals)
-        
+
         # 6. Convert the entire Grid to a single Base64 String
         buf = io.BytesIO()
         plt.savefig(buf, format='png', bbox_inches='tight', dpi=150)
@@ -86,9 +104,8 @@ def visualizer_agent(state: AnalysisState) -> AnalysisState:
         plt.close()
 
         # 7. Update AnalysisState
-        # We store the main dashboard as 'primary_analysis'
         state.charts["visual_dashboard"] = img_base64
-        logger.info("Visualizer Agent: 5-6 dynamic plots generated and stored as a dashboard.")
+        logger.info("Visualizer Agent: Dashboard generated and stored successfully.")
 
     except Exception as e:
         error_msg = f"Visualizer Suite Error: {str(e)}"

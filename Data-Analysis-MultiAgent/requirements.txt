@@ -6,3 +6,6 @@ plotly>=5.22.0
 pydantic>=2.7.0
 groq>=0.9.0
 python-dotenv>=1.0.0
+langchain-groq>=0.1.0
+matplotlib>=3.8.0
+seaborn>=0.13.0
