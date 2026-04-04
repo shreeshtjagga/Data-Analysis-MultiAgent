@@ -9,8 +9,11 @@ import tempfile
 
 import pandas as pd
 import streamlit as st
+from dotenv import load_dotenv
 
 from core.graph import build_graph
+
+load_dotenv()
 
 # ── Logging ───────────────────────────────────────────────────────────────────
 logging.basicConfig(

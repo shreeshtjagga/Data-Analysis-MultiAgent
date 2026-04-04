@@ -65,7 +65,7 @@ def detect_column_types(df: pd.DataFrame) -> dict[str, str]:
             type_map[col] = "datetime"
         else:
             try:
-                pd.to_datetime(df[col], infer_datetime_format=True)
+                pd.to_datetime(df[col], format="mixed")
                 type_map[col] = "datetime"
             except (ValueError, TypeError):
                 type_map[col] = "categorical"

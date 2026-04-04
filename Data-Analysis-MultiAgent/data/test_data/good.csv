@@ -1,0 +1,31 @@
+Name,Age,Salary,Department,City,Performance_Score,Years_Experience
+Alice,28,65000,Engineering,New York,85,3
+Bob,35,82000,Marketing,Chicago,72,8
+Carol,42,95000,Engineering,San Francisco,91,15
+David,31,71000,Sales,Boston,68,5
+Eve,26,58000,Marketing,New York,78,2
+Frank,38,88000,Engineering,Chicago,89,12
+Grace,29,62000,Sales,San Francisco,74,4
+Hank,45,105000,Engineering,Boston,93,20
+Ivy,33,76000,Marketing,New York,81,7
+Jack,27,60000,Sales,Chicago,70,3
+Karen,40,92000,Engineering,San Francisco,87,14
+Leo,36,84000,Marketing,Boston,76,9
+Mona,30,69000,Sales,New York,73,5
+Nick,44,98000,Engineering,Chicago,90,18
+Olivia,25,55000,Marketing,San Francisco,67,1
+Paul,37,86000,Sales,Boston,82,10
+Quinn,32,74000,Engineering,New York,88,6
+Rachel,41,94000,Marketing,Chicago,79,13
+Sam,34,80000,Sales,San Francisco,75,8
+Tina,28,63000,Engineering,Boston,84,3
+Uma,39,91000,Marketing,New York,77,11
+Victor,43,97000,Engineering,Chicago,92,17
+Wendy,30,68000,Sales,San Francisco,71,4
+Xander,36,85000,Marketing,Boston,80,9
+Yara,27,59000,Engineering,New York,86,2
+Zane,46,110000,Engineering,Chicago,95,22
+Amy,33,75000,Sales,San Francisco,69,6
+Brian,29,64000,Marketing,Boston,83,4
+Clara,38,89000,Engineering,New York,88,11
+Derek,31,72000,Sales,Chicago,74,5

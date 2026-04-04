@@ -1,97 +1,97 @@
 import logging
-import io
-import base64
-import matplotlib.pyplot as plt
-import seaborn as sns
-from langchain_groq import ChatGroq
-from backend.core.state import AnalysisState
+import numpy as np
+import plotly.express as px
+import plotly.graph_objects as go
+from core.state import AnalysisState
 
-# Setup logging
 logger = logging.getLogger(__name__)
+
 
 def visualizer_agent(state: AnalysisState) -> AnalysisState:
     """
-    Visualizer Agent: Dynamically identifies and generates the 5-6 most 
-    statistically significant plots for the given dataset.
+    Visualizer Agent: Generates interactive Plotly charts based on
+    the cleaned dataset and statistician findings.
     """
     state.current_agent = "visualizer"
-    logger.info("Visualizer Agent: Orchestrating a multi-plot analytical suite...")
+    logger.info("Visualizer agent started")
 
     if state.clean_df is None or state.clean_df.empty:
-        error_msg = "Visualizer Failure: clean_df is missing."
-        logger.error(error_msg)
-        state.errors.append(error_msg)
+        state.errors.append("Visualizer: No clean data available")
+        state.completed_agents.append("visualizer")
         return state
 
     try:
-        # 1. Initialize Groq
-        llm = ChatGroq(model_name="llama-3.3-70b-versatile", temperature=0.2)
-        
-        # 2. Build Context
-        columns = list(state.clean_df.columns)
-        stats_findings = state.stats_summary 
-        
-        # 3. The "Multi-Plot" Strategic Prompt
-        prompt = f"""
-        You are a Senior Data Scientist. Your task is to produce a comprehensive 
-        visual gallery for the provided dataset.
-        
-        CONTEXT:
-        - Columns: {columns}
-        - Column Types: {state.column_types}
-        - Statistician's Findings: {stats_findings}
-        
-        TASK:
-	1. Deeply analyze the Statistical Insights to find the 'Primary Narrative'.
+        df = state.clean_df
+        stats = state.stats_summary
+        charts: dict = {}
 
-        2. Select the BEST visualization from Seaborn or Matplotlib to represent this. 
-           (Examples: sns.scatterplot, sns.violinplot, sns.heatmap, sns.jointplot, sns.boxenplot, etc.)
+        numeric_cols = df.select_dtypes(include=[np.number]).columns.tolist()
+        cat_cols = df.select_dtypes(include=["object"]).columns.tolist()
 
-        3. Identify the 5-6 most important visual perspectives required to fully 
-           understand this data (e.g., Correlation Heatmap, Distribution of Key Metrics, 
-           Categorical breakdowns, Outlier detection).
+        # 1. Correlation heatmap (if >1 numeric columns)
+        if len(numeric_cols) > 1:
+            corr = df[numeric_cols].corr()
+            fig = go.Figure(data=go.Heatmap(
+                z=corr.values,
+                x=corr.columns.tolist(),
+                y=corr.columns.tolist(),
+                colorscale="RdBu_r",
+                zmin=-1,
+                zmax=1,
+                text=np.round(corr.values, 2),
+                texttemplate="%{text}",
+            ))
+            fig.update_layout(title="Correlation Heatmap", height=500)
+            charts["correlation_heatmap"] = fig
 
-        4. Write Python code that generates these 5-6 plots as SUBPLOTS in a single figure.
-        
-        REQUIREMENTS:
-        - Use `fig, axes = plt.subplots(nrows=3, ncols=2, figsize=(20, 18))` (or similar grid).
-        - Use `plt.tight_layout(pad=5.0)`.
-        - Ensure every plot has a specific title related to the Statistician's findings.
-        - Use sophisticated Seaborn themes and palettes.
-        - Return ONLY the executable Python code block.
-        """
+        # 2. Distribution histograms for top numeric columns
+        for col in numeric_cols[:4]:
+            fig = px.histogram(
+                df, x=col,
+                title=f"Distribution of {col}",
+                marginal="box",
+                opacity=0.7,
+            )
+            fig.update_layout(height=400)
+            charts[f"dist_{col}"] = fig
 
-        # 4. Generate and Clean Code
-        response = llm.invoke(prompt)
-        code = response.content.strip()
-        
-        if "```python" in code:
-            code = code.split("```python")[1].split("```")[0].strip()
-        elif "```" in code:
-            code = code.split("```")[1].split("```")[0].strip()
+        # 3. Box plots for numeric columns
+        if numeric_cols:
+            fig = go.Figure()
+            for col in numeric_cols[:6]:
+                fig.add_trace(go.Box(y=df[col], name=col))
+            fig.update_layout(title="Box Plots — Numeric Columns", height=450)
+            charts["box_plots"] = fig
 
-        # 5. Execute and Capture
-        plt.switch_backend('Agg') 
-        plt.clf() 
-        
-        # We pass the dataframe as 'df' to the execution environment
-        exec_globals = {"df": state.clean_df, "plt": plt, "sns": sns}
-        exec(code, exec_globals)
-        
-        # 6. Convert the entire Grid to a single Base64 String
-        buf = io.BytesIO()
-        plt.savefig(buf, format='png', bbox_inches='tight', dpi=150)
-        buf.seek(0)
-        img_base64 = base64.b64encode(buf.read()).decode('utf-8')
-        plt.close()
+        # 4. Category bar charts
+        for col in cat_cols[:2]:
+            vc = df[col].value_counts().head(10)
+            fig = px.bar(
+                x=vc.index.tolist(),
+                y=vc.values.tolist(),
+                labels={"x": col, "y": "Count"},
+                title=f"Top Values — {col}",
+            )
+            fig.update_layout(height=400)
+            charts[f"bar_{col}"] = fig
 
-        # 7. Update AnalysisState
-        # We store the main dashboard as 'primary_analysis'
-        state.charts["visual_dashboard"] = img_base64
-        logger.info("Visualizer Agent: 5-6 dynamic plots generated and stored as a dashboard.")
+        # 5. Scatter plot for top correlated pair
+        top_corr = stats.get("top_correlations", [])
+        if top_corr:
+            a, b, r = top_corr[0]
+            fig = px.scatter(
+                df, x=a, y=b,
+                title=f"Scatter: {a} vs {b} (r={r:.2f})",
+                opacity=0.6,
+            )
+            fig.update_layout(height=400)
+            charts["scatter_top_corr"] = fig
+
+        state.charts = charts
+        logger.info("Visualizer complete. Generated %d charts.", len(charts))
 
     except Exception as e:
-        error_msg = f"Visualizer Suite Error: {str(e)}"
+        error_msg = f"Visualizer error: {e}"
         logger.error(error_msg)
         state.errors.append(error_msg)
 

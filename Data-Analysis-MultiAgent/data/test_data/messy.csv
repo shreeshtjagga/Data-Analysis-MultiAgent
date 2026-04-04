@@ -1,0 +1,21 @@
+Name,Age,Salary,Department,City,Score
+Alice,28,65000,Engineering,New York,85
+Bob,,82000,Marketing,,72
+Carol,42,,Engineering,San Francisco,91
+David,31,71000,,Boston,
+Eve,26,58000,Marketing,New York,78
+Frank,38,88000,Engineering,,89
+Grace,,62000,Sales,San Francisco,
+Hank,45,105000,Engineering,Boston,93
+Ivy,33,,Marketing,New York,81
+Jack,27,60000,,Chicago,70
+Alice,28,65000,Engineering,New York,85
+Bob,,82000,Marketing,,72
+Karen,40,92000,Engineering,San Francisco,87
+Leo,36,84000,Marketing,Boston,
+Mona,30,69000,,New York,73
+Nick,44,98000,Engineering,,90
+Olivia,25,,Marketing,San Francisco,67
+Paul,37,86000,Sales,Boston,82
+Quinn,32,74000,Engineering,,88
+Rachel,41,94000,,Chicago,79
