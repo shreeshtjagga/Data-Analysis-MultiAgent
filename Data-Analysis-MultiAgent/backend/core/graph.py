@@ -1,47 +1,60 @@
 import logging
+
 from core.state import AnalysisState
 from agents.architect import architect_agent
 from agents.statistician import statistician_agent
 from agents.visualizer import visualizer_agent
-from agents.insights import insights_agent
 from agents.summary import summary_agent
+from agents.insights import insights_agent
 
 logger = logging.getLogger(__name__)
 
 
-def run_pipeline(df) -> AnalysisState:
-    state = AnalysisState(raw_df=df)
-    logger.info("Starting analysis pipeline")
+class AnalysisPipeline:
+    """Wrapper that provides a LangGraph-style .invoke() interface."""
 
-    agents = [
-        ("architect", architect_agent),
-        ("statistician", statistician_agent),
-        ("visualizer", visualizer_agent),
-        ("insights", insights_agent),
-        ("summary", summary_agent),
-    ]
+    def invoke(self, inputs: dict) -> dict:
+        df = inputs.get("df")
+        if df is None:
+            raise ValueError("No DataFrame provided under key 'df'")
 
-    for name, agent_fn in agents:
-        logger.info("Running agent: %s", name)
+        state = AnalysisState(raw_df=df)
 
-        state.current_agent = name
+        agents = [
+            ("architect", architect_agent),
+            ("statistician", statistician_agent),
+            ("visualizer", visualizer_agent),
+            ("summary", summary_agent),
+            ("insights", insights_agent),
+        ]
 
-        error_count_before = len(state.errors)
+        for name, agent_fn in agents:
+            logger.info("Running agent: %s", name)
+            error_count_before = len(state.errors)
+            state = agent_fn(state)
+            if len(state.errors) > error_count_before:
+                logger.warning(
+                    "Agent '%s' encountered an error, but continuing pipeline",
+                    name,
+                )
 
-        state = agent_fn(state)
+        logger.info(
+            "Pipeline complete. Agents run: %s. Errors: %d",
+            state.completed_agents,
+            len(state.errors),
+        )
 
-        state.completed_agents.append(name)
+        return {
+            "raw_df": state.raw_df,
+            "clean_df": state.clean_df,
+            "stats_summary": state.stats_summary,
+            "charts": state.charts,
+            "summary": state.summary,
+            "insights": state.insights,
+            "errors": state.errors,
+        }
 
-        if len(state.errors) > error_count_before:
-            logger.warning(
-                "Agent '%s' encountered an error, but continuing pipeline",
-                name
-            )
 
-    logger.info(
-        "Pipeline complete. Agents run: %s. Errors: %d",
-        state.completed_agents,
-        len(state.errors)
-    )
-
-    return state
+def build_graph() -> AnalysisPipeline:
+    """Return a ready-to-invoke analysis pipeline."""
+    return AnalysisPipeline()

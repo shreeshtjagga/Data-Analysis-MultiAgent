@@ -1,14 +1,15 @@
-"""
-AI Data Analyst · Streamlit frontend
-Pipeline: Architect → Statistician → Visualizer → Summary → Insights
-"""
 import io
 import logging
+import os
+import tempfile
 
 import pandas as pd
 import streamlit as st
+from dotenv import load_dotenv
 
-from core.graph import run_pipeline
+from core.graph import build_graph
+
+load_dotenv()
 
 # ── Logging ───────────────────────────────────────────────────────────────────
 logging.basicConfig(
@@ -227,8 +228,7 @@ if run_clicked and st.session_state["file_bytes"] is not None:
         try:
             df = pd.read_csv(io.BytesIO(st.session_state["file_bytes"]))
 
-            state = run_pipeline(df)
-            result = state.model_dump()
+            result = build_graph().invoke({"df": df})
 
             st.session_state["analysis_result"] = result
 
