@@ -244,7 +244,7 @@ def _try_histogram(
     score = comp * 30 + min(skew * 5, 20) + (25 if best in outlier_keys else 0)
     title = f"Distribution of {best}"
     if best in outlier_keys:
-        title += "  ⚠ outliers present"
+        title += "  outliers present"
     fig = px.histogram(
         df, x=best, nbins=30, title=title,
         marginal="box",

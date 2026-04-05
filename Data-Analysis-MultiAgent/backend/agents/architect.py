@@ -12,7 +12,7 @@ def architect_agent(state: AnalysisState) -> AnalysisState:
     logger.info("Architect agent started")
 
     try:
-        # ✅ Validate input DataFrame
+        # Validate input DataFrame
         if state.raw_df is None or state.raw_df.empty:
             raise ValueError("No data provided in state")
 
@@ -24,13 +24,13 @@ def architect_agent(state: AnalysisState) -> AnalysisState:
             len(raw_df.columns)
         )
 
-        # ✅ Clean data
+        # Clean data
         clean_df = clean_dataframe(raw_df.copy())
         state.clean_df = clean_df
 
         logger.info("Data cleaned: %d rows remaining", len(clean_df))
 
-        # ✅ Detect column types
+        # Detect column types
         state.column_types = detect_column_types(clean_df)
 
         logger.info("Column types detected: %s", state.column_types)
