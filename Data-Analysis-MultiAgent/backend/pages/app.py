@@ -4,6 +4,7 @@ import json
 import logging
 import os
 from typing import Optional
+from datetime import datetime
 from dotenv import load_dotenv
 
 import pandas as pd
@@ -18,6 +19,11 @@ except Exception:
 load_dotenv()
 
 from core.graph import run_pipeline
+from auth import get_user_by_id
+from analysis_history import (
+    compute_file_hash, save_analysis, get_analysis_by_hash,
+    get_user_analysis_history, delete_analysis
+)
 
 # ── Logging ───────────────────────────────────────────────────────────────────
 logging.basicConfig(
@@ -28,7 +34,20 @@ logger = logging.getLogger(__name__)
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# CONTEXT BUILDERS  (unchanged from your original)
+# AUTHENTICATION CHECK
+# ═══════════════════════════════════════════════════════════════════════════════
+
+def check_authentication():
+    """Check if user is authenticated."""
+    if not st.session_state.get("logged_in", False):
+        st.warning("Please log in first")
+        st.info("Redirecting to login page...")
+        st.switch_page("login.py")
+        st.stop()
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# HELPER FUNCTIONS (unchanged from original)
 # ═══════════════════════════════════════════════════════════════════════════════
 
 def _to_plain_list(values, max_items: int = 8) -> list:
@@ -268,7 +287,6 @@ def _infer_focus_chart(question: str, dataset_context: dict) -> Optional[dict]:
                 if keyword in key_title or any(trace_hint in t for t in trace_types):
                     return chart
 
-    # Fallback: if user mentions chart/graph, provide first generated chart context.
     if "chart" in q or "graph" in q:
         return summaries[0]
 
@@ -458,12 +476,6 @@ def _ask_dataset_chatbot(question: str, dataset_context: dict, chat_history: lis
         return _fallback_chat_answer(question, dataset_context) + f"\n\n(Service error: {exc})"
 
 
-# ═══════════════════════════════════════════════════════════════════════════════
-# FLOATING CHATBOT  — pure HTML/CSS/JS injected once at the bottom of the page
-# Uses a hidden Streamlit form for message submission (avoids full page reload
-# on every keystroke while still keeping everything server-side).
-# ═══════════════════════════════════════════════════════════════════════════════
-
 def _build_chat_messages_html(messages: list[dict]) -> str:
     """Render message history as HTML bubbles."""
     if not messages:
@@ -488,14 +500,9 @@ def _build_chat_messages_html(messages: list[dict]) -> str:
 
 
 def _inject_floating_chatbot(messages: list[dict]) -> None:
-    """
-    Injects the floating chat bubble + panel as a fixed-position HTML overlay.
-    The panel renders the chat history statically. Sending a message uses a
-    hidden Streamlit form so the backend processes it normally.
-    """
+    """Inject the floating chat bubble + panel as a fixed-position HTML overlay."""
     history_html = _build_chat_messages_html(messages)
 
-    # Quick-prompt chips shown when chat is empty
     chips_html = ""
     if not messages:
         chips = [
@@ -564,7 +571,6 @@ def _inject_floating_chatbot(messages: list[dict]) -> None:
   }}
   #fc-bubble svg {{ pointer-events: none; }}
 
-  /* unread badge */
   #fc-badge {{
     position: absolute;
     top: -3px; right: -3px;
@@ -800,7 +806,6 @@ def _inject_floating_chatbot(messages: list[dict]) -> None:
   }}
   #fc-send:hover {{ opacity: .85; transform: scale(1.06); }}
 
-  /* loading dots */
   .fc-typing {{
     display: none;
     align-self: flex-start;
@@ -828,7 +833,6 @@ def _inject_floating_chatbot(messages: list[dict]) -> None:
 </head>
 <body>
 
-<!-- ── Bubble ── -->
 <div id="fc-bubble" onclick="togglePanel()" title="Ask about your data">
   <div id="fc-badge"></div>
   <svg width="20" height="20" viewBox="0 0 24 24" fill="none">
@@ -837,10 +841,8 @@ def _inject_floating_chatbot(messages: list[dict]) -> None:
   </svg>
 </div>
 
-<!-- ── Panel ── -->
 <div id="fc-panel">
 
-  <!-- Header -->
   <div class="fc-header">
     <div class="fc-header-live"></div>
     <span class="fc-header-title">Dataset Assistant</span>
@@ -848,7 +850,6 @@ def _inject_floating_chatbot(messages: list[dict]) -> None:
     <button class="fc-close" onclick="togglePanel()">✕</button>
   </div>
 
-  <!-- Messages -->
   <div id="fc-messages">
     {history_html}
     <div class="fc-typing" id="fc-typing">
@@ -856,12 +857,10 @@ def _inject_floating_chatbot(messages: list[dict]) -> None:
     </div>
   </div>
 
-  <!-- Quick chips (only when empty) -->
   <div id="fc-chips">
     {chips_html}
   </div>
 
-  <!-- Input -->
   <div class="fc-input-row">
     <textarea id="fc-input" rows="1" placeholder="Ask about your data…"
       onkeydown="handleKey(event)" oninput="autoGrow(this)"></textarea>
@@ -876,10 +875,6 @@ def _inject_floating_chatbot(messages: list[dict]) -> None:
 </div>
 
 <script>
-  // ── Hidden Streamlit communication bridge ──
-  // We write the user question into a hidden <input> that Streamlit watches
-  // via st.components. We POST via query-param trick.
-
   function togglePanel() {{
     const panel  = document.getElementById('fc-panel');
     const bubble = document.getElementById('fc-bubble');
@@ -917,19 +912,15 @@ def _inject_floating_chatbot(messages: list[dict]) -> None:
     const text  = input.value.trim();
     if (!text) return;
 
-    // Append user bubble immediately
     appendBubble('user', 'You', text);
     input.value = '';
     input.style.height = 'auto';
 
-    // Hide chips
     document.getElementById('fc-chips').style.display = 'none';
 
-    // Show typing indicator
     document.getElementById('fc-typing').style.display = 'block';
     scrollToBottom();
 
-    // Send to Streamlit parent via postMessage
     window.parent.postMessage({{type: 'fc_message', text: text}}, '*');
   }}
 
@@ -937,7 +928,6 @@ def _inject_floating_chatbot(messages: list[dict]) -> None:
     const typing = document.getElementById('fc-typing');
     const msgs   = document.getElementById('fc-messages');
 
-    // Remove empty state if present
     const empty = msgs.querySelector('.fc-empty');
     if (empty) empty.remove();
 
@@ -950,7 +940,6 @@ def _inject_floating_chatbot(messages: list[dict]) -> None:
     scrollToBottom();
   }}
 
-  // Receive reply from Streamlit parent
   window.addEventListener('message', function(e) {{
     if (e.data && e.data.type === 'fc_reply') {{
       document.getElementById('fc-typing').style.display = 'none';
@@ -959,20 +948,22 @@ def _inject_floating_chatbot(messages: list[dict]) -> None:
     }}
   }});
 
-  // Auto-scroll on load
   window.addEventListener('load', scrollToBottom);
 </script>
 </body>
 </html>
 """
 
-    # Render the overlay in a zero-height container so it doesn't push layout
     components.html(overlay_html, height=0, scrolling=False)
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # PAGE CONFIG
 # ═══════════════════════════════════════════════════════════════════════════════
+
+# Check authentication first
+check_authentication()
+
 st.set_page_config(
     page_title="AI Data Analyst",
     layout="wide",
@@ -980,8 +971,9 @@ st.set_page_config(
 )
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# GLOBAL CSS  (your original styles, unchanged)
+# GLOBAL CSS
 # ═══════════════════════════════════════════════════════════════════════════════
+
 st.markdown("""
 <style>
 @import url('https://fonts.googleapis.com/css2?family=Syne:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&family=Outfit:wght@300;400;500;600&display=swap');
@@ -1152,7 +1144,6 @@ code, .mono { font-family: 'JetBrains Mono', monospace !important; }
     color: #7dd3fc !important;
 }
 
-/* Chat styling */
 .chat-user-question {
     font-size: 1.08rem;
     font-weight: 700;
@@ -1168,7 +1159,6 @@ code, .mono { font-family: 'JetBrains Mono', monospace !important; }
     margin: 12px 0 4px 0;
 }
 
-/* ── make components.html height-0 truly invisible ── */
 iframe[height="0"] {
     position: fixed !important;
     left: 0; bottom: 0;
@@ -1183,26 +1173,69 @@ iframe[height="0"] {
 """, unsafe_allow_html=True)
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# SESSION STATE
+# SESSION STATE INITIALIZATION
 # ═══════════════════════════════════════════════════════════════════════════════
+
 _DEFAULTS = {
     "analysis_result": None,
     "uploaded_file_name": None,
     "file_bytes": None,
+    "file_hash": None,
     "chat_messages": [],
     "chat_dataset_name": None,
     "force_chat_tab": False,
     "chat_pending_question": None,
     "chat_autoscroll": False,
+    "user_history": None,
+    "history_loaded": False,
 }
+
 for k, v in _DEFAULTS.items():
     if k not in st.session_state:
         st.session_state[k] = v
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# SIDEBAR
+# SIDEBAR WITH USER INFO & LOGOUT
 # ═══════════════════════════════════════════════════════════════════════════════
+
 with st.sidebar:
+    # User Info Card
+    user_email = st.session_state.get("user_email", "User")
+    login_time = st.session_state.get("login_time")
+
+    st.markdown(f"""
+    <div style="background:rgba(99,102,241,.1);border:1px solid rgba(99,102,241,.3);
+                border-radius:8px;padding:14px;margin-bottom:20px;">
+        <p style="font-size:.75rem;color:#64748b;margin:0 0 6px 0;letter-spacing:.08em;text-transform:uppercase;">
+            Logged In</p>
+        <p style="font-family:'Syne',sans-serif;font-size:1.05rem;font-weight:700;color:#e2e8f0;margin:0;">
+            {user_email}</p>
+        <p style="font-size:.75rem;color:#64748b;margin:6px 0 0 0;">
+            Since {login_time.strftime('%b %d, %Y') if login_time else 'today'}</p>
+    </div>
+    """, unsafe_allow_html=True)
+
+    # Logout button
+    col1, col2 = st.columns(2)
+    with col1:
+        if st.button("Logout", use_container_width=True, key="logout_btn"):
+            st.session_state.logged_in = False
+            st.session_state.user_id = None
+            st.session_state.user_email = None
+            st.session_state.login_time = None
+            st.switch_page("login.py")
+
+    with col2:
+        if st.button("History", use_container_width=True, key="history_btn"):
+            if not st.session_state.get("history_loaded"):
+                st.session_state.user_history = get_user_analysis_history(
+                    st.session_state.get("user_id"),
+                    limit=20
+                )
+                st.session_state.history_loaded = True
+
+    st.divider()
+
     st.markdown("""
     <div style="padding:20px 4px 12px 4px">
         <p style="font-family:'Syne',sans-serif;font-size:1.3rem;font-weight:800;
@@ -1221,14 +1254,28 @@ with st.sidebar:
 
     if uploaded_file is not None:
         current_bytes = uploaded_file.getvalue()
+        file_hash = compute_file_hash(current_bytes)
+
         if st.session_state["uploaded_file_name"] != uploaded_file.name:
             st.session_state["file_bytes"] = current_bytes
             st.session_state["uploaded_file_name"] = uploaded_file.name
+            st.session_state["file_hash"] = file_hash
             st.session_state["analysis_result"] = None
             st.session_state["chat_messages"] = []
             st.session_state["chat_dataset_name"] = uploaded_file.name
+
+            # Check if analysis exists in cache
+            cached_analysis = get_analysis_by_hash(
+                st.session_state.get("user_id"),
+                file_hash
+            )
+            if cached_analysis:
+                st.session_state["analysis_result"] = cached_analysis
+                st.info("📦 Cached analysis found! Using previous results.")
+
         elif st.session_state["file_bytes"] is None:
             st.session_state["file_bytes"] = current_bytes
+            st.session_state["file_hash"] = file_hash
 
     if st.session_state["uploaded_file_name"]:
         st.markdown(f"""
@@ -1247,13 +1294,31 @@ with st.sidebar:
 # ═══════════════════════════════════════════════════════════════════════════════
 # RUN PIPELINE
 # ═══════════════════════════════════════════════════════════════════════════════
+
 if run_clicked and st.session_state["file_bytes"] is not None:
     with st.spinner("Running analysis pipeline…"):
         try:
             df = pd.read_csv(io.BytesIO(st.session_state["file_bytes"]))
             state = run_pipeline(df)
             result_data = state.model_dump()
-            st.session_state["analysis_result"] = result_data
+
+            # Save to database
+            save_result = save_analysis(
+                user_id=st.session_state.get("user_id"),
+                file_name=st.session_state.get("uploaded_file_name", "dataset.csv"),
+                file_hash=st.session_state.get("file_hash", ""),
+                file_size=len(st.session_state.get("file_bytes", b"")),
+                analysis_result=result_data,
+                file_bytes=st.session_state.get("file_bytes", b"")
+            )
+
+            if save_result["success"]:
+                st.session_state["analysis_result"] = result_data
+                st.success("✓ Analysis saved to your history!")
+            else:
+                st.warning(f"Analysis complete but save failed: {save_result['message']}")
+                st.session_state["analysis_result"] = result_data
+
         except Exception as exc:
             st.error(f"Pipeline error: {exc}")
             logger.exception("Pipeline error")
@@ -1261,8 +1326,39 @@ if run_clicked and st.session_state["file_bytes"] is not None:
 result = st.session_state.get("analysis_result")
 
 # ═══════════════════════════════════════════════════════════════════════════════
+# HISTORY MODAL/EXPANDER
+# ═══════════════════════════════════════════════════════════════════════════════
+
+if st.session_state.get("user_history"):
+    with st.sidebar:
+        st.divider()
+        st.markdown("### 📊 Analysis History")
+
+        for analysis in st.session_state["user_history"]:
+            col1, col2 = st.columns([3, 1])
+            with col1:
+                st.caption(f"📁 {analysis['file_name']}")
+                st.caption(
+                    f"Rows: {analysis.get('row_count', '?')} | "
+                    f"Cols: {analysis.get('column_count', '?')} | "
+                    f"Completeness: {analysis.get('completeness', 0):.1f}%"
+                )
+            with col2:
+                if st.button("🗑️", key=f"delete_{analysis['id']}", help="Delete this analysis"):
+                    delete_result = delete_analysis(
+                        st.session_state.get("user_id"),
+                        analysis['id']
+                    )
+                    if delete_result["success"]:
+                        st.session_state.history_loaded = False
+                        st.rerun()
+
+        st.session_state["user_history"] = None
+
+# ═══════════════════════════════════════════════════════════════════════════════
 # EMPTY STATE
 # ═══════════════════════════════════════════════════════════════════════════════
+
 if result is None:
     st.markdown("<br><br>", unsafe_allow_html=True)
     _, mid, _ = st.columns([1, 2.2, 1])
@@ -1279,9 +1375,10 @@ if result is None:
     st.stop()
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# PROCESS PENDING CHAT MESSAGE  (before rendering anything)
+# FILE NAME
 # ═══════════════════════════════════════════════════════════════════════════════
-file_name = st.session_state.get("uploaded_file_name", "Dataset")
+
+file_name = result.get("from_cache") and result.get("file_name") or st.session_state.get("uploaded_file_name", "Dataset")
 
 if st.session_state.get("chat_dataset_name") != file_name:
     st.session_state["chat_messages"] = []
@@ -1290,17 +1387,22 @@ if st.session_state.get("chat_dataset_name") != file_name:
 # ═══════════════════════════════════════════════════════════════════════════════
 # HEADER
 # ═══════════════════════════════════════════════════════════════════════════════
+
+cache_badge = "📦 CACHED" if result.get("from_cache") else ""
 st.markdown(f"""
 <div class="page-header">
     <p class="title">Analysis</p>
     <code style="font-size:1rem;color:#6366f1;background:rgba(99,102,241,.1);
                  padding:3px 10px;border-radius:4px">{file_name}</code>
+    <code style="font-size:0.75rem;color:#10b981;background:rgba(16,185,129,.1);
+                 padding:3px 8px;border-radius:4px" hidden={not cache_badge}>{cache_badge}</code>
 </div>
 """, unsafe_allow_html=True)
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # WARNINGS
 # ═══════════════════════════════════════════════════════════════════════════════
+
 errors = result.get("errors", [])
 if errors:
     with st.expander("Processing warnings", expanded=False):
@@ -1310,6 +1412,7 @@ if errors:
 # ═══════════════════════════════════════════════════════════════════════════════
 # TOP METRICS
 # ═══════════════════════════════════════════════════════════════════════════════
+
 stats    = result.get("stats_summary", {})
 insights = result.get("insights", {})
 
@@ -1332,6 +1435,7 @@ st.markdown("<br>", unsafe_allow_html=True)
 # ═══════════════════════════════════════════════════════════════════════════════
 # TABS
 # ═══════════════════════════════════════════════════════════════════════════════
+
 tab_summary, tab_charts, tab_insights, tab_stats, tab_data, tab_chat = st.tabs([
     "SUMMARY", "CHARTS", "INSIGHTS", "STATISTICS", "DATA PREVIEW", "CHAT WITH AI"
 ])
@@ -1556,7 +1660,6 @@ with tab_chat:
     st.markdown("### Chat With AI")
     st.caption("Ask questions about the dataset, charts, and any analysis output.")
 
-    # Process any pending question first (captured from bottom input on prior rerun).
     pending_question = st.session_state.get("chat_pending_question")
     if pending_question:
         question = pending_question.strip()
@@ -1581,11 +1684,9 @@ with tab_chat:
             answer = _ask_dataset_chatbot(question, dataset_context, st.session_state["chat_messages"])
             st.session_state["chat_messages"].append({"role": "assistant", "content": answer})
 
-        # Streamlit reruns and often re-selects the first tab; request chat tab restore.
         st.session_state["force_chat_tab"] = True
         st.session_state["chat_autoscroll"] = True
 
-    # Full-width output area. Keep full dialogue so user can scroll up for previous chats.
     if st.session_state["chat_messages"]:
         st.markdown('<div id="chat-dialog-anchor"></div>', unsafe_allow_html=True)
         with st.container(height=520):
@@ -1616,10 +1717,10 @@ with tab_chat:
                 """
                 <script>
                   const scrollChatToBottom = () => {
-                                        const endMarker = window.parent.document.getElementById('chat-end-marker');
-                                        if (!endMarker) return false;
-                                        endMarker.scrollIntoView({ behavior: 'auto', block: 'end' });
-                                        return true;
+                    const endMarker = window.parent.document.getElementById('chat-end-marker');
+                    if (!endMarker) return false;
+                    endMarker.scrollIntoView({ behavior: 'auto', block: 'end' });
+                    return true;
                   };
                   if (!scrollChatToBottom()) {
                     let tries = 0;
@@ -1636,38 +1737,37 @@ with tab_chat:
     else:
         st.info("Start by asking a question, for example: Explain the bar graph.")
 
-    # User input fixed at bottom of the tab area.
     chat_question = st.chat_input("Ask about dataset or charts...")
     if chat_question and chat_question.strip():
         st.session_state["chat_pending_question"] = chat_question.strip()
         st.session_state["force_chat_tab"] = True
         st.rerun()
 
-# Keep CHAT WITH AI active after submit by re-selecting tab client-side once.
 if st.session_state.get("force_chat_tab"):
-        components.html(
-                """
-                <script>
-                    const clickChatTab = () => {
-                        const tabs = window.parent.document.querySelectorAll('[data-baseweb="tab"]');
-                        for (const tab of tabs) {
-                            if ((tab.textContent || '').trim().toUpperCase() === 'CHAT WITH AI') {
-                                tab.click();
-                                return true;
-                            }
-                        }
-                        return false;
-                    };
-                    if (!clickChatTab()) {
-                        let tries = 0;
-                        const timer = setInterval(() => {
-                            tries += 1;
-                            if (clickChatTab() || tries > 20) clearInterval(timer);
-                        }, 120);
+    components.html(
+        """
+        <script>
+            const clickChatTab = () => {
+                const tabs = window.parent.document.querySelectorAll('[data-baseweb="tab"]');
+                for (const tab of tabs) {
+                    if ((tab.textContent || '').trim().toUpperCase() === 'CHAT WITH AI') {
+                        tab.click();
+                        return true;
                     }
-                </script>
-                """,
-                height=0,
-        )
-        st.session_state["force_chat_tab"] = False
-    
+                }
+                return false;
+            };
+            if (!clickChatTab()) {
+                let tries = 0;
+                const timer = setInterval(() => {
+                    tries += 1;
+                    if (clickChatTab() || tries > 20) clearInterval(timer);
+                }, 120);
+            }
+        </script>
+        """,
+        height=0,
+    )
+    st.session_state["force_chat_tab"] = False
+
+_inject_floating_chatbot(st.session_state.get("chat_messages", []))
