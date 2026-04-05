@@ -64,6 +64,10 @@ def login_page():
         background: transparent !important;
     }
 
+    [data-testid="stHeader"] { display: none !important; }
+    [data-testid="stSidebarNav"] { display: none !important; }
+    [data-testid="collapsedControl"] { display: none !important; }
+
     [data-testid="stAppViewContainer"] .main {
         display: flex;
         align-items: center;
@@ -285,6 +289,20 @@ def login_page():
 
     [data-testid="stButton"] { width: 100%; }
     [data-testid="stTextInput"] { width: 100%; }
+    [data-testid="InputInstructions"] { display: none !important; }
+    [data-testid="stForm"] [data-testid="stCaptionContainer"] { display: none !important; }
+
+    /* Keep only one password toggle icon by hiding native browser reveal buttons */
+    input[type="password"]::-ms-reveal,
+    input[type="password"]::-ms-clear {
+        display: none;
+    }
+    input[type="password"]::-webkit-credentials-auto-fill-button {
+        visibility: hidden;
+        pointer-events: none;
+        position: absolute;
+        right: 0;
+    }
     </style>
     """, unsafe_allow_html=True)
 
@@ -292,10 +310,6 @@ def login_page():
     col1, col2, col3 = st.columns([1, 1.2, 1])
 
     with col2:
-        st.markdown("""
-        <div class="auth-container">
-        """, unsafe_allow_html=True)
-
         # Header
         st.markdown("""
         <div class="auth-header">
@@ -309,24 +323,25 @@ def login_page():
         tab1, tab2 = st.tabs(["LOGIN", "REGISTER"])
 
         with tab1:
-            st.markdown('<div class="auth-form">', unsafe_allow_html=True)
-            
-            email = st.text_input(
-                "Email Address",
-                key="login_email",
-                placeholder="you@example.com",
-                help="Enter your registered email"
-            )
-            
-            password = st.text_input(
-                "Password",
-                type="password",
-                key="login_password",
-                placeholder="••••••••",
-                help="Enter your password"
-            )
+            with st.form("login_form", clear_on_submit=False):
+                email = st.text_input(
+                    "Email Address",
+                    key="login_email",
+                    placeholder="you@example.com",
+                    help="Enter your registered email"
+                )
 
-            if st.button("Sign In", use_container_width=True, type="primary"):
+                password = st.text_input(
+                    "Password",
+                    type="password",
+                    key="login_password",
+                    placeholder="••••••••",
+                    help="Enter your password"
+                )
+
+                sign_in_clicked = st.form_submit_button("Sign In", use_container_width=True, type="primary")
+
+            if sign_in_clicked:
                 if not email or not password:
                     st.markdown(
                         '<div class="error-message">Please enter both email and password</div>',
@@ -339,12 +354,11 @@ def login_page():
                         st.session_state.user_id = result["user"]["id"]
                         st.session_state.user_email = result["user"]["email"]
                         st.session_state.login_time = datetime.now()
-                        
+
                         st.markdown(
                             '<div class="success-message">✓ Login successful! Redirecting...</div>',
                             unsafe_allow_html=True
                         )
-                        st.balloons()
                         st.rerun()
                     else:
                         st.markdown(
@@ -352,33 +366,32 @@ def login_page():
                             unsafe_allow_html=True
                         )
 
-            st.markdown('</div>', unsafe_allow_html=True)
-
         with tab2:
-            st.markdown('<div class="auth-form">', unsafe_allow_html=True)
+            with st.form("register_form", clear_on_submit=False):
+                reg_email = st.text_input(
+                    "Email Address",
+                    key="register_email",
+                    placeholder="you@example.com",
+                    help="Choose a unique email"
+                )
 
-            reg_email = st.text_input(
-                "Email Address",
-                key="register_email",
-                placeholder="you@example.com",
-                help="Choose a unique email"
-            )
+                reg_password = st.text_input(
+                    "Password",
+                    type="password",
+                    key="register_password",
+                    placeholder="••••••••",
+                    help="At least 6 characters"
+                )
 
-            reg_password = st.text_input(
-                "Password",
-                type="password",
-                key="register_password",
-                placeholder="••••••••",
-                help="At least 6 characters"
-            )
+                reg_password_confirm = st.text_input(
+                    "Confirm Password",
+                    type="password",
+                    key="register_password_confirm",
+                    placeholder="••••••••",
+                    help="Re-enter your password"
+                )
 
-            reg_password_confirm = st.text_input(
-                "Confirm Password",
-                type="password",
-                key="register_password_confirm",
-                placeholder="••••••••",
-                help="Re-enter your password"
-            )
+                create_account_clicked = st.form_submit_button("Create Account", use_container_width=True, type="primary")
 
             # Password strength indicator
             if reg_password:
@@ -391,7 +404,7 @@ def login_page():
                     unsafe_allow_html=True
                 )
 
-            if st.button("Create Account", use_container_width=True, type="primary"):
+            if create_account_clicked:
                 if not reg_email or not reg_password or not reg_password_confirm:
                     st.markdown(
                         '<div class="error-message">Please fill in all fields</div>',
@@ -420,12 +433,6 @@ def login_page():
                             f'<div class="error-message">✗ {result["message"]}</div>',
                             unsafe_allow_html=True
                         )
-
-            st.markdown('</div>', unsafe_allow_html=True)
-
-        st.markdown("""
-        </div>
-        """, unsafe_allow_html=True)
 
 
 def assess_password_strength(password: str) -> dict:

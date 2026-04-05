@@ -1,5 +1,6 @@
 [client]
 showErrorDetails = true
+showSidebarNavigation = false
 
 [logger]
 level = "info"
