@@ -1,211 +1,174 @@
-import hashlib
-import secrets
+"""
+auth.py
+───────
+Authentication helpers:
+  • bcrypt password hashing / verification  (replaces the old SHA-256 approach)
+  • JWT access-token creation and verification via python-jose
+  • Async CRUD functions for user registration and login
+"""
+
 import logging
-from datetime import datetime
-from db import get_db_connection, close_db_connection
-from models.schemas import UserLogin, UserRegister, UserResponse, AuthResponse
-import json
+import os
+from datetime import datetime, timedelta, timezone
+from typing import Optional
+
+from jose import JWTError, jwt
+from passlib.context import CryptContext
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from .db import User
 
 logger = logging.getLogger(__name__)
 
+# ── Config ────────────────────────────────────────────────────────────────────
 
-def hash_password(password: str) -> str:
-    """Hash a password using SHA256 with a salt."""
-    salt = secrets.token_hex(16)
-    hash_obj = hashlib.sha256((salt + password).encode())
-    hashed = hash_obj.hexdigest()
-    return f"{salt}${hashed}"
+JWT_SECRET = os.getenv("JWT_SECRET", "change_this_secret_in_production")
+JWT_ALGORITHM = os.getenv("JWT_ALGORITHM", "HS256")
+JWT_EXPIRE_MINUTES = int(os.getenv("JWT_EXPIRE_MINUTES", "1440"))  # 24 h
+
+# bcrypt context — auto_deprecated keeps old hashes working while upgrading
+pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
 
-def verify_password(stored_hash: str, provided_password: str) -> bool:
-    """Verify a password against its hash."""
+# ── Password helpers ──────────────────────────────────────────────────────────
+
+def hash_password(plain: str) -> str:
+    """Return a bcrypt hash of *plain*."""
+    return pwd_context.hash(plain)
+
+
+def verify_password(plain: str, hashed: str) -> bool:
+    """Return True if *plain* matches the stored bcrypt *hashed* value."""
     try:
-        salt, hashed = stored_hash.split("$")
-        hash_obj = hashlib.sha256((salt + provided_password).encode())
-        return hash_obj.hexdigest() == hashed
-    except Exception as e:
-        logger.error(f"Password verification error: {e}")
+        return pwd_context.verify(plain, hashed)
+    except Exception as exc:
+        logger.error("Password verification error: %s", exc)
         return False
 
 
-def register_user(email: str, password: str) -> dict:
+# ── JWT helpers ───────────────────────────────────────────────────────────────
+
+def create_access_token(user_id: int, email: str) -> str:
     """
-    Register a new user in the database.
-    
-    Args:
-        email: User email (must be unique)
-        password: User password (plain text, will be hashed)
-    
-    Returns:
-        dict with success status and message
+    Issue a signed JWT containing the user's ID and email.
+
+    Returns
+    -------
+    str — compact serialised JWT string
     """
-    try:
-        if not email or not password:
-            return {
-                "success": False,
-                "message": "Email and password are required"
-            }
-
-        if len(password) < 6:
-            return {
-                "success": False,
-                "message": "Password must be at least 6 characters long"
-            }
-
-        conn = get_db_connection()
-        cursor = conn.cursor()
-
-        # Check if user already exists
-        cursor.execute("SELECT id FROM users WHERE email = ?", (email,))
-        if cursor.fetchone():
-            close_db_connection(conn)
-            return {
-                "success": False,
-                "message": "Email already registered. Please log in instead."
-            }
-
-        # Hash password and insert user
-        hashed_password = hash_password(password)
-        cursor.execute(
-            "INSERT INTO users (email, password) VALUES (?, ?)",
-            (email, hashed_password)
-        )
-        conn.commit()
-
-        user_id = cursor.lastrowid
-        close_db_connection(conn)
-
-        logger.info(f"User registered successfully: {email}")
-        return {
-            "success": True,
-            "message": "Registration successful! Please log in.",
-            "user_id": user_id,
-            "email": email
-        }
-
-    except Exception as e:
-        logger.error(f"Registration error: {e}")
-        return {
-            "success": False,
-            "message": f"Registration failed: {str(e)}"
-        }
+    expire = datetime.now(tz=timezone.utc) + timedelta(minutes=JWT_EXPIRE_MINUTES)
+    payload = {
+        "sub": str(user_id),
+        "email": email,
+        "exp": expire,
+        "iat": datetime.now(tz=timezone.utc),
+    }
+    return jwt.encode(payload, JWT_SECRET, algorithm=JWT_ALGORITHM)
 
 
-def login_user(email: str, password: str) -> dict:
+def verify_access_token(token: str) -> Optional[dict]:
     """
-    Authenticate a user and return user details if credentials match.
-    
-    Args:
-        email: User email
-        password: User password (plain text)
-    
-    Returns:
-        dict with success status, message, and user details if successful
+    Decode and validate a JWT string.
+
+    Returns
+    -------
+    dict with keys ``sub`` (user_id str) and ``email`` if valid,
+    or ``None`` if expired / malformed.
     """
     try:
-        if not email or not password:
-            return {
-                "success": False,
-                "message": "Email and password are required"
-            }
-
-        conn = get_db_connection()
-        cursor = conn.cursor()
-
-        # Fetch user
-        cursor.execute(
-            "SELECT id, email, password, created_at, updated_at FROM users WHERE email = ?",
-            (email,)
-        )
-        user = cursor.fetchone()
-        close_db_connection(conn)
-
-        if not user:
-            logger.warning(f"Login attempt for non-existent user: {email}")
-            return {
-                "success": False,
-                "message": "Invalid email or password"
-            }
-
-        # Verify password
-        if not verify_password(user["password"], password):
-            logger.warning(f"Failed login attempt for user: {email}")
-            return {
-                "success": False,
-                "message": "Invalid email or password"
-            }
-
-        logger.info(f"User logged in successfully: {email}")
-        return {
-            "success": True,
-            "message": "Login successful!",
-            "user": {
-                "id": user["id"],
-                "email": user["email"],
-                "created_at": user["created_at"],
-                "updated_at": user["updated_at"]
-            }
-        }
-
-    except Exception as e:
-        logger.error(f"Login error: {e}")
-        return {
-            "success": False,
-            "message": f"Login failed: {str(e)}"
-        }
-
-
-def get_user_by_email(email: str) -> dict:
-    """Get user details by email."""
-    try:
-        conn = get_db_connection()
-        cursor = conn.cursor()
-
-        cursor.execute(
-            "SELECT id, email, created_at, updated_at FROM users WHERE email = ?",
-            (email,)
-        )
-        user = cursor.fetchone()
-        close_db_connection(conn)
-
-        if not user:
+        payload = jwt.decode(token, JWT_SECRET, algorithms=[JWT_ALGORITHM])
+        user_id: str = payload.get("sub")
+        email: str = payload.get("email")
+        if user_id is None or email is None:
             return None
-
-        return {
-            "id": user["id"],
-            "email": user["email"],
-            "created_at": user["created_at"],
-            "updated_at": user["updated_at"]
-        }
-
-    except Exception as e:
-        logger.error(f"Get user error: {e}")
+        return {"sub": user_id, "email": email}
+    except JWTError as exc:
+        logger.debug("JWT verification failed: %s", exc)
         return None
 
 
-def get_user_by_id(user_id: int) -> dict:
-    """Get user details by user ID."""
-    try:
-        conn = get_db_connection()
-        cursor = conn.cursor()
+# ── User CRUD ─────────────────────────────────────────────────────────────────
 
-        cursor.execute(
-            "SELECT id, email, created_at, updated_at FROM users WHERE id = ?",
-            (user_id,)
-        )
-        user = cursor.fetchone()
-        close_db_connection(conn)
+async def register_user(db: AsyncSession, email: str, password: str) -> dict:
+    """
+    Create a new user.
 
-        if not user:
-            return None
+    Parameters
+    ----------
+    db       : active AsyncSession from FastAPI dependency injection
+    email    : must be unique
+    password : plain-text; hashed with bcrypt before storage
 
-        return {
-            "id": user["id"],
-            "email": user["email"],
-            "created_at": user["created_at"],
-            "updated_at": user["updated_at"]
-        }
+    Returns
+    -------
+    dict with ``success``, ``message``, and on success ``user_id`` / ``email``
+    """
+    if not email or not password:
+        return {"success": False, "message": "Email and password are required"}
 
-    except Exception as e:
-        logger.error(f"Get user by ID error: {e}")
-        return None
+    if len(password) < 6:
+        return {"success": False, "message": "Password must be at least 6 characters"}
+
+    # Duplicate check
+    result = await db.execute(select(User).where(User.email == email))
+    if result.scalar_one_or_none() is not None:
+        return {"success": False, "message": "Email already registered. Please log in instead."}
+
+    user = User(email=email, password_hash=hash_password(password))
+    db.add(user)
+    await db.flush()   # populate user.id without committing
+    await db.refresh(user)
+
+    logger.info("User registered: %s (id=%d)", email, user.id)
+    return {
+        "success": True,
+        "message": "Registration successful! Please log in.",
+        "user_id": user.id,
+        "email": user.email,
+    }
+
+
+async def login_user(db: AsyncSession, email: str, password: str) -> dict:
+    """
+    Authenticate a user and return a signed JWT on success.
+
+    Returns
+    -------
+    dict with ``success``, ``message``, ``access_token`` (str), and ``user`` (dict)
+    """
+    if not email or not password:
+        return {"success": False, "message": "Email and password are required"}
+
+    result = await db.execute(select(User).where(User.email == email))
+    user: Optional[User] = result.scalar_one_or_none()
+
+    if user is None or not verify_password(password, user.password_hash):
+        logger.warning("Failed login attempt for: %s", email)
+        return {"success": False, "message": "Invalid email or password"}
+
+    token = create_access_token(user.id, user.email)
+    logger.info("User logged in: %s (id=%d)", email, user.id)
+    return {
+        "success": True,
+        "message": "Login successful!",
+        "access_token": token,
+        "token_type": "bearer",
+        "user": {
+            "id": user.id,
+            "email": user.email,
+            "created_at": user.created_at.isoformat(),
+            "updated_at": user.updated_at.isoformat(),
+        },
+    }
+
+
+async def get_user_by_id(db: AsyncSession, user_id: int) -> Optional[User]:
+    """Fetch a User row by primary key."""
+    return await db.get(User, user_id)
+
+
+async def get_user_by_email(db: AsyncSession, email: str) -> Optional[User]:
+    """Fetch a User row by email address."""
+    result = await db.execute(select(User).where(User.email == email))
+    return result.scalar_one_or_none()

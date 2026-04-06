@@ -1,94 +1,202 @@
-import sqlite3
-import os
-from datetime import datetime
-from pathlib import Path
+"""
+db.py
+─────
+Database engine and session factory using SQLAlchemy async + PostgreSQL.
+Replaces the previous sqlite3 implementation.
+
+Usage
+-----
+  from db import get_session, init_db
+
+  async with get_session() as session:
+      result = await session.execute(select(User).where(User.email == email))
+"""
+
 import logging
+import os
+from contextlib import asynccontextmanager
+from datetime import datetime
+
+from sqlalchemy import (
+    BigInteger,
+    Boolean,
+    Column,
+    DateTime,
+    Float,
+    ForeignKey,
+    Integer,
+    String,
+    Text,
+    UniqueConstraint,
+    func,
+)
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
+from sqlalchemy.orm import DeclarativeBase, relationship
 
 logger = logging.getLogger(__name__)
 
-# Database file location
-DB_DIR = Path("data")
-DB_DIR.mkdir(exist_ok=True)
-DB_FILE = DB_DIR / "analysis.db"
+# ── Engine ────────────────────────────────────────────────────────────────────
+
+DATABASE_URL = os.getenv(
+    "DATABASE_URL",
+    "postgresql+asyncpg://datapulse:datapulse_secret@localhost:5432/datapulse",
+)
+
+engine = create_async_engine(
+    DATABASE_URL,
+    echo=os.getenv("APP_ENV", "production") == "development",
+    pool_pre_ping=True,
+    pool_size=10,
+    max_overflow=20,
+)
+
+AsyncSessionLocal = async_sessionmaker(
+    bind=engine,
+    class_=AsyncSession,
+    expire_on_commit=False,
+    autoflush=False,
+    autocommit=False,
+)
 
 
-def get_db_connection():
-    """Get a connection to the SQLite database."""
-    conn = sqlite3.connect(str(DB_FILE))
-    conn.row_factory = sqlite3.Row
-    return conn
+# ── Base ──────────────────────────────────────────────────────────────────────
+
+class Base(DeclarativeBase):
+    pass
 
 
-def init_db():
-    """Initialize the database with required tables."""
-    conn = get_db_connection()
-    cursor = conn.cursor()
+# ── Models ────────────────────────────────────────────────────────────────────
 
-    # Create users table
-    cursor.execute("""
-        CREATE TABLE IF NOT EXISTS users (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            email TEXT UNIQUE NOT NULL,
-            password TEXT NOT NULL,
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-        )
-    """)
+class User(Base):
+    __tablename__ = "users"
 
-    # Create analysis history table
-    cursor.execute("""
-        CREATE TABLE IF NOT EXISTS analysis_history (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            user_id INTEGER NOT NULL,
-            file_name TEXT NOT NULL,
-            file_hash TEXT UNIQUE NOT NULL,
-            raw_data TEXT,
-            clean_data TEXT,
-            stats_summary TEXT,
-            charts TEXT,
-            insights TEXT,
-            errors TEXT,
-            completed_agents TEXT,
-            analysis_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
-        )
-    """)
+    id = Column(BigInteger, primary_key=True, autoincrement=True)
+    email = Column(String(255), unique=True, nullable=False, index=True)
+    password_hash = Column(String(255), nullable=False)
+    is_active = Column(Boolean, default=True, nullable=False)
+    created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    updated_at = Column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        onupdate=func.now(),
+        nullable=False,
+    )
 
-    # Create analysis metadata table for faster lookups
-    cursor.execute("""
-        CREATE TABLE IF NOT EXISTS analysis_metadata (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            analysis_id INTEGER NOT NULL,
-            user_id INTEGER NOT NULL,
-            file_name TEXT NOT NULL,
-            file_size INTEGER,
-            row_count INTEGER,
-            column_count INTEGER,
-            completeness REAL,
-            analyzed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            FOREIGN KEY (analysis_id) REFERENCES analysis_history(id) ON DELETE CASCADE,
-            FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
-        )
-    """)
-
-    # Create indices for faster queries
-    cursor.execute("CREATE INDEX IF NOT EXISTS idx_users_email ON users(email)")
-    cursor.execute("CREATE INDEX IF NOT EXISTS idx_analysis_user_id ON analysis_history(user_id)")
-    cursor.execute("CREATE INDEX IF NOT EXISTS idx_analysis_file_hash ON analysis_history(file_hash)")
-    cursor.execute("CREATE INDEX IF NOT EXISTS idx_metadata_user_id ON analysis_metadata(user_id)")
-    cursor.execute("CREATE INDEX IF NOT EXISTS idx_metadata_file_name ON analysis_metadata(file_name)")
-
-    conn.commit()
-    conn.close()
-    logger.info("Database initialized successfully")
+    analyses = relationship(
+        "AnalysisHistory",
+        back_populates="user",
+        cascade="all, delete-orphan",
+        lazy="select",
+    )
 
 
-def close_db_connection(conn):
-    """Close database connection."""
-    if conn:
-        conn.close()
+class AnalysisHistory(Base):
+    __tablename__ = "analysis_history"
+    __table_args__ = (
+        UniqueConstraint("user_id", "file_hash", name="uq_user_file_hash"),
+    )
+
+    id = Column(BigInteger, primary_key=True, autoincrement=True)
+    user_id = Column(BigInteger, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    file_name = Column(String(512), nullable=False)
+    file_hash = Column(String(64), nullable=False, index=True)
+
+    # JSON blobs — stored as Text; serialised/deserialised in analysis_history.py
+    raw_data = Column(Text, nullable=True)
+    clean_data = Column(Text, nullable=True)
+    stats_summary = Column(Text, nullable=True)
+    charts = Column(Text, nullable=True)
+    insights = Column(Text, nullable=True)
+    errors = Column(Text, nullable=True)
+    completed_agents = Column(Text, nullable=True)
+
+    analysis_date = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+
+    user = relationship("User", back_populates="analyses")
+    metadata_row = relationship(
+        "AnalysisMetadata",
+        back_populates="analysis",
+        cascade="all, delete-orphan",
+        uselist=False,
+        lazy="select",
+    )
 
 
-if __name__ == "__main__":
-    init_db()
-    print(f"Database initialized at {DB_FILE}")
+class AnalysisMetadata(Base):
+    __tablename__ = "analysis_metadata"
+
+    id = Column(BigInteger, primary_key=True, autoincrement=True)
+    analysis_id = Column(
+        BigInteger,
+        ForeignKey("analysis_history.id", ondelete="CASCADE"),
+        nullable=False,
+        unique=True,
+        index=True,
+    )
+    user_id = Column(BigInteger, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    file_name = Column(String(512), nullable=False)
+    file_size = Column(BigInteger, nullable=True)
+    row_count = Column(Integer, nullable=True)
+    column_count = Column(Integer, nullable=True)
+    completeness = Column(Float, nullable=True)
+    analyzed_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+
+    analysis = relationship("AnalysisHistory", back_populates="metadata_row")
+
+
+# ── Session helper ────────────────────────────────────────────────────────────
+
+@asynccontextmanager
+async def get_session():
+    """
+    Async context manager that yields a SQLAlchemy AsyncSession.
+
+    Example
+    -------
+    async with get_session() as session:
+        user = await session.get(User, user_id)
+    """
+    async with AsyncSessionLocal() as session:
+        try:
+            yield session
+            await session.commit()
+        except Exception:
+            await session.rollback()
+            raise
+
+
+# ── FastAPI dependency ────────────────────────────────────────────────────────
+
+async def get_db() -> AsyncSession:
+    """
+    FastAPI dependency that yields a database session per request.
+
+    Usage in a route
+    ----------------
+    @router.get("/")
+    async def my_route(db: AsyncSession = Depends(get_db)):
+        ...
+    """
+    async with AsyncSessionLocal() as session:
+        try:
+            yield session
+            await session.commit()
+        except Exception:
+            await session.rollback()
+            raise
+
+
+# ── Init ─────────────────────────────────────────────────────────────────────
+
+async def init_db() -> None:
+    """Create all tables if they do not exist. Called once at application startup."""
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+    logger.info("Database tables initialised (PostgreSQL)")
+
+
+async def drop_all() -> None:
+    """Drop all tables — for use in tests only."""
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.drop_all)
+    logger.warning("All database tables dropped")

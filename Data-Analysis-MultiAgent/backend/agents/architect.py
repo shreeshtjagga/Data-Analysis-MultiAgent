@@ -1,8 +1,8 @@
 import logging
 import pandas as pd
 
-from core.state import AnalysisState
-from core.utils import clean_dataframe, detect_column_types
+from ..core.state import AnalysisState
+from ..core.utils import clean_dataframe, detect_column_types
 
 logger = logging.getLogger(__name__)
 

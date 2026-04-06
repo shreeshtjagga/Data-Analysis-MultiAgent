@@ -1,0 +1,95 @@
+import { useEffect, useState } from "react";
+import { Navigate, Route, Routes, useNavigate } from "react-router-dom";
+import { getToken, setToken, clearToken, apiMe } from "./api.js";
+import Login from "./Login.jsx";
+import DataPulse from "./datapulse_dashboard.jsx";
+
+/**
+ * App.jsx
+ * ───────
+ * Handles top-level routing:
+ *   /login      → <Login />      (public)
+ *   /           → <DataPulse />  (protected — redirects to /login if no token)
+ *
+ * Auth state is stored in React state (NOT localStorage / sessionStorage).
+ * The token lives in the api.js module-level variable (_token) and is lost
+ * on a hard refresh — the user must re-login, which is intentional.
+ */
+export default function App() {
+  const [authState, setAuthState] = useState({
+    checked: false,   // true once we have attempted a token check
+    user: null,       // null = not logged in
+  });
+  const navigate = useNavigate();
+
+  // On mount: if a token is already held in memory (e.g. hot-reload),
+  // verify it is still valid by hitting /auth/me.
+  useEffect(() => {
+    const token = getToken();
+    if (!token) {
+      setAuthState({ checked: true, user: null });
+      return;
+    }
+    apiMe()
+      .then((user) => setAuthState({ checked: true, user }))
+      .catch(() => {
+        clearToken();
+        setAuthState({ checked: true, user: null });
+      });
+  }, []);
+
+  const handleLogin = (user, token) => {
+    setToken(token);
+    setAuthState({ checked: true, user });
+    navigate("/");
+  };
+
+  const handleLogout = () => {
+    clearToken();
+    setAuthState({ checked: true, user: null });
+    navigate("/login");
+  };
+
+  // Wait for the initial auth check before rendering anything
+  if (!authState.checked) {
+    return (
+      <div
+        style={{
+          minHeight: "100vh",
+          background: "#060912",
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "center",
+          color: "#475569",
+          fontFamily: "'Outfit', sans-serif",
+          fontSize: "0.88rem",
+        }}
+      >
+        Loading…
+      </div>
+    );
+  }
+
+  return (
+    <Routes>
+      <Route
+        path="/login"
+        element={
+          authState.user
+            ? <Navigate to="/" replace />
+            : <Login onLogin={handleLogin} />
+        }
+      />
+      <Route
+        path="/"
+        element={
+          authState.user
+            ? <DataPulse user={authState.user} onLogout={handleLogout} />
+            : <Navigate to="/login" replace />
+        }
+      />
+      {/* Catch-all */}
+      <Route path="*" element={<Navigate to="/" replace />} />
+    </Routes>
+  );
+}

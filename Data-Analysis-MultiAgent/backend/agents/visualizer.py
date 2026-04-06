@@ -17,7 +17,7 @@ import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
 
-from core.state import AnalysisState
+from ..core.state import AnalysisState
 
 logger = logging.getLogger(__name__)
 
