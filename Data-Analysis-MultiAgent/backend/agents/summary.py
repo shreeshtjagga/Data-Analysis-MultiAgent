@@ -18,10 +18,10 @@ def summary_agent(state: AnalysisState) -> AnalysisState:
         if state.insights is None:
             state.insights = {}
         logger.info("Summary agent complete. Executive summary is disabled.")
+        state.completed_agents.append("summary")
 
     except Exception as e:
         logger.error("Summary error: %s", e)
         state.errors.append(f"Summary error: {e}")
 
-    state.completed_agents.append("summary")
     return state

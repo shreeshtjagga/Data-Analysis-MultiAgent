@@ -34,11 +34,11 @@ def architect_agent(state: AnalysisState) -> AnalysisState:
         state.column_types = detect_column_types(clean_df)
 
         logger.info("Column types detected: %s", state.column_types)
+        state.completed_agents.append("architect")
 
     except Exception as e:
         error_msg = f"Architect error: {e}"
         logger.error(error_msg)
         state.errors.append(error_msg)
 
-    state.completed_agents.append("architect")
     return state  

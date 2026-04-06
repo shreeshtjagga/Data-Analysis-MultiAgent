@@ -19,6 +19,7 @@ Routes
 import io
 import logging
 import os
+import json
 from contextlib import asynccontextmanager
 from typing import Annotated, Optional
 
@@ -58,6 +59,11 @@ from .models.schemas import (
 
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(name)s] %(levelname)s %(message)s")
+
+MAX_UPLOAD_BYTES = int(os.getenv("MAX_UPLOAD_BYTES", str(25 * 1024 * 1024)))
+MAX_QUESTION_CHARS = int(os.getenv("CHAT_MAX_QUESTION_CHARS", "1200"))
+MAX_CONTEXT_BYTES = int(os.getenv("CHAT_MAX_CONTEXT_BYTES", str(128 * 1024)))
+READ_CHUNK_BYTES = 1024 * 1024
 
 
 # ── Lifespan ──────────────────────────────────────────────────────────────────
@@ -201,14 +207,29 @@ async def analyze(
     On repeated uploads of the same file (same SHA-256 hash),
     returns the cached result immediately without re-running the pipeline.
     """
-    if not file.filename.endswith(".csv"):
+    filename = file.filename or ""
+    if not filename.lower().endswith(".csv"):
         raise HTTPException(status_code=400, detail="Only CSV files are accepted")
 
-    file_bytes = await file.read()
+    total = 0
+    chunks: list[bytes] = []
+    while True:
+        chunk = await file.read(READ_CHUNK_BYTES)
+        if not chunk:
+            break
+        total += len(chunk)
+        if total > MAX_UPLOAD_BYTES:
+            raise HTTPException(
+                status_code=413,
+                detail=f"File too large. Max allowed size is {MAX_UPLOAD_BYTES // (1024 * 1024)} MB",
+            )
+        chunks.append(chunk)
+    file_bytes = b"".join(chunks)
+
     if len(file_bytes) == 0:
         raise HTTPException(status_code=400, detail="Uploaded file is empty")
 
-    file_hash = compute_file_hash(file_bytes)
+    file_hash = compute_file_hash(file_bytes, filename)
 
     # Cache hit — return immediately
     cached = await get_analysis_by_hash(db, user_id, file_hash)
@@ -231,7 +252,7 @@ async def analyze(
     save_result = await save_analysis(
         db=db,
         user_id=user_id,
-        file_name=file.filename,
+        file_name=filename,
         file_hash=file_hash,
         file_size=len(file_bytes),
         analysis_result=result,
@@ -294,6 +315,18 @@ async def chat_with_analysis(
 
     if not question:
         raise HTTPException(status_code=400, detail="Question is required")
+    if len(question) > MAX_QUESTION_CHARS:
+        raise HTTPException(
+            status_code=413,
+            detail=f"Question too long. Max length is {MAX_QUESTION_CHARS} characters",
+        )
+
+    context_blob = json.dumps(context, default=str)
+    if len(context_blob.encode("utf-8")) > MAX_CONTEXT_BYTES:
+        raise HTTPException(
+            status_code=413,
+            detail=f"Context too large. Max size is {MAX_CONTEXT_BYTES // 1024} KB",
+        )
 
     stats = context.get("stats") or {}
     insights = context.get("insights") or {}
