@@ -1,12 +1,32 @@
+"""
+analysis_history.py
+────────────────────
+Async CRUD for analysis history.
+
+Changes vs the original sqlite3 version
+────────────────────────────────────────
+• All DB access uses SQLAlchemy AsyncSession (PostgreSQL).
+• get_analysis_by_hash()  checks Redis first; only hits Postgres on a miss.
+• save_analysis()         writes to Postgres *and* warms the Redis cache.
+• delete_analysis()       removes both the DB row and the Redis entry.
+• Cache policy (max 5 per user, 3-day TTL) is enforced inside save_analysis().
+"""
+
 import hashlib
 import json
 import logging
-from datetime import datetime, date
-from typing import Optional, List, Dict, Any
-from db import get_db_connection, close_db_connection
+from datetime import datetime, timezone
+from typing import Optional
+
+import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
-import numpy as np
+import plotly.io as pio
+from sqlalchemy import delete, select
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from .core import cache as redis_cache
+from .db import AnalysisHistory, AnalysisMetadata
 
 logger = logging.getLogger(__name__)
 
@@ -14,67 +34,9 @@ MAX_CACHE_FILES_PER_USER = 5
 CACHE_TTL_DAYS = 3
 
 
-def _delete_analysis_ids(cursor, analysis_ids: list[int]) -> None:
-    """Delete analysis rows and metadata rows for the provided analysis IDs."""
-    if not analysis_ids:
-        return
-
-    placeholders = ",".join(["?"] * len(analysis_ids))
-    cursor.execute(
-        f"DELETE FROM analysis_metadata WHERE analysis_id IN ({placeholders})",
-        analysis_ids,
-    )
-    cursor.execute(
-        f"DELETE FROM analysis_history WHERE id IN ({placeholders})",
-        analysis_ids,
-    )
-
-
-def _enforce_cache_policy(user_id: int, conn, cursor) -> None:
-    """Keep only recent cache entries (<= 3 days) and latest 5 files per user."""
-    # 1) Remove expired entries older than CACHE_TTL_DAYS
-    cursor.execute(
-        """SELECT id FROM analysis_history
-           WHERE user_id = ?
-             AND analysis_date < datetime('now', ?)""",
-        (user_id, f"-{CACHE_TTL_DAYS} days"),
-    )
-    expired_ids = [row["id"] for row in cursor.fetchall()]
-    _delete_analysis_ids(cursor, expired_ids)
-
-    # 2) Keep only MAX_CACHE_FILES_PER_USER newest analyses
-    cursor.execute(
-        """SELECT id FROM analysis_history
-           WHERE user_id = ?
-           ORDER BY analysis_date DESC, id DESC""",
-        (user_id,),
-    )
-    all_ids = [row["id"] for row in cursor.fetchall()]
-    overflow_ids = all_ids[MAX_CACHE_FILES_PER_USER:]
-    _delete_analysis_ids(cursor, overflow_ids)
-
-    conn.commit()
-
-
-def _serialize_charts(charts: dict) -> dict:
-    """Convert plotly chart objects into JSON-serializable dictionaries."""
-    if not charts:
-        return {}
-
-    serialized = {}
-    for key, fig in charts.items():
-        try:
-            if hasattr(fig, "to_plotly_json"):
-                serialized[key] = fig.to_plotly_json()
-            elif isinstance(fig, dict):
-                serialized[key] = fig
-        except Exception as exc:
-            logger.warning("Failed to serialize chart '%s': %s", key, exc)
-    return serialized
-
+# ── Serialisation helpers ─────────────────────────────────────────────────────
 
 def _json_default(obj):
-    """Convert common non-JSON-native objects to serializable values."""
     if isinstance(obj, np.ndarray):
         return obj.tolist()
     if isinstance(obj, (np.integer,)):
@@ -83,354 +45,302 @@ def _json_default(obj):
         return float(obj)
     if isinstance(obj, (np.bool_,)):
         return bool(obj)
-    if isinstance(obj, (pd.Timestamp, datetime, date)):
+    if isinstance(obj, (pd.Timestamp, datetime)):
         return obj.isoformat()
     if isinstance(obj, set):
         return list(obj)
     return str(obj)
 
 
-def _to_json_text(value) -> Optional[str]:
-    """Serialize value to JSON text using safe defaults for numpy/pandas values."""
+def _to_json(value) -> Optional[str]:
     if value is None:
         return None
     return json.dumps(value, default=_json_default)
 
 
-def _deserialize_charts(charts: dict) -> dict:
-    """Convert stored chart dictionaries back into plotly Figure objects."""
+def _serialize_charts(charts: dict) -> dict:
     if not charts:
         return {}
+    out = {}
+    for key, fig in charts.items():
+        try:
+            if hasattr(fig, "to_plotly_json"):
+                # Use Plotly's JSON encoder and parse back to ensure only
+                # plain JSON-native types are returned/stored.
+                out[key] = json.loads(pio.to_json(fig, pretty=False, remove_uids=True))
+            elif isinstance(fig, dict):
+                out[key] = fig
+        except Exception as exc:
+            logger.warning("Failed to serialise chart '%s': %s", key, exc)
+    return out
 
-    restored = {}
+
+def _deserialize_charts(charts: dict) -> dict:
+    if not charts:
+        return {}
+    out = {}
     for key, fig_data in charts.items():
         try:
-            restored[key] = go.Figure(fig_data)
+            out[key] = go.Figure(fig_data)
         except Exception as exc:
             logger.warning("Failed to restore chart '%s': %s", key, exc)
-    return restored
+    return out
 
 
 def compute_file_hash(file_bytes: bytes) -> str:
-    """Compute SHA256 hash of file content."""
-    hash_obj = hashlib.sha256(file_bytes)
-    return hash_obj.hexdigest()
+    return hashlib.sha256(file_bytes).hexdigest()
 
 
-def save_analysis(
+# ── Cache-policy enforcement ──────────────────────────────────────────────────
+
+async def _enforce_cache_policy(user_id: int, db: AsyncSession) -> None:
+    """Keep only the 5 most-recent analyses per user, delete the rest."""
+    result = await db.execute(
+        select(AnalysisHistory.id)
+        .where(AnalysisHistory.user_id == user_id)
+        .order_by(AnalysisHistory.analysis_date.desc())
+    )
+    all_ids = [row[0] for row in result.fetchall()]
+    overflow_ids = all_ids[MAX_CACHE_FILES_PER_USER:]
+
+    if overflow_ids:
+        await db.execute(
+            delete(AnalysisMetadata).where(AnalysisMetadata.analysis_id.in_(overflow_ids))
+        )
+        await db.execute(
+            delete(AnalysisHistory).where(AnalysisHistory.id.in_(overflow_ids))
+        )
+        logger.info("Evicted %d overflow analyses for user %d", len(overflow_ids), user_id)
+
+
+# ── Save ─────────────────────────────────────────────────────────────────────
+
+async def save_analysis(
+    db: AsyncSession,
     user_id: int,
     file_name: str,
     file_hash: str,
     file_size: int,
     analysis_result: dict,
-    file_bytes: bytes
 ) -> dict:
     """
-    Save an analysis result to the database.
-    
-    Args:
-        user_id: ID of the user
-        file_name: Name of the uploaded file
-        file_hash: Hash of file content
-        file_size: Size of the file in bytes
-        analysis_result: Complete analysis result dictionary
-        file_bytes: Raw file bytes for storage
-    
-    Returns:
-        dict with success status and message
+    Upsert an analysis result into PostgreSQL and warm the Redis cache.
+
+    Returns
+    -------
+    dict with ``success``, ``message``, ``analysis_id``
     """
     try:
-        conn = get_db_connection()
-        cursor = conn.cursor()
-
-        _enforce_cache_policy(user_id, conn, cursor)
-
-        # Extract stats
-        stats = analysis_result.get("stats_summary", {})
+        stats = analysis_result.get("stats_summary") or {}
         row_count = stats.get("row_count")
         column_count = stats.get("column_count")
-        completeness = stats.get("data_quality", {}).get("completeness")
+        completeness = (stats.get("data_quality") or {}).get("completeness")
 
-        # Serialize data as JSON
+        # Serialise DataFrames to plain dicts
         raw_data = analysis_result.get("raw_df")
         clean_data = analysis_result.get("clean_df")
-        
-        # Convert DataFrame to JSON-serializable dict if needed
         if isinstance(raw_data, pd.DataFrame):
             raw_data = raw_data.head(100).to_dict(orient="records")
         if isinstance(clean_data, pd.DataFrame):
             clean_data = clean_data.head(100).to_dict(orient="records")
 
-        raw_data_json = _to_json_text(raw_data) if raw_data else None
-        clean_data_json = _to_json_text(clean_data) if clean_data else None
-        stats_json = _to_json_text(stats) if stats else None
-        charts_json = _to_json_text(_serialize_charts(analysis_result.get("charts") or {}))
-        insights_json = _to_json_text(analysis_result.get("insights", {})) if analysis_result.get("insights") else None
-        errors_json = _to_json_text(analysis_result.get("errors", [])) if analysis_result.get("errors") else None
-        agents_json = _to_json_text(analysis_result.get("completed_agents", [])) if analysis_result.get("completed_agents") else None
+        charts_json = _to_json(_serialize_charts(analysis_result.get("charts") or {}))
 
-        # Check if this file hash already exists for this user
-        cursor.execute(
-            "SELECT id FROM analysis_history WHERE user_id = ? AND file_hash = ?",
-            (user_id, file_hash)
+        # Upsert: check if file_hash already exists for this user
+        result = await db.execute(
+            select(AnalysisHistory).where(
+                AnalysisHistory.user_id == user_id,
+                AnalysisHistory.file_hash == file_hash,
+            )
         )
-        existing = cursor.fetchone()
+        existing: Optional[AnalysisHistory] = result.scalar_one_or_none()
 
         if existing:
-            # Update existing analysis
-            analysis_id = existing["id"]
-            cursor.execute(
-                """UPDATE analysis_history 
-                   SET raw_data = ?, clean_data = ?, stats_summary = ?, 
-                       charts = ?, insights = ?, errors = ?, completed_agents = ?,
-                       analysis_date = CURRENT_TIMESTAMP
-                   WHERE id = ?""",
-                (raw_data_json, clean_data_json, stats_json, charts_json,
-                 insights_json, errors_json, agents_json, analysis_id)
-            )
-            logger.info(f"Analysis updated for user {user_id}: {file_name}")
+            existing.raw_data = _to_json(raw_data)
+            existing.clean_data = _to_json(clean_data)
+            existing.stats_summary = _to_json(stats)
+            existing.charts = charts_json
+            existing.insights = _to_json(analysis_result.get("insights"))
+            existing.errors = _to_json(analysis_result.get("errors", []))
+            existing.completed_agents = _to_json(analysis_result.get("completed_agents", []))
+            existing.analysis_date = datetime.now(tz=timezone.utc)
+            analysis_id = existing.id
             message = "Analysis updated (same file detected)"
         else:
-            # Insert new analysis
-            cursor.execute(
-                """INSERT INTO analysis_history 
-                   (user_id, file_name, file_hash, raw_data, clean_data, 
-                    stats_summary, charts, insights, errors, completed_agents)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-                (user_id, file_name, file_hash, raw_data_json, clean_data_json,
-                 stats_json, charts_json, insights_json, errors_json, agents_json)
+            row = AnalysisHistory(
+                user_id=user_id,
+                file_name=file_name,
+                file_hash=file_hash,
+                raw_data=_to_json(raw_data),
+                clean_data=_to_json(clean_data),
+                stats_summary=_to_json(stats),
+                charts=charts_json,
+                insights=_to_json(analysis_result.get("insights")),
+                errors=_to_json(analysis_result.get("errors", [])),
+                completed_agents=_to_json(analysis_result.get("completed_agents", [])),
             )
-            analysis_id = cursor.lastrowid
-            logger.info(f"Analysis saved for user {user_id}: {file_name}")
+            db.add(row)
+            await db.flush()
+            await db.refresh(row)
+            analysis_id = row.id
             message = "Analysis saved successfully"
 
-        # Update/insert metadata for quick lookups
-        cursor.execute(
-            "SELECT id FROM analysis_metadata WHERE analysis_id = ?",
-            (analysis_id,)
+        # Upsert metadata row
+        meta_result = await db.execute(
+            select(AnalysisMetadata).where(AnalysisMetadata.analysis_id == analysis_id)
         )
-        meta_exists = cursor.fetchone()
+        meta: Optional[AnalysisMetadata] = meta_result.scalar_one_or_none()
 
-        if meta_exists:
-            cursor.execute(
-                """UPDATE analysis_metadata 
-                   SET file_size = ?, row_count = ?, column_count = ?, 
-                       completeness = ?, analyzed_at = CURRENT_TIMESTAMP
-                   WHERE analysis_id = ?""",
-                (file_size, row_count, column_count, completeness, analysis_id)
-            )
+        if meta:
+            meta.file_size = file_size
+            meta.row_count = row_count
+            meta.column_count = column_count
+            meta.completeness = completeness
+            meta.analyzed_at = datetime.now(tz=timezone.utc)
         else:
-            cursor.execute(
-                """INSERT INTO analysis_metadata 
-                   (analysis_id, user_id, file_name, file_size, row_count, 
-                    column_count, completeness)
-                   VALUES (?, ?, ?, ?, ?, ?, ?)""",
-                (analysis_id, user_id, file_name, file_size, row_count, 
-                 column_count, completeness)
+            db.add(
+                AnalysisMetadata(
+                    analysis_id=analysis_id,
+                    user_id=user_id,
+                    file_name=file_name,
+                    file_size=file_size,
+                    row_count=row_count,
+                    column_count=column_count,
+                    completeness=completeness,
+                )
             )
 
-        conn.commit()
+        await db.flush()
 
-        _enforce_cache_policy(user_id, conn, cursor)
-        close_db_connection(conn)
+        # Enforce per-user cache limit
+        await _enforce_cache_policy(user_id, db)
 
-        return {
-            "success": True,
-            "message": message,
-            "analysis_id": analysis_id
-        }
-
-    except Exception as e:
-        logger.error(f"Save analysis error: {e}")
-        return {
-            "success": False,
-            "message": f"Failed to save analysis: {str(e)}"
-        }
-
-
-def get_analysis_by_hash(user_id: int, file_hash: str) -> Optional[dict]:
-    """
-    Retrieve a previously saved analysis by file hash.
-    
-    Args:
-        user_id: ID of the user
-        file_hash: Hash of the file content
-    
-    Returns:
-        Analysis data if found, None otherwise
-    """
-    try:
-        conn = get_db_connection()
-        cursor = conn.cursor()
-
-        _enforce_cache_policy(user_id, conn, cursor)
-
-        cursor.execute(
-            """SELECT id, file_name, raw_data, clean_data, stats_summary, charts, insights, errors,
-                      completed_agents, analysis_date
-               FROM analysis_history 
-               WHERE user_id = ? AND file_hash = ?""",
-            (user_id, file_hash)
-        )
-        result = cursor.fetchone()
-        close_db_connection(conn)
-
-        if not result:
-            return None
-
-        # Parse JSON fields
-        analysis = {
-            "id": result["id"],
-            "file_name": result["file_name"],
+        # Warm Redis cache
+        cache_key = redis_cache.analysis_key(user_id, file_hash)
+        cacheable = {
+            "id": analysis_id,
+            "file_name": file_name,
             "file_hash": file_hash,
-            "raw_df": json.loads(result["raw_data"]) if result["raw_data"] else None,
-            "clean_df": json.loads(result["clean_data"]) if result["clean_data"] else None,
-            "stats_summary": json.loads(result["stats_summary"]) if result["stats_summary"] else {},
-            "charts": _deserialize_charts(json.loads(result["charts"]) if result["charts"] else {}),
-            "insights": json.loads(result["insights"]) if result["insights"] else {},
-            "errors": json.loads(result["errors"]) if result["errors"] else [],
-            "completed_agents": json.loads(result["completed_agents"]) if result["completed_agents"] else [],
-            "analysis_date": result["analysis_date"],
-            "from_cache": True
+            "raw_df": raw_data,
+            "clean_df": clean_data,
+            "stats_summary": stats,
+            "charts": _serialize_charts(analysis_result.get("charts") or {}),
+            "insights": analysis_result.get("insights", {}),
+            "errors": analysis_result.get("errors", []),
+            "completed_agents": analysis_result.get("completed_agents", []),
+            "from_cache": True,
         }
+        await redis_cache.set(cache_key, cacheable, ttl=redis_cache.CACHE_TTL_ANALYSIS)
 
-        logger.info(f"Retrieved cached analysis for user {user_id}: {result['file_name']}")
-        return analysis
+        logger.info("Saved analysis id=%d for user %d (%s)", analysis_id, user_id, file_name)
+        return {"success": True, "message": message, "analysis_id": analysis_id}
 
-    except Exception as e:
-        logger.error(f"Get analysis by hash error: {e}")
+    except Exception as exc:
+        logger.exception("save_analysis error: %s", exc)
+        return {"success": False, "message": f"Failed to save analysis: {exc}"}
+
+
+# ── Fetch by hash ─────────────────────────────────────────────────────────────
+
+async def get_analysis_by_hash(
+    db: AsyncSession, user_id: int, file_hash: str
+) -> Optional[dict]:
+    """
+    Return a cached analysis, checking Redis first then PostgreSQL.
+    Charts are NOT deserialised here (they live as plain dicts for JSON transport).
+    """
+    # 1. Redis fast path
+    cache_key = redis_cache.analysis_key(user_id, file_hash)
+    cached = await redis_cache.get(cache_key)
+    if cached is not None:
+        logger.info("Cache HIT for user %d / hash %s", user_id, file_hash[:8])
+        return cached
+
+    # 2. Database fallback
+    result = await db.execute(
+        select(AnalysisHistory).where(
+            AnalysisHistory.user_id == user_id,
+            AnalysisHistory.file_hash == file_hash,
+        )
+    )
+    row: Optional[AnalysisHistory] = result.scalar_one_or_none()
+    if row is None:
         return None
 
+    analysis = {
+        "id": row.id,
+        "file_name": row.file_name,
+        "file_hash": file_hash,
+        "raw_df": json.loads(row.raw_data) if row.raw_data else None,
+        "clean_df": json.loads(row.clean_data) if row.clean_data else None,
+        "stats_summary": json.loads(row.stats_summary) if row.stats_summary else {},
+        "charts": json.loads(row.charts) if row.charts else {},
+        "insights": json.loads(row.insights) if row.insights else {},
+        "errors": json.loads(row.errors) if row.errors else [],
+        "completed_agents": json.loads(row.completed_agents) if row.completed_agents else [],
+        "analysis_date": row.analysis_date.isoformat() if row.analysis_date else None,
+        "from_cache": True,
+    }
 
-def get_user_analysis_history(user_id: int, limit: int = 50) -> List[dict]:
-    """
-    Get all analysis history for a user.
-    
-    Args:
-        user_id: ID of the user
-        limit: Maximum number of records to return
-    
-    Returns:
-        List of analysis history records
-    """
-    try:
-        conn = get_db_connection()
-        cursor = conn.cursor()
-
-        _enforce_cache_policy(user_id, conn, cursor)
-
-        cursor.execute(
-            """SELECT h.id AS analysis_id, m.id AS meta_id, m.file_name, h.file_hash, m.row_count,
-                      m.column_count, m.completeness, m.analyzed_at
-               FROM analysis_metadata m
-               JOIN analysis_history h ON m.analysis_id = h.id
-               WHERE m.user_id = ?
-               ORDER BY m.analyzed_at DESC
-               LIMIT ?""",
-            (user_id, limit)
-        )
-        results = cursor.fetchall()
-        close_db_connection(conn)
-
-        history = []
-        for row in results:
-            history.append({
-                "id": row["analysis_id"],
-                "analysis_id": row["analysis_id"],
-                "meta_id": row["meta_id"],
-                "file_name": row["file_name"],
-                "file_hash": row["file_hash"],
-                "row_count": row["row_count"],
-                "column_count": row["column_count"],
-                "completeness": row["completeness"],
-                "analyzed_at": row["analyzed_at"]
-            })
-
-        logger.info(f"Retrieved {len(history)} analysis records for user {user_id}")
-        return history
-
-    except Exception as e:
-        logger.error(f"Get analysis history error: {e}")
-        return []
+    # Back-fill Redis from DB
+    await redis_cache.set(cache_key, analysis, ttl=redis_cache.CACHE_TTL_ANALYSIS)
+    logger.info("Cache MISS — loaded from DB for user %d / hash %s", user_id, file_hash[:8])
+    return analysis
 
 
-def delete_analysis(user_id: int, analysis_id: int) -> dict:
-    """
-    Delete an analysis record.
-    
-    Args:
-        user_id: ID of the user
-        analysis_id: ID of the analysis to delete
-    
-    Returns:
-        dict with success status and message
-    """
-    try:
-        conn = get_db_connection()
-        cursor = conn.cursor()
+# ── History listing ───────────────────────────────────────────────────────────
 
-        # Verify ownership
-        cursor.execute(
-            "SELECT user_id FROM analysis_history WHERE id = ?",
-            (analysis_id,)
-        )
-        result = cursor.fetchone()
+async def get_user_analysis_history(
+    db: AsyncSession, user_id: int, limit: int = 20
+) -> list[dict]:
+    """Return a list of lightweight metadata records for the user's analyses."""
+    result = await db.execute(
+        select(AnalysisMetadata, AnalysisHistory.id, AnalysisHistory.file_hash)
+        .join(AnalysisHistory, AnalysisMetadata.analysis_id == AnalysisHistory.id)
+        .where(AnalysisMetadata.user_id == user_id)
+        .order_by(AnalysisMetadata.analyzed_at.desc())
+        .limit(limit)
+    )
+    rows = result.fetchall()
 
-        if not result or result["user_id"] != user_id:
-            close_db_connection(conn)
-            return {
-                "success": False,
-                "message": "Analysis not found or access denied"
-            }
-
-        # Delete from both tables (cascade will handle it)
-        cursor.execute("DELETE FROM analysis_history WHERE id = ?", (analysis_id,))
-        cursor.execute("DELETE FROM analysis_metadata WHERE analysis_id = ?", (analysis_id,))
-
-        conn.commit()
-        close_db_connection(conn)
-
-        logger.info(f"Analysis {analysis_id} deleted for user {user_id}")
-        return {
-            "success": True,
-            "message": "Analysis deleted successfully"
+    return [
+        {
+            "analysis_id": meta.analysis_id,
+            "file_name": meta.file_name,
+            "file_hash": file_hash,
+            "row_count": meta.row_count,
+            "column_count": meta.column_count,
+            "completeness": meta.completeness,
+            "analyzed_at": meta.analyzed_at.isoformat() if meta.analyzed_at else None,
         }
-
-    except Exception as e:
-        logger.error(f"Delete analysis error: {e}")
-        return {
-            "success": False,
-            "message": f"Failed to delete analysis: {str(e)}"
-        }
+        for meta, _id, file_hash in rows
+    ]
 
 
-def get_analysis_summary_stats(analysis_id: int) -> Optional[dict]:
-    """Get summary statistics for an analysis."""
-    try:
-        conn = get_db_connection()
-        cursor = conn.cursor()
+# ── Delete ────────────────────────────────────────────────────────────────────
 
-        cursor.execute(
-            "SELECT stats_summary FROM analysis_history WHERE id = ?",
-            (analysis_id,)
+async def delete_analysis(
+    db: AsyncSession, user_id: int, analysis_id: int
+) -> dict:
+    """Delete an analysis row (+ its metadata via cascade) and purge Redis."""
+    result = await db.execute(
+        select(AnalysisHistory).where(
+            AnalysisHistory.id == analysis_id,
+            AnalysisHistory.user_id == user_id,
         )
-        result = cursor.fetchone()
-        close_db_connection(conn)
+    )
+    row: Optional[AnalysisHistory] = result.scalar_one_or_none()
 
-        if not result or not result["stats_summary"]:
-            return None
+    if row is None:
+        return {"success": False, "message": "Analysis not found or access denied"}
 
-        stats = json.loads(result["stats_summary"])
-        return {
-            "row_count": stats.get("row_count", 0),
-            "column_count": stats.get("column_count", 0),
-            "missing_cells": stats.get("data_quality", {}).get("missing_cells", 0),
-            "duplicate_rows": stats.get("data_quality", {}).get("duplicate_rows", 0),
-            "completeness": stats.get("data_quality", {}).get("completeness", 100),
-            "outlier_cols": len(stats.get("outliers", {})),
-            "strong_correlations": len(stats.get("strong_correlations", []))
-        }
+    file_hash = row.file_hash
+    await db.delete(row)
+    await db.flush()
 
-    except Exception as e:
-        logger.error(f"Get analysis summary stats error: {e}")
-        return None
+    # Purge Redis entry
+    cache_key = redis_cache.analysis_key(user_id, file_hash)
+    await redis_cache.delete(cache_key)
+
+    logger.info("Deleted analysis id=%d for user %d", analysis_id, user_id)
+    return {"success": True, "message": "Analysis deleted successfully"}

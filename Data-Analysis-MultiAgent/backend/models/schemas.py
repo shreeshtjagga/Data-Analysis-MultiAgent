@@ -1,62 +1,90 @@
-from pydantic import BaseModel, EmailStr, Field
-from typing import Optional, Any, List
+"""
+models/schemas.py
+─────────────────
+Pydantic v2 request / response schemas for the FastAPI layer.
+
+Changes vs original
+────────────────────
+• Added TokenResponse and TokenData for JWT auth flow.
+• All models updated to Pydantic v2 syntax (model_config replaces inner Config).
+• Stricter validators on email and password length.
+"""
+
 from datetime import datetime
-import json
+from typing import Any, List, Optional
+
+from pydantic import BaseModel, ConfigDict, EmailStr, Field, field_validator
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# USER SCHEMAS
+# AUTH SCHEMAS
 # ═══════════════════════════════════════════════════════════════════════════════
 
 class UserRegister(BaseModel):
-    """Schema for user registration."""
-    email: EmailStr
-    password: str = Field(..., min_length=6, description="Password must be at least 6 characters")
+    """Payload for POST /auth/register."""
 
-    class Config:
-        json_schema_extra = {
-            "example": {
-                "email": "user@example.com",
-                "password": "securepassword123"
-            }
+    model_config = ConfigDict(
+        json_schema_extra={
+            "example": {"email": "user@example.com", "password": "securepassword123"}
         }
+    )
+
+    email: EmailStr
+    password: str = Field(..., min_length=6, description="At least 6 characters")
+
+    @field_validator("password")
+    @classmethod
+    def password_not_blank(cls, v: str) -> str:
+        if not v.strip():
+            raise ValueError("Password must not be blank")
+        return v
 
 
 class UserLogin(BaseModel):
-    """Schema for user login."""
+    """Payload for POST /auth/login."""
+
+    model_config = ConfigDict(
+        json_schema_extra={
+            "example": {"email": "user@example.com", "password": "securepassword123"}
+        }
+    )
+
     email: EmailStr
     password: str
 
-    class Config:
-        json_schema_extra = {
-            "example": {
-                "email": "user@example.com",
-                "password": "securepassword123"
-            }
-        }
-
 
 class UserResponse(BaseModel):
-    """Schema for user response (without password)."""
+    """Public user object — never includes password_hash."""
+
+    model_config = ConfigDict(from_attributes=True)
+
     id: int
     email: str
     created_at: datetime
     updated_at: datetime
 
-    class Config:
-        from_attributes = True
+
+class TokenResponse(BaseModel):
+    """
+    Response body for a successful login.
+
+    ``access_token`` is a signed JWT; store it in memory (not localStorage).
+    Send it as ``Authorization: Bearer <token>`` on every protected request.
+    """
+
+    access_token: str
+    token_type: str = "bearer"
+    user: UserResponse
 
 
-class UserInDB(BaseModel):
-    """Schema for user stored in database."""
-    id: int
+class TokenData(BaseModel):
+    """
+    Decoded JWT payload — used internally by the FastAPI auth dependency.
+    Not exposed as an API response.
+    """
+
+    sub: str          # str(user_id)
     email: str
-    password: str
-    created_at: datetime
-    updated_at: datetime
-
-    class Config:
-        from_attributes = True
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -64,83 +92,37 @@ class UserInDB(BaseModel):
 # ═══════════════════════════════════════════════════════════════════════════════
 
 class AnalysisMetadata(BaseModel):
-    """Metadata for quick lookups."""
+    model_config = ConfigDict(from_attributes=True)
+
     file_name: str
     file_size: Optional[int] = None
     row_count: Optional[int] = None
     column_count: Optional[int] = None
     completeness: Optional[float] = None
 
-    class Config:
-        json_schema_extra = {
-            "example": {
-                "file_name": "sales_data.csv",
-                "file_size": 1024000,
-                "row_count": 5000,
-                "column_count": 15,
-                "completeness": 95.5
-            }
-        }
-
-
-class AnalysisHistoryCreate(BaseModel):
-    """Schema for creating analysis history record."""
-    file_name: str
-    file_hash: str
-    raw_data: Optional[dict] = None
-    clean_data: Optional[dict] = None
-    stats_summary: Optional[dict] = None
-    charts: Optional[dict] = None
-    insights: Optional[dict] = None
-    errors: Optional[list] = None
-    completed_agents: Optional[list] = None
-
-    class Config:
-        json_schema_extra = {
-            "example": {
-                "file_name": "sales_data.csv",
-                "file_hash": "abc123def456",
-                "stats_summary": {},
-                "insights": {},
-                "errors": []
-            }
-        }
-
-
-class AnalysisHistoryResponse(BaseModel):
-    """Schema for analysis history response."""
-    id: int
-    user_id: int
-    file_name: str
-    file_hash: str
-    stats_summary: Optional[dict] = None
-    insights: Optional[dict] = None
-    errors: Optional[list] = None
-    analysis_date: datetime
-    row_count: Optional[int] = None
-    column_count: Optional[int] = None
-    completeness: Optional[float] = None
-
-    class Config:
-        from_attributes = True
-
 
 class AnalysisHistoryList(BaseModel):
-    """Schema for listing analysis history (minimal info)."""
-    id: int
+    """Lightweight record returned in the history list endpoint."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    analysis_id: int
     file_name: str
     file_hash: str
-    analysis_date: datetime
     row_count: Optional[int] = None
     column_count: Optional[int] = None
     completeness: Optional[float] = None
+    analyzed_at: Optional[datetime] = None
 
-    class Config:
-        from_attributes = True
+
+class AnalysisListResponse(BaseModel):
+    success: bool
+    message: str
+    total: int
+    analyses: List[AnalysisHistoryList]
 
 
 class AnalysisStatsSummary(BaseModel):
-    """Summary stats for a past analysis."""
     row_count: int
     column_count: int
     missing_cells: int
@@ -151,65 +133,24 @@ class AnalysisStatsSummary(BaseModel):
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# SESSION SCHEMAS
-# ═══════════════════════════════════════════════════════════════════════════════
-
-class SessionData(BaseModel):
-    """Session data stored in Streamlit session state."""
-    user_id: int
-    email: str
-    logged_in: bool
-    login_time: datetime
-
-    class Config:
-        json_schema_extra = {
-            "example": {
-                "user_id": 1,
-                "email": "user@example.com",
-                "logged_in": True,
-                "login_time": "2024-01-15T10:30:00"
-            }
-        }
-
-
-# ═══════════════════════════════════════════════════════════════════════════════
-# RESPONSE SCHEMAS
+# GENERIC RESPONSE SCHEMAS
 # ═══════════════════════════════════════════════════════════════════════════════
 
 class AuthResponse(BaseModel):
-    """Response for authentication operations."""
+    """Generic auth operation response (registration, etc.)."""
+
     success: bool
     message: str
     user: Optional[UserResponse] = None
 
-    class Config:
-        json_schema_extra = {
-            "example": {
-                "success": True,
-                "message": "Login successful",
-                "user": {
-                    "id": 1,
-                    "email": "user@example.com",
-                    "created_at": "2024-01-15T10:30:00",
-                    "updated_at": "2024-01-15T10:30:00"
-                }
-            }
-        }
 
-
-class AnalysisListResponse(BaseModel):
-    """Response for analysis list."""
+class DeleteResponse(BaseModel):
     success: bool
     message: str
-    total: int
-    analyses: List[AnalysisHistoryList]
 
-    class Config:
-        json_schema_extra = {
-            "example": {
-                "success": True,
-                "message": "Analyses retrieved successfully",
-                "total": 5,
-                "analyses": []
-            }
-        }
+
+class HealthResponse(BaseModel):
+    status: str
+    postgres: bool
+    redis: bool
+    version: str = "2.0.0"

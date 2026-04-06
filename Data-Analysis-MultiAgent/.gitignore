@@ -24,5 +24,14 @@ env/
 .DS_Store
 Thumbs.db
 
+# Node / frontend
+frontend/node_modules/
+frontend/dist/
+frontend/.vite/
+frontend/.cache/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
 # Data (keep sample, ignore user uploads)
 *.tmp

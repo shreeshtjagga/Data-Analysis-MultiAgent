@@ -3,7 +3,7 @@ import logging
 import os
 import pandas as pd
 from groq import Groq
-from core.state import AnalysisState
+from ..core.state import AnalysisState
 
 logger = logging.getLogger(__name__)
 
