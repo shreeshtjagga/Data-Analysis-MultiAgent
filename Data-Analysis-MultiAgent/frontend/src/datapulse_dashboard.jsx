@@ -19,27 +19,11 @@ import {
   PieChart, Pie, Cell, XAxis, YAxis, CartesianGrid,
   Tooltip, ResponsiveContainer, Legend,
 } from "recharts";
-import { apiAnalyze, apiHistory, apiDeleteAnalysis } from "./api.js";
+import { apiAnalyze, apiChat, apiHistory, apiDeleteAnalysis } from "./api.js";
 
 // ── Palette ───────────────────────────────────────────────────────────────────
 const PALETTE = ["#6366f1","#10b981","#f59e0b","#06b6d4","#ef4444","#a78bfa","#34d399","#f472b6"];
 const COLORS  = { tooltip: { contentStyle: { background: "#0d1220", border: "1px solid rgba(99,102,241,0.2)", borderRadius: "7px", fontSize: "11px", fontFamily: "monospace", color: "#e2e8f0" } } };
-
-// ── Inline LLM chat (still calls Anthropic directly from browser for chat tab) ─
-async function callLLM(systemPrompt, userContent, maxTokens = 1000) {
-  const res = await fetch("https://api.anthropic.com/v1/messages", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      model: "claude-sonnet-4-20250514",
-      max_tokens: maxTokens,
-      system: systemPrompt,
-      messages: [{ role: "user", content: userContent }],
-    }),
-  });
-  const data = await res.json();
-  return data.content?.map((b) => b.text || "").join("") || "";
-}
 
 // ── Styles ────────────────────────────────────────────────────────────────────
 const s = {
@@ -267,17 +251,14 @@ export default function DataPulse({ user, onLogout }) {
     setChatMsgs((p) => [...p, { role: "user", text: q }]);
     setChatLoading(true);
     try {
-      const ctx = JSON.stringify({
+      const ctx = {
         fileName,
         stats: result.stats_summary,
         insights: result.insights,
         correlations: result.stats_summary?.strong_correlations?.slice(0, 5),
-      });
-      const reply = await callLLM(
-        "You are a data analyst assistant. Answer concisely (2-4 sentences). Use the dataset context. Do not use markdown headers.",
-        `Dataset context: ${ctx.slice(0, 4000)}\n\nUser question: ${q}`
-      );
-      setChatMsgs((p) => [...p, { role: "ai", text: reply.trim() }]);
+      };
+      const resp = await apiChat(q, ctx);
+      setChatMsgs((p) => [...p, { role: "ai", text: (resp.answer || "").trim() || "No response generated." }]);
     } catch {
       setChatMsgs((p) => [...p, { role: "ai", text: "Unable to reach AI. Try again." }]);
     }

@@ -95,6 +95,13 @@ export async function apiAnalyze(file) {
   return apiFetch("/analyze", { method: "POST", body: form });
 }
 
+export async function apiChat(question, context = {}) {
+  return apiFetch("/chat", {
+    method: "POST",
+    body: JSON.stringify({ question, context }),
+  });
+}
+
 // ── History ───────────────────────────────────────────────────────────────────
 
 export async function apiHistory(limit = 20) {

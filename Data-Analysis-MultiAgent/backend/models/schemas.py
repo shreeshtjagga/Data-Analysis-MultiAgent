@@ -13,7 +13,7 @@ Changes vs original
 from datetime import datetime
 from typing import Any, List, Optional
 
-from pydantic import BaseModel, EmailStr, Field, field_validator, model_config
+from pydantic import BaseModel, ConfigDict, EmailStr, Field, field_validator
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -23,7 +23,7 @@ from pydantic import BaseModel, EmailStr, Field, field_validator, model_config
 class UserRegister(BaseModel):
     """Payload for POST /auth/register."""
 
-    model_config = model_config(
+    model_config = ConfigDict(
         json_schema_extra={
             "example": {"email": "user@example.com", "password": "securepassword123"}
         }
@@ -43,7 +43,7 @@ class UserRegister(BaseModel):
 class UserLogin(BaseModel):
     """Payload for POST /auth/login."""
 
-    model_config = model_config(
+    model_config = ConfigDict(
         json_schema_extra={
             "example": {"email": "user@example.com", "password": "securepassword123"}
         }
@@ -56,7 +56,7 @@ class UserLogin(BaseModel):
 class UserResponse(BaseModel):
     """Public user object — never includes password_hash."""
 
-    model_config = model_config(from_attributes=True)
+    model_config = ConfigDict(from_attributes=True)
 
     id: int
     email: str
@@ -92,7 +92,7 @@ class TokenData(BaseModel):
 # ═══════════════════════════════════════════════════════════════════════════════
 
 class AnalysisMetadata(BaseModel):
-    model_config = model_config(from_attributes=True)
+    model_config = ConfigDict(from_attributes=True)
 
     file_name: str
     file_size: Optional[int] = None
@@ -104,7 +104,7 @@ class AnalysisMetadata(BaseModel):
 class AnalysisHistoryList(BaseModel):
     """Lightweight record returned in the history list endpoint."""
 
-    model_config = model_config(from_attributes=True)
+    model_config = ConfigDict(from_attributes=True)
 
     analysis_id: int
     file_name: str

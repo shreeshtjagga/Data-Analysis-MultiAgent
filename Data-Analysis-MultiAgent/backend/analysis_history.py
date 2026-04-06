@@ -21,6 +21,7 @@ from typing import Optional
 import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
+import plotly.io as pio
 from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -64,7 +65,9 @@ def _serialize_charts(charts: dict) -> dict:
     for key, fig in charts.items():
         try:
             if hasattr(fig, "to_plotly_json"):
-                out[key] = fig.to_plotly_json()
+                # Use Plotly's JSON encoder and parse back to ensure only
+                # plain JSON-native types are returned/stored.
+                out[key] = json.loads(pio.to_json(fig, pretty=False, remove_uids=True))
             elif isinstance(fig, dict):
                 out[key] = fig
         except Exception as exc:

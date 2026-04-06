@@ -31,8 +31,6 @@ def run_pipeline(df) -> AnalysisState:
 
         state = agent_fn(state)
 
-        state.completed_agents.append(name)
-
         if len(state.errors) > error_count_before:
             logger.warning(
                 "Agent '%s' encountered an error, but continuing pipeline",

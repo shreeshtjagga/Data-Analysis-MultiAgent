@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { Navigate, Route, Routes, useNavigate } from "react-router-dom";
 import { getToken, setToken, clearToken, apiMe } from "./api.js";
-import Login from "./Login.jsx";
+import Login from "./login.jsx";
 import DataPulse from "./datapulse_dashboard.jsx";
 
 /**

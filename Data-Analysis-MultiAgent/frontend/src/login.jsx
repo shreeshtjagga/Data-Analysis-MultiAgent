@@ -70,7 +70,6 @@ const s = {
     letterSpacing: "0.08em",
     textTransform: "uppercase",
     color: active ? "#6366f1" : "#475569",
-    borderBottom: active ? "2px solid #6366f1" : "2px solid transparent",
     background: "transparent",
     border: "none",
     borderBottom: active ? "2px solid #6366f1" : "2px solid transparent",

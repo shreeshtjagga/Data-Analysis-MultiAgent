@@ -23,7 +23,7 @@ from contextlib import asynccontextmanager
 from typing import Annotated, Optional
 
 import pandas as pd
-from fastapi import Depends, FastAPI, File, HTTPException, UploadFile, status
+from fastapi import Body, Depends, FastAPI, File, HTTPException, UploadFile, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -279,3 +279,67 @@ async def remove_analysis(
     if not result["success"]:
         raise HTTPException(status_code=404, detail=result["message"])
     return DeleteResponse(success=True, message=result["message"])
+
+
+@app.post("/chat", tags=["analysis"])
+async def chat_with_analysis(
+    body: dict = Body(...),
+    user_id: int = Depends(get_current_user_id),
+):
+    """Answer a user question about the current analysis context."""
+    _ = user_id  # Reserved for per-user quotas/history in future.
+
+    question = (body.get("question") or "").strip()
+    context = body.get("context") or {}
+
+    if not question:
+        raise HTTPException(status_code=400, detail="Question is required")
+
+    stats = context.get("stats") or {}
+    insights = context.get("insights") or {}
+    file_name = context.get("fileName") or "dataset"
+
+    prompt = (
+        "You are a data analyst assistant. "
+        "Answer clearly in 2-4 short sentences based only on provided context. "
+        "If context is insufficient, say what is missing.\n\n"
+        f"File: {file_name}\n"
+        f"Stats: {stats}\n"
+        f"Insights: {insights}\n"
+        f"Question: {question}"
+    )
+
+    api_key = os.getenv("GROQ_API_KEY")
+    if api_key:
+        try:
+            from groq import Groq
+
+            client = Groq(api_key=api_key)
+            completion = client.chat.completions.create(
+                model=os.getenv("GROQ_MODEL", "llama-3.1-8b-instant"),
+                messages=[
+                    {"role": "system", "content": "You are a concise data analyst."},
+                    {"role": "user", "content": prompt},
+                ],
+                temperature=0.2,
+                max_tokens=220,
+            )
+            answer = (completion.choices[0].message.content or "").strip()
+            if answer:
+                return {"answer": answer}
+        except Exception as exc:
+            logger.warning("Groq chat failed, using fallback response: %s", exc)
+
+    # Fallback when no LLM key is configured or provider fails.
+    row_count = stats.get("row_count", "unknown")
+    col_count = stats.get("column_count", "unknown")
+    completeness = (stats.get("data_quality") or {}).get("completeness")
+    findings = insights.get("findings") or []
+
+    parts = [f"I analyzed {file_name} with {row_count} rows and {col_count} columns."]
+    if completeness is not None:
+        parts.append(f"Data completeness is {float(completeness):.2f}%.")
+    if findings:
+        parts.append(f"Key finding: {findings[0]}")
+    parts.append("For a deeper answer, set GROQ_API_KEY in backend environment.")
+    return {"answer": " ".join(parts)}
