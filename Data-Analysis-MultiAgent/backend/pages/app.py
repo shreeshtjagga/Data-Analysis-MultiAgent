@@ -429,6 +429,50 @@ def _fallback_chat_answer(question: str, dataset_context: dict) -> str:
     )
 
 
+def _should_use_llm(question: str, local_answer: str) -> bool:
+    """Call LLM only when local dataset context cannot answer or user asks for deep synthesis."""
+    q = (question or "").lower()
+    if local_answer.startswith("AI service unavailable right now"):
+        return True
+
+    llm_intent_keywords = [
+        "deep analysis", "detailed analysis", "business strategy", "action plan",
+        "root cause", "predict", "forecast", "simulate", "hypothesis",
+        "why this happened", "executive summary", "llm", "ai opinion",
+    ]
+    return any(k in q for k in llm_intent_keywords)
+
+
+def _has_complete_cached_analysis(cached: Optional[dict]) -> bool:
+    """A cache hit is complete only when stats, insights and charts are all present."""
+    if not cached:
+        return False
+    return bool(cached.get("stats_summary")) and bool(cached.get("insights")) and bool(cached.get("charts"))
+
+
+def _run_and_store_analysis(file_bytes: bytes, file_name: str, file_hash: str) -> dict:
+    """Run full pipeline and persist complete output for reliable cache reuse."""
+    df = pd.read_csv(io.BytesIO(file_bytes))
+    state = run_pipeline(df)
+    result_data = state.model_dump()
+
+    save_result = save_analysis(
+        user_id=st.session_state.get("user_id"),
+        file_name=file_name,
+        file_hash=file_hash,
+        file_size=len(file_bytes),
+        analysis_result=result_data,
+        file_bytes=file_bytes,
+    )
+
+    if save_result["success"]:
+        st.success("Analysis complete and saved to history.")
+    else:
+        st.warning(f"Analysis complete but save failed: {save_result['message']}")
+
+    return result_data
+
+
 def _ask_dataset_chatbot(question: str, dataset_context: dict, chat_history: list[dict]) -> str:
     api_key = os.getenv("GROQ_API_KEY")
     if not api_key or Groq is None:
@@ -984,15 +1028,32 @@ html, body, [class*="css"] {
     color: #e2e8f0;
 }
 [data-testid="stAppViewContainer"] .main .block-container {
-    padding-top: clamp(2.25rem, 4vh, 3.5rem);
+    padding-top: 0.75rem;
     padding-bottom: 1.5rem;
     max-width: 1400px;
 }
+[data-testid="stHeader"] { display: none !important; }
+[data-testid="stSidebarNav"] { display: none !important; }
+[data-testid="collapsedControl"] { display: none !important; }
 [data-testid="stSidebar"] {
     background: #080c14;
     border-right: 1px solid rgba(99, 102, 241, 0.15);
 }
 [data-testid="stSidebar"] * { color: #e2e8f0 !important; }
+@media (min-width: 992px) {
+    [data-testid="stSidebar"][aria-expanded="false"] {
+        min-width: 340px;
+        max-width: 340px;
+        transform: translateX(0);
+    }
+    [data-testid="stSidebar"][aria-expanded="false"] > div:first-child {
+        width: 340px;
+        margin-left: 0;
+    }
+}
+@media (max-width: 991px) {
+    [data-testid="collapsedControl"] { display: flex !important; }
+}
 .stApp {
     background: #080c14;
     background-image: radial-gradient(ellipse at 20% 10%, rgba(99,102,241,0.08) 0%, transparent 60%),
@@ -1188,6 +1249,7 @@ _DEFAULTS = {
     "chat_autoscroll": False,
     "user_history": None,
     "history_loaded": False,
+    "show_history_panel": False,
 }
 
 for k, v in _DEFAULTS.items():
@@ -1227,7 +1289,8 @@ with st.sidebar:
 
     with col2:
         if st.button("History", use_container_width=True, key="history_btn"):
-            if not st.session_state.get("history_loaded"):
+            st.session_state["show_history_panel"] = not st.session_state.get("show_history_panel", False)
+            if st.session_state["show_history_panel"]:
                 st.session_state.user_history = get_user_analysis_history(
                     st.session_state.get("user_id"),
                     limit=20
@@ -1270,8 +1333,17 @@ with st.sidebar:
                 file_hash
             )
             if cached_analysis:
-                st.session_state["analysis_result"] = cached_analysis
-                st.info("📦 Cached analysis found! Using previous results.")
+                if _has_complete_cached_analysis(cached_analysis):
+                    st.session_state["analysis_result"] = cached_analysis
+                    st.info(" Cached analysis found! Using previous results.")
+                else:
+                    st.warning("Cached entry is incomplete. Rebuilding full analysis once...")
+                    with st.spinner("Rebuilding full analysis from cached file..."):
+                        st.session_state["analysis_result"] = _run_and_store_analysis(
+                            current_bytes,
+                            uploaded_file.name,
+                            file_hash,
+                        )
 
         elif st.session_state["file_bytes"] is None:
             st.session_state["file_bytes"] = current_bytes
@@ -1298,26 +1370,11 @@ with st.sidebar:
 if run_clicked and st.session_state["file_bytes"] is not None:
     with st.spinner("Running analysis pipeline…"):
         try:
-            df = pd.read_csv(io.BytesIO(st.session_state["file_bytes"]))
-            state = run_pipeline(df)
-            result_data = state.model_dump()
-
-            # Save to database
-            save_result = save_analysis(
-                user_id=st.session_state.get("user_id"),
-                file_name=st.session_state.get("uploaded_file_name", "dataset.csv"),
-                file_hash=st.session_state.get("file_hash", ""),
-                file_size=len(st.session_state.get("file_bytes", b"")),
-                analysis_result=result_data,
-                file_bytes=st.session_state.get("file_bytes", b"")
+            st.session_state["analysis_result"] = _run_and_store_analysis(
+                st.session_state.get("file_bytes", b""),
+                st.session_state.get("uploaded_file_name", "dataset.csv"),
+                st.session_state.get("file_hash", ""),
             )
-
-            if save_result["success"]:
-                st.session_state["analysis_result"] = result_data
-                st.success("✓ Analysis saved to your history!")
-            else:
-                st.warning(f"Analysis complete but save failed: {save_result['message']}")
-                st.session_state["analysis_result"] = result_data
 
         except Exception as exc:
             st.error(f"Pipeline error: {exc}")
@@ -1329,31 +1386,50 @@ result = st.session_state.get("analysis_result")
 # HISTORY MODAL/EXPANDER
 # ═══════════════════════════════════════════════════════════════════════════════
 
-if st.session_state.get("user_history"):
+if st.session_state.get("show_history_panel"):
     with st.sidebar:
         st.divider()
-        st.markdown("### 📊 Analysis History")
+        st.markdown("###  Analysis History")
 
-        for analysis in st.session_state["user_history"]:
-            col1, col2 = st.columns([3, 1])
-            with col1:
-                st.caption(f"📁 {analysis['file_name']}")
-                st.caption(
-                    f"Rows: {analysis.get('row_count', '?')} | "
-                    f"Cols: {analysis.get('column_count', '?')} | "
-                    f"Completeness: {analysis.get('completeness', 0):.1f}%"
-                )
-            with col2:
-                if st.button("🗑️", key=f"delete_{analysis['id']}", help="Delete this analysis"):
-                    delete_result = delete_analysis(
-                        st.session_state.get("user_id"),
-                        analysis['id']
+        history_items = st.session_state.get("user_history") or []
+        if not history_items:
+            st.caption("No saved analyses yet.")
+        else:
+            for analysis in history_items:
+                analysis_id = analysis.get("analysis_id", analysis.get("id"))
+                col1, col2 = st.columns([5, 1])
+                with col1:
+                    st.markdown(
+                        f"""
+                        <div style=\"background:rgba(15,23,42,.55);border:1px solid rgba(99,102,241,.22);
+                                    border-radius:8px;padding:8px 10px;margin:3px 0 8px 0;\">
+                            <div style=\"font-size:.82rem;color:#e2e8f0;line-height:1.2;\">📄 {analysis['file_name']}</div>
+                            <div style=\"font-size:.72rem;color:#94a3b8;margin-top:4px;\">
+                                Rows: {analysis.get('row_count', '?')} | Cols: {analysis.get('column_count', '?')} |
+                                Completeness: {analysis.get('completeness', 0):.1f}%
+                            </div>
+                        </div>
+                        """,
+                        unsafe_allow_html=True,
                     )
-                    if delete_result["success"]:
-                        st.session_state.history_loaded = False
-                        st.rerun()
-
-        st.session_state["user_history"] = None
+                with col2:
+                    if st.button("✕", key=f"delete_{analysis_id}", help="Remove from cache/history"):
+                        delete_result = delete_analysis(
+                            st.session_state.get("user_id"),
+                            analysis_id
+                        )
+                        if delete_result["success"]:
+                            st.session_state.user_history = get_user_analysis_history(
+                                st.session_state.get("user_id"),
+                                limit=20
+                            )
+                            st.session_state.history_loaded = True
+                            if (
+                                st.session_state.get("analysis_result")
+                                and st.session_state["analysis_result"].get("id") == analysis_id
+                            ):
+                                st.session_state["analysis_result"] = None
+                            st.rerun()
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # EMPTY STATE
@@ -1388,7 +1464,7 @@ if st.session_state.get("chat_dataset_name") != file_name:
 # HEADER
 # ═══════════════════════════════════════════════════════════════════════════════
 
-cache_badge = "📦 CACHED" if result.get("from_cache") else ""
+cache_badge = " CACHED" if result.get("from_cache") else ""
 st.markdown(f"""
 <div class="page-header">
     <p class="title">Analysis</p>
@@ -1630,7 +1706,13 @@ with tab_data:
     if isinstance(raw, dict):
         try:   raw = pd.DataFrame(raw)
         except Exception: raw = None
+    elif isinstance(raw, list):
+        try:   raw = pd.DataFrame(raw)
+        except Exception: raw = None
     if isinstance(clean, dict):
+        try:   clean = pd.DataFrame(clean)
+        except Exception: clean = None
+    elif isinstance(clean, list):
         try:   clean = pd.DataFrame(clean)
         except Exception: clean = None
 
@@ -1681,7 +1763,11 @@ with tab_chat:
             answer = _chart_not_shown_reason(question, dataset_context)
             st.session_state["chat_messages"].append({"role": "assistant", "content": answer})
         else:
-            answer = _ask_dataset_chatbot(question, dataset_context, st.session_state["chat_messages"])
+            local_answer = _fallback_chat_answer(question, dataset_context)
+            if _should_use_llm(question, local_answer):
+                answer = _ask_dataset_chatbot(question, dataset_context, st.session_state["chat_messages"])
+            else:
+                answer = local_answer
             st.session_state["chat_messages"].append({"role": "assistant", "content": answer})
 
         st.session_state["force_chat_tab"] = True
