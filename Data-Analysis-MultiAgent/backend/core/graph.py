@@ -1,10 +1,10 @@
 import logging
-from core.state import AnalysisState
-from agents.architect import architect_agent
-from agents.statistician import statistician_agent
-from agents.visualizer import visualizer_agent
-from agents.insights import insights_agent
-from agents.summary import summary_agent
+from .state import AnalysisState
+from ..agents.architect import architect_agent
+from ..agents.statistician import statistician_agent
+from ..agents.visualizer import visualizer_agent
+from ..agents.insights import insights_agent
+from ..agents.summary import summary_agent
 from dotenv import load_dotenv
 load_dotenv()
 logger = logging.getLogger(__name__)
