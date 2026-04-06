@@ -14,7 +14,6 @@ from typing import Optional
 
 from jose import JWTError, jwt
 from passlib.context import CryptContext
-from sqlalchemy.exc import IntegrityError
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -118,12 +117,8 @@ async def register_user(db: AsyncSession, email: str, password: str) -> dict:
 
     user = User(email=email, password_hash=hash_password(password))
     db.add(user)
-    try:
-        await db.flush()   # populate user.id without committing
-        await db.refresh(user)
-    except IntegrityError:
-        await db.rollback()
-        return {"success": False, "message": "Email already registered. Please log in instead."}
+    await db.flush()   # populate user.id without committing
+    await db.refresh(user)
 
     logger.info("User registered: %s (id=%d)", email, user.id)
     return {

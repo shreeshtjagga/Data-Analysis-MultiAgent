@@ -416,18 +416,19 @@ def run(state: AnalysisState) -> AnalysisState:
 
     if state.clean_df is None or state.clean_df.empty:
         state.errors.append("visualizer skipped: no clean_df available")
+        state.completed_agents.append("visualizer")
         return state
 
     try:
         df             = _coerce_types(state.clean_df)
         state.charts   = _select_charts(df, state.stats_summary)
         logger.info("Visualizer done — %d charts emitted", len(state.charts))
-        state.completed_agents.append("visualizer")
 
     except Exception as exc:
         state.errors.append(f"visualizer error: {exc}")
         logger.exception("Visualizer error")
 
+    state.completed_agents.append("visualizer")
     return state
 
 

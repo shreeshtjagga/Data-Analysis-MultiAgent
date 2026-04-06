@@ -65,7 +65,7 @@ def detect_column_types(df: pd.DataFrame) -> dict[str, str]:
             type_map[col] = "datetime"
         else:
             try:
-                pd.to_datetime(df[col], format="mixed")
+                pd.to_datetime(df[col], infer_datetime_format=True)
                 type_map[col] = "datetime"
             except (ValueError, TypeError):
                 type_map[col] = "categorical"
@@ -81,13 +81,10 @@ def safe_describe(df: pd.DataFrame) -> dict:
         col: int(count) for col, count in df.isna().sum().items() if count > 0
     }
 
-    num_df = df.select_dtypes(include=[np.number]).describe()
-    if num_df.empty:
-        summary["numeric_summary"] = {}
-    else:
-        summary["numeric_summary"] = {
-            col: {stat: float(num_df[col][stat]) for stat in num_df.index}
-            for col in num_df.columns
-        }
+    num_df = df.describe()
+    summary["numeric_summary"] = {
+        col: {stat: float(num_df[col][stat]) for stat in num_df.index}
+        for col in num_df.columns
+    }
 
     return summary

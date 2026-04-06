@@ -33,10 +33,9 @@ def run_pipeline(df) -> AnalysisState:
 
         if len(state.errors) > error_count_before:
             logger.warning(
-                "Agent '%s' encountered an error. Halting pipeline to prevent cascading failures",
+                "Agent '%s' encountered an error, but continuing pipeline",
                 name
             )
-            break
 
     logger.info(
         "Pipeline complete. Agents run: %s. Errors: %d",
