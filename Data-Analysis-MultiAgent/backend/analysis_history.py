@@ -15,6 +15,7 @@ Changes vs the original sqlite3 version
 import hashlib
 import json
 import logging
+import math
 from datetime import datetime, timezone
 from typing import Optional
 
@@ -52,10 +53,28 @@ def _json_default(obj):
     return str(obj)
 
 
+def _sanitize_for_json(value):
+    if isinstance(value, dict):
+        return {str(k): _sanitize_for_json(v) for k, v in value.items()}
+    if isinstance(value, list):
+        return [_sanitize_for_json(v) for v in value]
+    if isinstance(value, tuple):
+        return [_sanitize_for_json(v) for v in value]
+    if isinstance(value, float):
+        return value if math.isfinite(value) else None
+    if isinstance(value, np.floating):
+        val = float(value)
+        return val if math.isfinite(val) else None
+    if isinstance(value, np.ndarray):
+        return _sanitize_for_json(value.tolist())
+    return value
+
+
 def _to_json(value) -> Optional[str]:
     if value is None:
         return None
-    return json.dumps(value, default=_json_default)
+    cleaned = _sanitize_for_json(value)
+    return json.dumps(cleaned, default=_json_default, allow_nan=False)
 
 
 def _serialize_charts(charts: dict) -> dict:
@@ -65,11 +84,11 @@ def _serialize_charts(charts: dict) -> dict:
     for key, fig in charts.items():
         try:
             if hasattr(fig, "to_plotly_json"):
-                # Use Plotly's JSON encoder and parse back to ensure only
-                # plain JSON-native types are returned/stored.
-                out[key] = json.loads(pio.to_json(fig, pretty=False, remove_uids=True))
+                fig_json = fig.to_plotly_json()
+                fig_json.pop("uid", None)
+                out[key] = _sanitize_for_json(fig_json)
             elif isinstance(fig, dict):
-                out[key] = fig
+                out[key] = _sanitize_for_json(fig)
         except Exception as exc:
             logger.warning("Failed to serialise chart '%s': %s", key, exc)
     return out
@@ -87,8 +106,14 @@ def _deserialize_charts(charts: dict) -> dict:
     return out
 
 
-def compute_file_hash(file_bytes: bytes) -> str:
-    return hashlib.sha256(file_bytes).hexdigest()
+def compute_file_hash(file_bytes: bytes, file_name: Optional[str] = None) -> str:
+    """Compute a stable identity hash. Includes filename to preserve renamed-file history entries."""
+    h = hashlib.sha256()
+    if file_name:
+        h.update(file_name.encode("utf-8", errors="ignore"))
+        h.update(b"\x00")
+    h.update(file_bytes)
+    return h.hexdigest()
 
 
 # ── Cache-policy enforcement ──────────────────────────────────────────────────

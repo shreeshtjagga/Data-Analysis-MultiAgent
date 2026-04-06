@@ -5,7 +5,7 @@
  *  • Prefixes every URL with /api  (Vite proxy → FastAPI)
  *  • Injects the stored JWT as  Authorization: Bearer <token>
  *  • Throws a structured error on non-2xx responses
- *  • Auto-redirects to /login on 401 (expired token)
+ *  • Clears token and surfaces 401 to caller (no forced hard redirect)
  */
 
 const BASE = "/api";
@@ -47,8 +47,9 @@ async function apiFetch(path, options = {}) {
 
   if (response.status === 401) {
     clearToken();
-    window.location.href = "/login";
-    throw new Error("Session expired — please log in again");
+    const authErr = new Error("Session expired — please log in again");
+    authErr.status = 401;
+    throw authErr;
   }
 
   if (!response.ok) {
