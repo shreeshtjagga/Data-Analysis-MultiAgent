@@ -196,6 +196,7 @@ export default function DataPulse({ user, onLogout }) {
   const analyzeFile = useCallback(async (file) => {
     if (!file) return;
     setPhase("analyzing");
+    setResult(null);
     setAgentLog([]);
     setTab("overview");
     setFileName(file.name);
