@@ -71,7 +71,15 @@ READ_CHUNK_BYTES = 1024 * 1024
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     logger.info("Starting DataPulse API v2")
-    await init_db()
+    try:
+        await init_db()
+    except Exception as exc:
+        app_env = os.getenv("APP_ENV", "production").strip().lower()
+        allow_without_db = os.getenv("ALLOW_STARTUP_WITHOUT_DB", "").strip().lower() in {"1", "true", "yes"}
+        if app_env == "development" or allow_without_db:
+            logger.warning("Startup continued without DB: %s", exc)
+        else:
+            raise
     yield
     await redis_cache.close()
     logger.info("DataPulse API shutdown complete")
