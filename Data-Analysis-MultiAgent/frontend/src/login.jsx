@@ -175,6 +175,7 @@ function LoginForm({ onLogin }) {
 }
 
 function RegisterForm() {
+  const [username, setUsername] = useState("");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [confirm, setConfirm] = useState("");
@@ -184,14 +185,31 @@ function RegisterForm() {
 
   const submit = async () => {
     setError(""); setSuccess("");
-    if (!email || !password || !confirm) { setError("Please fill in all fields"); return; }
-    if (password !== confirm) { setError("Passwords do not match"); return; }
-    if (password.length < 6) { setError("Password must be at least 6 characters"); return; }
+    if (!username || !email || !password || !confirm) { 
+      setError("Please fill in all fields"); 
+      return; 
+    }
+    if (username.length < 3) { 
+      setError("Username must be at least 3 characters"); 
+      return; 
+    }
+    if (!/^[a-zA-Z0-9_]+$/.test(username)) { 
+      setError("Username can only contain letters, numbers, and underscores"); 
+      return; 
+    }
+    if (password !== confirm) { 
+      setError("Passwords do not match"); 
+      return; 
+    }
+    if (password.length < 6) { 
+      setError("Password must be at least 6 characters"); 
+      return; 
+    }
     setLoading(true);
     try {
-      await apiRegister(email, password);
+      await apiRegister(username, email, password);
       setSuccess("Account created! Switch to the Sign In tab to log in.");
-      setEmail(""); setPassword(""); setConfirm("");
+      setUsername(""); setEmail(""); setPassword(""); setConfirm("");
     } catch (err) {
       setError(err.message || "Registration failed");
     } finally {
@@ -203,10 +221,30 @@ function RegisterForm() {
     <>
       {error   && <div style={s.alert("error")}>{error}</div>}
       {success && <div style={s.alert("success")}>{success}</div>}
+      <label style={s.label}>Username</label>
+      <input 
+        style={s.input} 
+        type="text" 
+        placeholder="john_doe" 
+        value={username} 
+        onChange={(e) => setUsername(e.target.value)} 
+      />
       <label style={s.label}>Email address</label>
-      <input style={s.input} type="email" placeholder="you@example.com" value={email} onChange={(e) => setEmail(e.target.value)} />
+      <input 
+        style={s.input} 
+        type="email" 
+        placeholder="you@example.com" 
+        value={email} 
+        onChange={(e) => setEmail(e.target.value)} 
+      />
       <label style={s.label}>Password</label>
-      <input style={s.input} type="password" placeholder="••••••••" value={password} onChange={(e) => setPassword(e.target.value)} />
+      <input 
+        style={s.input} 
+        type="password" 
+        placeholder="••••••••" 
+        value={password} 
+        onChange={(e) => setPassword(e.target.value)} 
+      />
       <label style={s.label}>Confirm password</label>
       <input
         style={s.input}

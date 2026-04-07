@@ -72,6 +72,8 @@ class User(Base):
 
     id = Column(BigInteger, primary_key=True, autoincrement=True)
     email = Column(String(255), unique=True, nullable=False, index=True)
+    # In the User class, add this line after the email field:
+username = Column(String(50), unique=True, nullable=False, index=True)
     password_hash = Column(String(255), nullable=False)
     is_active = Column(Boolean, default=True, nullable=False)
     created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)

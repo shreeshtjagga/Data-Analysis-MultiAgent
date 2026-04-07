@@ -91,57 +91,44 @@ def verify_access_token(token: str) -> Optional[dict]:
 
 # ── User CRUD ─────────────────────────────────────────────────────────────────
 
-async def register_user(db: AsyncSession, email: str, password: str) -> dict:
-    """
-    Create a new user.
-
-    Parameters
-    ----------
-    db       : active AsyncSession from FastAPI dependency injection
-    email    : must be unique
-    password : plain-text; hashed with bcrypt before storage
-
-    Returns
-    -------
-    dict with ``success``, ``message``, and on success ``user_id`` / ``email``
-    """
-    if not email or not password:
-        return {"success": False, "message": "Email and password are required"}
+async def register_user(db: AsyncSession, username: str, email: str, password: str) -> dict:
+    """Create a new user."""
+    if not username or not email or not password:
+        return {"success": False, "message": "Username, email and password are required"}
 
     if len(password) < 6:
         return {"success": False, "message": "Password must be at least 6 characters"}
 
-    # Duplicate check
+    # Check username uniqueness
+    result = await db.execute(select(User).where(User.username == username.lower()))
+    if result.scalar_one_or_none() is not None:
+        return {"success": False, "message": "Username already taken"}
+
+    # Check email uniqueness
     result = await db.execute(select(User).where(User.email == email))
     if result.scalar_one_or_none() is not None:
-        return {"success": False, "message": "Email already registered. Please log in instead."}
+        return {"success": False, "message": "Email already registered"}
 
-    user = User(email=email, password_hash=hash_password(password))
+    user = User(username=username.lower(), email=email, password_hash=hash_password(password))
     db.add(user)
     try:
-        await db.flush()   # populate user.id without committing
+        await db.flush()
         await db.refresh(user)
     except IntegrityError:
         await db.rollback()
-        return {"success": False, "message": "Email already registered. Please log in instead."}
+        return {"success": False, "message": "Username or email already exists"}
 
-    logger.info("User registered: %s (id=%d)", email, user.id)
+    logger.info("User registered: %s (%s, id=%d)", username, email, user.id)
     return {
         "success": True,
         "message": "Registration successful! Please log in.",
         "user_id": user.id,
+        "username": user.username,
         "email": user.email,
     }
 
-
 async def login_user(db: AsyncSession, email: str, password: str) -> dict:
-    """
-    Authenticate a user and return a signed JWT on success.
-
-    Returns
-    -------
-    dict with ``success``, ``message``, ``access_token`` (str), and ``user`` (dict)
-    """
+    """Authenticate a user (by email, but return username too)."""
     if not email or not password:
         return {"success": False, "message": "Email and password are required"}
 
@@ -153,7 +140,7 @@ async def login_user(db: AsyncSession, email: str, password: str) -> dict:
         return {"success": False, "message": "Invalid email or password"}
 
     token = create_access_token(user.id, user.email)
-    logger.info("User logged in: %s (id=%d)", email, user.id)
+    logger.info("User logged in: %s (%s, id=%d)", user.username, email, user.id)
     return {
         "success": True,
         "message": "Login successful!",
@@ -161,12 +148,12 @@ async def login_user(db: AsyncSession, email: str, password: str) -> dict:
         "token_type": "bearer",
         "user": {
             "id": user.id,
+            "username": user.username,
             "email": user.email,
             "created_at": user.created_at.isoformat(),
             "updated_at": user.updated_at.isoformat(),
         },
     }
-
 
 async def get_user_by_id(db: AsyncSession, user_id: int) -> Optional[User]:
     """Fetch a User row by primary key."""

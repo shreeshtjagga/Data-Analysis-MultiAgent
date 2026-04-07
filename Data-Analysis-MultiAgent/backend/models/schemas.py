@@ -25,12 +25,24 @@ class UserRegister(BaseModel):
 
     model_config = ConfigDict(
         json_schema_extra={
-            "example": {"email": "user@example.com", "password": "securepassword123"}
+            "example": {
+                "username": "john_doe",
+                "email": "user@example.com",
+                "password": "securepassword123"
+            }
         }
     )
 
+    username: str = Field(..., min_length=3, max_length=50, description="3-50 characters, alphanumeric and underscore")
     email: EmailStr
     password: str = Field(..., min_length=6, description="At least 6 characters")
+
+    @field_validator("username")
+    @classmethod
+    def username_alphanumeric(cls, v: str) -> str:
+        if not v.replace("_", "").isalnum():
+            raise ValueError("Username must be alphanumeric with underscores only")
+        return v.lower()
 
     @field_validator("password")
     @classmethod
@@ -38,6 +50,7 @@ class UserRegister(BaseModel):
         if not v.strip():
             raise ValueError("Password must not be blank")
         return v
+
 
 
 class UserLogin(BaseModel):
@@ -59,6 +72,7 @@ class UserResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
     id: int
+    username: str
     email: str
     created_at: datetime
     updated_at: datetime

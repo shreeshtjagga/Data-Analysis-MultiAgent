@@ -148,7 +148,7 @@ async def health_check(db: AsyncSession = Depends(get_db)):
 
 @app.post("/auth/register", response_model=AuthResponse, status_code=status.HTTP_201_CREATED, tags=["auth"])
 async def register(body: UserRegister, db: AsyncSession = Depends(get_db)):
-    result = await register_user(db, body.email, body.password)
+    result = await register_user(db, body.username, body.email, body.password)
     if not result["success"]:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=result["message"])
     return AuthResponse(success=True, message=result["message"])
@@ -186,6 +186,7 @@ async def me(
         raise HTTPException(status_code=404, detail="User not found")
     return UserResponse(
         id=user.id,
+        username=user.username,
         email=user.email,
         created_at=user.created_at,
         updated_at=user.updated_at,
