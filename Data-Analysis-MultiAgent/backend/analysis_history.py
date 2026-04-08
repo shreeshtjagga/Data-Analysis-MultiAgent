@@ -1,15 +1,8 @@
-"""
+﻿"""
 analysis_history.py
 ────────────────────
 Async CRUD for analysis history.
-
-Changes vs the original sqlite3 version
-────────────────────────────────────────
-• All DB access uses SQLAlchemy AsyncSession (PostgreSQL).
-• get_analysis_by_hash()  checks Redis first; only hits Postgres on a miss.
-• save_analysis()         writes to Postgres *and* warms the Redis cache.
-• delete_analysis()       removes both the DB row and the Redis entry.
-• Cache policy (max 5 per user, 3-day TTL) is enforced inside save_analysis().
+Uses SQLAlchemy AsyncSession (PostgreSQL) + Redis cache.
 """
 
 import hashlib
@@ -22,7 +15,6 @@ from typing import Optional
 import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
-import plotly.io as pio
 from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -107,7 +99,6 @@ def _deserialize_charts(charts: dict) -> dict:
 
 
 def compute_file_hash(file_bytes: bytes, file_name: Optional[str] = None) -> str:
-    """Compute a stable identity hash. Includes filename to preserve renamed-file history entries."""
     h = hashlib.sha256()
     if file_name:
         h.update(file_name.encode("utf-8", errors="ignore"))
@@ -119,7 +110,6 @@ def compute_file_hash(file_bytes: bytes, file_name: Optional[str] = None) -> str
 # ── Cache-policy enforcement ──────────────────────────────────────────────────
 
 async def _enforce_cache_policy(user_id: int, db: AsyncSession) -> None:
-    """Keep only the 5 most-recent analyses per user, delete the rest."""
     result = await db.execute(
         select(AnalysisHistory.id)
         .where(AnalysisHistory.user_id == user_id)
@@ -148,20 +138,12 @@ async def save_analysis(
     file_size: int,
     analysis_result: dict,
 ) -> dict:
-    """
-    Upsert an analysis result into PostgreSQL and warm the Redis cache.
-
-    Returns
-    -------
-    dict with ``success``, ``message``, ``analysis_id``
-    """
     try:
         stats = analysis_result.get("stats_summary") or {}
         row_count = stats.get("row_count")
         column_count = stats.get("column_count")
         completeness = (stats.get("data_quality") or {}).get("completeness")
 
-        # Serialise DataFrames to plain dicts
         raw_data = analysis_result.get("raw_df")
         clean_data = analysis_result.get("clean_df")
         if isinstance(raw_data, pd.DataFrame):
@@ -171,7 +153,6 @@ async def save_analysis(
 
         charts_json = _to_json(_serialize_charts(analysis_result.get("charts") or {}))
 
-        # Upsert: check if file_hash already exists for this user
         result = await db.execute(
             select(AnalysisHistory).where(
                 AnalysisHistory.user_id == user_id,
@@ -210,7 +191,7 @@ async def save_analysis(
             analysis_id = row.id
             message = "Analysis saved successfully"
 
-        # Upsert metadata row
+        # Upsert metadata
         meta_result = await db.execute(
             select(AnalysisMetadata).where(AnalysisMetadata.analysis_id == analysis_id)
         )
@@ -236,8 +217,6 @@ async def save_analysis(
             )
 
         await db.flush()
-
-        # Enforce per-user cache limit
         await _enforce_cache_policy(user_id, db)
 
         # Warm Redis cache
@@ -270,10 +249,6 @@ async def save_analysis(
 async def get_analysis_by_hash(
     db: AsyncSession, user_id: int, file_hash: str
 ) -> Optional[dict]:
-    """
-    Return a cached analysis, checking Redis first then PostgreSQL.
-    Charts are NOT deserialised here (they live as plain dicts for JSON transport).
-    """
     # 1. Redis fast path
     cache_key = redis_cache.analysis_key(user_id, file_hash)
     cached = await redis_cache.get(cache_key)
@@ -318,7 +293,7 @@ async def get_analysis_by_hash(
 async def get_user_analysis_history(
     db: AsyncSession, user_id: int, limit: int = 20
 ) -> list[dict]:
-    """Return a list of lightweight metadata records for the user's analyses."""
+    """Return lightweight metadata records for the user's analyses."""
     result = await db.execute(
         select(AnalysisMetadata, AnalysisHistory.id, AnalysisHistory.file_hash)
         .join(AnalysisHistory, AnalysisMetadata.analysis_id == AnalysisHistory.id)
@@ -326,10 +301,16 @@ async def get_user_analysis_history(
         .order_by(AnalysisMetadata.analyzed_at.desc())
         .limit(limit)
     )
-    rows = result.fetchall()
+    rows = result.all()  # FIX: use .all() instead of .fetchall() for SQLAlchemy 2.0
 
-    return [
-        {
+    output = []
+    for row in rows:
+        # FIX: Access tuple elements by index for reliable cross-version behaviour
+        meta = row[0]          # AnalysisMetadata ORM object
+        # _id = row[1]         # AnalysisHistory.id (unused)
+        file_hash = row[2]     # AnalysisHistory.file_hash
+
+        output.append({
             "analysis_id": meta.analysis_id,
             "file_name": meta.file_name,
             "file_hash": file_hash,
@@ -337,9 +318,8 @@ async def get_user_analysis_history(
             "column_count": meta.column_count,
             "completeness": meta.completeness,
             "analyzed_at": meta.analyzed_at.isoformat() if meta.analyzed_at else None,
-        }
-        for meta, _id, file_hash in rows
-    ]
+        })
+    return output
 
 
 # ── Delete ────────────────────────────────────────────────────────────────────
@@ -347,7 +327,6 @@ async def get_user_analysis_history(
 async def delete_analysis(
     db: AsyncSession, user_id: int, analysis_id: int
 ) -> dict:
-    """Delete an analysis row (+ its metadata via cascade) and purge Redis."""
     result = await db.execute(
         select(AnalysisHistory).where(
             AnalysisHistory.id == analysis_id,

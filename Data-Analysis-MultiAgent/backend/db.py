@@ -1,34 +1,23 @@
-"""
+﻿"""
 db.py
 ─────
-Database engine and session factory using SQLAlchemy async + PostgreSQL.
-Replaces the previous sqlite3 implementation.
-
-Usage
------
-  from db import get_session, init_db
-
-  async with get_session() as session:
-      result = await session.execute(select(User).where(User.email == email))
+Database engine and session factory using SQLAlchemy async + PostgreSQL (Neon).
 """
 
 import logging
 import os
+import ssl
 from contextlib import asynccontextmanager
 from datetime import datetime
 
+from dotenv import load_dotenv
+
+# Load .env before any os.getenv() calls
+load_dotenv()
+
 from sqlalchemy import (
-    BigInteger,
-    Boolean,
-    Column,
-    DateTime,
-    Float,
-    ForeignKey,
-    Integer,
-    String,
-    Text,
-    UniqueConstraint,
-    func,
+    BigInteger, Boolean, Column, DateTime, Float,
+    ForeignKey, Integer, String, Text, UniqueConstraint, func,
 )
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.orm import DeclarativeBase, relationship
@@ -42,12 +31,27 @@ DATABASE_URL = os.getenv(
     "postgresql+asyncpg://datapulse:datapulse_secret@localhost:5432/datapulse",
 )
 
+# Ensure URL uses postgresql+asyncpg:// driver prefix
+if DATABASE_URL.startswith("postgresql://") or DATABASE_URL.startswith("postgres://"):
+    DATABASE_URL = DATABASE_URL.replace("postgres://", "postgresql+asyncpg://", 1)
+    DATABASE_URL = DATABASE_URL.replace("postgresql://", "postgresql+asyncpg://", 1)
+
+# Build SSL connect_args for cloud-hosted databases (Neon, Supabase, etc.)
+_db_ssl = os.getenv("DB_SSL", "false").lower() == "true"
+_connect_args: dict = {}
+if _db_ssl:
+    _ssl_ctx = ssl.create_default_context()
+    _ssl_ctx.check_hostname = False
+    _ssl_ctx.verify_mode = ssl.CERT_NONE
+    _connect_args["ssl"] = _ssl_ctx
+
 engine = create_async_engine(
     DATABASE_URL,
     echo=os.getenv("APP_ENV", "production") == "development",
     pool_pre_ping=True,
-    pool_size=10,
-    max_overflow=20,
+    pool_size=5,        # Neon free tier has limited connections
+    max_overflow=10,
+    connect_args=_connect_args,
 )
 
 AsyncSessionLocal = async_sessionmaker(
@@ -101,7 +105,6 @@ class AnalysisHistory(Base):
     file_name = Column(String(512), nullable=False)
     file_hash = Column(String(64), nullable=False, index=True)
 
-    # JSON blobs — stored as Text; serialised/deserialised in analysis_history.py
     raw_data = Column(Text, nullable=True)
     clean_data = Column(Text, nullable=True)
     stats_summary = Column(Text, nullable=True)
@@ -144,18 +147,10 @@ class AnalysisMetadata(Base):
     analysis = relationship("AnalysisHistory", back_populates="metadata_row")
 
 
-# ── Session helper ────────────────────────────────────────────────────────────
+# ── Session helpers ───────────────────────────────────────────────────────────
 
 @asynccontextmanager
 async def get_session():
-    """
-    Async context manager that yields a SQLAlchemy AsyncSession.
-
-    Example
-    -------
-    async with get_session() as session:
-        user = await session.get(User, user_id)
-    """
     async with AsyncSessionLocal() as session:
         try:
             yield session
@@ -165,18 +160,7 @@ async def get_session():
             raise
 
 
-# ── FastAPI dependency ────────────────────────────────────────────────────────
-
 async def get_db() -> AsyncSession:
-    """
-    FastAPI dependency that yields a database session per request.
-
-    Usage in a route
-    ----------------
-    @router.get("/")
-    async def my_route(db: AsyncSession = Depends(get_db)):
-        ...
-    """
     async with AsyncSessionLocal() as session:
         try:
             yield session
@@ -192,7 +176,7 @@ async def init_db() -> None:
     """Create all tables if they do not exist. Called once at application startup."""
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
-    logger.info("Database tables initialised (PostgreSQL)")
+    logger.info("Database tables initialised (PostgreSQL / Neon)")
 
 
 async def drop_all() -> None:

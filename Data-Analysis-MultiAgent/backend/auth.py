@@ -1,8 +1,8 @@
-"""
+﻿"""
 auth.py
 ───────
 Authentication helpers:
-  • bcrypt password hashing / verification  (replaces the old SHA-256 approach)
+  • bcrypt password hashing / verification
   • JWT access-token creation and verification via python-jose
   • Async CRUD functions for user registration and login
 """
@@ -11,6 +11,9 @@ import logging
 import os
 from datetime import datetime, timedelta, timezone
 from typing import Optional
+
+from dotenv import load_dotenv
+load_dotenv()
 
 from jose import JWTError, jwt
 from passlib.context import CryptContext
@@ -28,19 +31,17 @@ JWT_SECRET = os.getenv("JWT_SECRET", "change_this_secret_in_production")
 JWT_ALGORITHM = os.getenv("JWT_ALGORITHM", "HS256")
 JWT_EXPIRE_MINUTES = int(os.getenv("JWT_EXPIRE_MINUTES", "1440"))  # 24 h
 
-# bcrypt context — auto_deprecated keeps old hashes working while upgrading
+# bcrypt context
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
 
 # ── Password helpers ──────────────────────────────────────────────────────────
 
 def hash_password(plain: str) -> str:
-    """Return a bcrypt hash of *plain*."""
     return pwd_context.hash(plain)
 
 
 def verify_password(plain: str, hashed: str) -> bool:
-    """Return True if *plain* matches the stored bcrypt *hashed* value."""
     try:
         return pwd_context.verify(plain, hashed)
     except Exception as exc:
@@ -51,13 +52,6 @@ def verify_password(plain: str, hashed: str) -> bool:
 # ── JWT helpers ───────────────────────────────────────────────────────────────
 
 def create_access_token(user_id: int, email: str) -> str:
-    """
-    Issue a signed JWT containing the user's ID and email.
-
-    Returns
-    -------
-    str — compact serialised JWT string
-    """
     expire = datetime.now(tz=timezone.utc) + timedelta(minutes=JWT_EXPIRE_MINUTES)
     payload = {
         "sub": str(user_id),
@@ -69,14 +63,6 @@ def create_access_token(user_id: int, email: str) -> str:
 
 
 def verify_access_token(token: str) -> Optional[dict]:
-    """
-    Decode and validate a JWT string.
-
-    Returns
-    -------
-    dict with keys ``sub`` (user_id str) and ``email`` if valid,
-    or ``None`` if expired / malformed.
-    """
     try:
         payload = jwt.decode(token, JWT_SECRET, algorithms=[JWT_ALGORITHM])
         user_id: str = payload.get("sub")
@@ -92,26 +78,12 @@ def verify_access_token(token: str) -> Optional[dict]:
 # ── User CRUD ─────────────────────────────────────────────────────────────────
 
 async def register_user(db: AsyncSession, email: str, password: str) -> dict:
-    """
-    Create a new user.
-
-    Parameters
-    ----------
-    db       : active AsyncSession from FastAPI dependency injection
-    email    : must be unique
-    password : plain-text; hashed with bcrypt before storage
-
-    Returns
-    -------
-    dict with ``success``, ``message``, and on success ``user_id`` / ``email``
-    """
     if not email or not password:
         return {"success": False, "message": "Email and password are required"}
 
     if len(password) < 6:
         return {"success": False, "message": "Password must be at least 6 characters"}
 
-    # Duplicate check
     result = await db.execute(select(User).where(User.email == email))
     if result.scalar_one_or_none() is not None:
         return {"success": False, "message": "Email already registered. Please log in instead."}
@@ -119,7 +91,7 @@ async def register_user(db: AsyncSession, email: str, password: str) -> dict:
     user = User(email=email, password_hash=hash_password(password))
     db.add(user)
     try:
-        await db.flush()   # populate user.id without committing
+        await db.flush()
         await db.refresh(user)
     except IntegrityError:
         await db.rollback()
@@ -135,13 +107,6 @@ async def register_user(db: AsyncSession, email: str, password: str) -> dict:
 
 
 async def login_user(db: AsyncSession, email: str, password: str) -> dict:
-    """
-    Authenticate a user and return a signed JWT on success.
-
-    Returns
-    -------
-    dict with ``success``, ``message``, ``access_token`` (str), and ``user`` (dict)
-    """
     if not email or not password:
         return {"success": False, "message": "Email and password are required"}
 
@@ -154,6 +119,9 @@ async def login_user(db: AsyncSession, email: str, password: str) -> dict:
 
     token = create_access_token(user.id, user.email)
     logger.info("User logged in: %s (id=%d)", email, user.id)
+
+    # FIX: Return datetime objects directly (not .isoformat() strings)
+    # Pydantic UserResponse expects datetime, not str
     return {
         "success": True,
         "message": "Login successful!",
@@ -162,18 +130,16 @@ async def login_user(db: AsyncSession, email: str, password: str) -> dict:
         "user": {
             "id": user.id,
             "email": user.email,
-            "created_at": user.created_at.isoformat(),
-            "updated_at": user.updated_at.isoformat(),
+            "created_at": user.created_at,
+            "updated_at": user.updated_at,
         },
     }
 
 
 async def get_user_by_id(db: AsyncSession, user_id: int) -> Optional[User]:
-    """Fetch a User row by primary key."""
     return await db.get(User, user_id)
 
 
 async def get_user_by_email(db: AsyncSession, email: str) -> Optional[User]:
-    """Fetch a User row by email address."""
     result = await db.execute(select(User).where(User.email == email))
     return result.scalar_one_or_none()

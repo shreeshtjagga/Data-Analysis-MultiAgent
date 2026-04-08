@@ -1,15 +1,7 @@
-"""
+﻿"""
 core/cache.py
 ─────────────
 Redis client singleton and helper functions for the DataPulse cache layer.
-
-Key design choices
-------------------
-• Single shared connection pool created at import time (lazy-connects on first use).
-• All public functions are async and swallow Redis errors gracefully — a cache
-  miss should never crash an analysis pipeline.
-• Keys are namespaced: ``analysis:<user_id>:<file_hash>``
-• TTL constants come from env vars so they are easy to tune without code changes.
 """
 
 import json
@@ -18,6 +10,11 @@ import math
 import os
 from datetime import datetime, date
 from typing import Any, Optional
+
+from dotenv import load_dotenv
+
+# Load .env before reading env vars
+load_dotenv()
 
 import numpy as np
 import redis.asyncio as aioredis
@@ -58,6 +55,7 @@ def _sanitize_for_json(value: Any) -> Any:
         return _sanitize_for_json(value.tolist())
     return value
 
+
 # ── TTL constants (seconds) ───────────────────────────────────────────────────
 CACHE_TTL_ANALYSIS: int = int(os.getenv("CACHE_TTL_ANALYSIS", str(3 * 24 * 3600)))  # 3 days
 CACHE_TTL_SESSION: int = int(os.getenv("CACHE_TTL_SESSION", str(24 * 3600)))         # 1 day
@@ -67,10 +65,6 @@ _redis_client: Optional[aioredis.Redis] = None
 
 
 def _get_client() -> aioredis.Redis:
-    """
-    Return (or lazily create) the shared Redis connection pool.
-    Uses a connection pool with health-check on each command.
-    """
     global _redis_client
     if _redis_client is None:
         redis_url = os.getenv("REDIS_URL", "redis://localhost:6379/0")
@@ -82,12 +76,11 @@ def _get_client() -> aioredis.Redis:
             socket_connect_timeout=5,
             retry_on_timeout=True,
         )
-        logger.info("Redis client initialised (%s)", redis_url)
+        logger.info("Redis client initialised (%s)", redis_url.split("@")[-1])  # hide password in logs
     return _redis_client
 
 
 async def close() -> None:
-    """Close the Redis connection pool. Call this on application shutdown."""
     global _redis_client
     if _redis_client is not None:
         await _redis_client.aclose()
@@ -98,25 +91,16 @@ async def close() -> None:
 # ── Key builders ──────────────────────────────────────────────────────────────
 
 def analysis_key(user_id: int, file_hash: str) -> str:
-    """Namespaced key for a cached analysis result."""
     return f"analysis:{user_id}:{file_hash}"
 
 
 def session_key(user_id: int) -> str:
-    """Namespaced key for lightweight session data."""
     return f"session:{user_id}"
 
 
 # ── Core helpers ──────────────────────────────────────────────────────────────
 
 async def get(key: str) -> Optional[Any]:
-    """
-    Retrieve and JSON-deserialise a cached value.
-
-    Returns
-    -------
-    The deserialised Python object, or ``None`` on cache miss / error.
-    """
     try:
         client = _get_client()
         raw = await client.get(key)
@@ -129,13 +113,6 @@ async def get(key: str) -> Optional[Any]:
 
 
 async def set(key: str, value: Any, ttl: int = CACHE_TTL_ANALYSIS) -> bool:
-    """
-    JSON-serialise and store *value* under *key* with the given TTL.
-
-    Returns
-    -------
-    True on success, False if the write failed (logs a warning).
-    """
     try:
         client = _get_client()
         cleaned = _sanitize_for_json(value)
@@ -149,13 +126,6 @@ async def set(key: str, value: Any, ttl: int = CACHE_TTL_ANALYSIS) -> bool:
 
 
 async def delete(key: str) -> bool:
-    """
-    Remove a key from the cache.
-
-    Returns
-    -------
-    True if the key existed and was deleted, False otherwise.
-    """
     try:
         client = _get_client()
         deleted = await client.delete(key)
@@ -166,7 +136,6 @@ async def delete(key: str) -> bool:
 
 
 async def exists(key: str) -> bool:
-    """Return True if *key* currently exists in Redis."""
     try:
         client = _get_client()
         return bool(await client.exists(key))
@@ -176,13 +145,6 @@ async def exists(key: str) -> bool:
 
 
 async def flush_user(user_id: int) -> int:
-    """
-    Delete all cache entries for a given user.
-
-    Returns
-    -------
-    Number of keys deleted.
-    """
     try:
         client = _get_client()
         pattern = f"analysis:{user_id}:*"
@@ -198,7 +160,6 @@ async def flush_user(user_id: int) -> int:
 
 
 async def ping() -> bool:
-    """Health-check the Redis connection. Returns True if reachable."""
     try:
         client = _get_client()
         return await client.ping()
