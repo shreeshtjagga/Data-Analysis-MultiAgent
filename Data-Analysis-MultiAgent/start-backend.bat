@@ -20,6 +20,7 @@ pip install -r requirements.txt --quiet
 echo [3/3] Starting FastAPI backend on http://localhost:8000
 echo       (Press Ctrl+C to stop, then run: cd frontend ^&^& npm run dev)
 echo.
+
 echo  IMPORTANT: Make sure .env file exists with your DB credentials!
 echo.
 

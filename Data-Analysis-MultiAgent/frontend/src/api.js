@@ -10,19 +10,22 @@
 
 const BASE = "/api";
 
-// ── Token storage (in-memory only — never localStorage in this app) ──────────
-let _token = null;
+// ── Token storage (Local Storage for persistence across refreshes) ──────────
 
 export function setToken(token) {
-  _token = token;
+  if (token) {
+    localStorage.setItem("datapulse_token", token);
+  } else {
+    localStorage.removeItem("datapulse_token");
+  }
 }
 
 export function getToken() {
-  return _token;
+  return localStorage.getItem("datapulse_token");
 }
 
 export function clearToken() {
-  _token = null;
+  localStorage.removeItem("datapulse_token");
 }
 
 // ── Core fetch helper ─────────────────────────────────────────────────────────
@@ -31,8 +34,9 @@ async function apiFetch(path, options = {}) {
   const headers = { ...(options.headers || {}) };
 
   // Attach JWT unless caller explicitly opts out
-  if (_token && options.withAuth !== false) {
-    headers["Authorization"] = `Bearer ${_token}`;
+  const token = getToken();
+  if (token && options.withAuth !== false) {
+    headers["Authorization"] = `Bearer ${token}`;
   }
 
   // Only set Content-Type for JSON bodies — let browser set it for FormData
@@ -45,7 +49,9 @@ async function apiFetch(path, options = {}) {
     headers,
   });
 
-  if (response.status === 401) {
+  // If authorization fails on a PROTECTED route, clear token and log out.
+  // We ignore /auth/login and /auth/google so their specific error messages pass through.
+  if (response.status === 401 && !path.startsWith("/auth/login") && !path.startsWith("/auth/google")) {
     clearToken();
     const authErr = new Error("Session expired — please log in again");
     authErr.status = 401;
@@ -81,6 +87,14 @@ export async function apiLogin(email, password) {
     method: "POST",
     withAuth: false,
     body: JSON.stringify({ email, password }),
+  });
+}
+
+export async function apiGoogleLogin(credential) {
+  return apiFetch("/auth/google", {
+    method: "POST",
+    withAuth: false,
+    body: JSON.stringify({ credential }),
   });
 }
 

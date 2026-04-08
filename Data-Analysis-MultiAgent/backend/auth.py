@@ -1,4 +1,4 @@
-﻿"""
+"""
 auth.py
 ───────
 Authentication helpers:
@@ -143,3 +143,50 @@ async def get_user_by_id(db: AsyncSession, user_id: int) -> Optional[User]:
 async def get_user_by_email(db: AsyncSession, email: str) -> Optional[User]:
     result = await db.execute(select(User).where(User.email == email))
     return result.scalar_one_or_none()
+
+from google.oauth2 import id_token
+from google.auth.transport import requests as google_requests
+
+GOOGLE_CLIENT_ID = os.getenv("GOOGLE_CLIENT_ID")
+
+def verify_google_token(token: str) -> Optional[dict]:
+    try:
+        idinfo = id_token.verify_oauth2_token(token, google_requests.Request(), GOOGLE_CLIENT_ID)
+        return idinfo
+    except Exception as exc:
+        logger.error("Google token verification failed: %s", exc)
+        return None
+
+async def login_google_user(db: AsyncSession, email: str, google_id: str) -> dict:
+    if not email:
+        return {"success": False, "message": "Email is required"}
+
+    result = await db.execute(select(User).where(User.email == email))
+    user: Optional[User] = result.scalar_one_or_none()
+
+    if user is None:
+        user = User(email=email, password_hash="google_oauth_no_password")
+        db.add(user)
+        try:
+            await db.flush()
+            await db.refresh(user)
+            logger.info("Google User registered: %s (id=%d)", email, user.id)
+        except IntegrityError:
+            await db.rollback()
+            return {"success": False, "message": "Could not register Google user"}
+
+    token = create_access_token(user.id, user.email)
+    logger.info("Google User logged in: %s (id=%d)", email, user.id)
+
+    return {
+        "success": True,
+        "message": "Login successful!",
+        "access_token": token,
+        "token_type": "bearer",
+        "user": {
+            "id": user.id,
+            "email": user.email,
+            "created_at": user.created_at,
+            "updated_at": user.updated_at,
+        },
+    }
