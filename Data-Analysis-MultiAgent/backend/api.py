@@ -24,7 +24,9 @@ from contextlib import asynccontextmanager
 from typing import Annotated, Optional
 
 import pandas as pd
-from fastapi import Body, Depends, FastAPI, File, HTTPException, UploadFile, status
+from fastapi import Body, Depends, FastAPI, File, HTTPException, UploadFile, status, Request
+from fastapi.responses import JSONResponse
+import traceback
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -43,6 +45,8 @@ from .auth import (
     login_user,
     register_user,
     verify_access_token,
+    verify_google_token,
+    login_google_user,
 )
 from .core.graph import run_pipeline
 from .db import get_db, init_db
@@ -97,6 +101,13 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+@app.exception_handler(Exception)
+async def catch_all_exception_handler(request: Request, exc: Exception):
+    error_trace = "".join(traceback.format_exception(type(exc), exc, exc.__traceback__))
+    logger.error(f"Unhandled error: {error_trace}")
+    return JSONResponse(status_code=500, content={"detail": str(exc), "trace": error_trace})
+
 
 
 # ── Auth dependency ───────────────────────────────────────────────────────────
@@ -163,6 +174,42 @@ async def login(body: UserLogin, db: AsyncSession = Depends(get_db)):
             detail=result["message"],
             headers={"WWW-Authenticate": "Bearer"},
         )
+    user_obj = result["user"]
+    return TokenResponse(
+        access_token=result["access_token"],
+        token_type="bearer",
+        user=UserResponse(
+            id=user_obj["id"],
+            email=user_obj["email"],
+            created_at=user_obj["created_at"],
+            updated_at=user_obj["updated_at"],
+        ),
+    )
+
+
+@app.post("/auth/google", response_model=TokenResponse, tags=["auth"])
+async def login_with_google(request: Request, db: AsyncSession = Depends(get_db)):
+    body = await request.json()
+    credential = body.get("credential")
+    if not credential:
+        raise HTTPException(status_code=400, detail="Missing Google credential")
+
+    idinfo = verify_google_token(credential)
+    if not idinfo:
+        raise HTTPException(status_code=401, detail="Invalid Google token")
+
+    email = idinfo.get("email")
+    google_id = idinfo.get("sub")
+    if not email:
+        raise HTTPException(status_code=400, detail="No email provided by Google")
+
+    result = await login_google_user(db, email, google_id)
+    if not result["success"]:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail=result["message"],
+        )
+    
     user_obj = result["user"]
     return TokenResponse(
         access_token=result["access_token"],
