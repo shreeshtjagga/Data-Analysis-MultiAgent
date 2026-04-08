@@ -74,11 +74,11 @@ async function apiFetch(path, options = {}) {
 
 // ── Auth ──────────────────────────────────────────────────────────────────────
 
-export async function apiRegister(email, password) {
+export async function apiRegister(email, password, name = null) {
   return apiFetch("/auth/register", {
     method: "POST",
     withAuth: false,
-    body: JSON.stringify({ email, password }),
+    body: JSON.stringify({ email, password, name }),
   });
 }
 

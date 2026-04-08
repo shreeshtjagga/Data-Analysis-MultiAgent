@@ -250,6 +250,7 @@ function LoginForm({ onLogin }) {
 }
 
 function RegisterForm() {
+  const [name, setName] = useState("");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [confirm, setConfirm] = useState("");
@@ -264,9 +265,9 @@ function RegisterForm() {
     if (password.length < 6) { setError("Password must be at least 6 characters"); return; }
     setLoading(true);
     try {
-      await apiRegister(email, password);
+      await apiRegister(email, password, name);
       setSuccess("Account created! Switch to the Sign In tab to log in.");
-      setEmail(""); setPassword(""); setConfirm("");
+      setName(""); setEmail(""); setPassword(""); setConfirm("");
     } catch (err) {
       setError(err.message || "Registration failed");
     } finally {
@@ -278,6 +279,8 @@ function RegisterForm() {
     <>
       {error   && <div style={s.alert("error")}>{error}</div>}
       {success && <div style={s.alert("success")}>{success}</div>}
+      <label style={s.label}>Full Name</label>
+      <input id="reg-name" style={s.input} type="text" placeholder="John Doe" value={name} onChange={(e) => setName(e.target.value)} />
       <label style={s.label}>Email address</label>
       <input id="reg-email" style={s.input} type="email" placeholder="you@example.com" value={email} onChange={(e) => setEmail(e.target.value)} />
       <label style={s.label}>Password</label>

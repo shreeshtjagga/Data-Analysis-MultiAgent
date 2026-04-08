@@ -159,7 +159,7 @@ async def health_check(db: AsyncSession = Depends(get_db)):
 
 @app.post("/auth/register", response_model=AuthResponse, status_code=status.HTTP_201_CREATED, tags=["auth"])
 async def register(body: UserRegister, db: AsyncSession = Depends(get_db)):
-    result = await register_user(db, body.email, body.password)
+    result = await register_user(db, body.email, body.password, body.name)
     if not result["success"]:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=result["message"])
     return AuthResponse(success=True, message=result["message"])
@@ -200,10 +200,11 @@ async def login_with_google(request: Request, db: AsyncSession = Depends(get_db)
 
     email = idinfo.get("email")
     google_id = idinfo.get("sub")
+    name = idinfo.get("name")
     if not email:
         raise HTTPException(status_code=400, detail="No email provided by Google")
 
-    result = await login_google_user(db, email, google_id)
+    result = await login_google_user(db, email, google_id, name)
     if not result["success"]:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
@@ -233,6 +234,7 @@ async def me(
         raise HTTPException(status_code=404, detail="User not found")
     return UserResponse(
         id=user.id,
+        name=user.name,
         email=user.email,
         created_at=user.created_at,
         updated_at=user.updated_at,

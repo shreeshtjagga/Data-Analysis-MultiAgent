@@ -25,10 +25,11 @@ class UserRegister(BaseModel):
 
     model_config = ConfigDict(
         json_schema_extra={
-            "example": {"email": "user@example.com", "password": "securepassword123"}
+            "example": {"name": "John Doe", "email": "user@example.com", "password": "securepassword123"}
         }
     )
 
+    name: Optional[str] = None
     email: EmailStr
     password: str = Field(..., min_length=6, description="At least 6 characters")
 
@@ -59,6 +60,7 @@ class UserResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
     id: int
+    name: Optional[str] = None
     email: str
     created_at: datetime
     updated_at: datetime

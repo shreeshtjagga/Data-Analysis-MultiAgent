@@ -77,7 +77,7 @@ def verify_access_token(token: str) -> Optional[dict]:
 
 # ── User CRUD ─────────────────────────────────────────────────────────────────
 
-async def register_user(db: AsyncSession, email: str, password: str) -> dict:
+async def register_user(db: AsyncSession, email: str, password: str, name: Optional[str] = None) -> dict:
     if not email or not password:
         return {"success": False, "message": "Email and password are required"}
 
@@ -88,7 +88,7 @@ async def register_user(db: AsyncSession, email: str, password: str) -> dict:
     if result.scalar_one_or_none() is not None:
         return {"success": False, "message": "Email already registered. Please log in instead."}
 
-    user = User(email=email, password_hash=hash_password(password))
+    user = User(email=email, password_hash=hash_password(password), name=name)
     db.add(user)
     try:
         await db.flush()
@@ -102,6 +102,7 @@ async def register_user(db: AsyncSession, email: str, password: str) -> dict:
         "success": True,
         "message": "Registration successful! Please log in.",
         "user_id": user.id,
+        "name": user.name,
         "email": user.email,
     }
 
@@ -129,6 +130,7 @@ async def login_user(db: AsyncSession, email: str, password: str) -> dict:
         "token_type": "bearer",
         "user": {
             "id": user.id,
+            "name": user.name,
             "email": user.email,
             "created_at": user.created_at,
             "updated_at": user.updated_at,
@@ -157,7 +159,7 @@ def verify_google_token(token: str) -> Optional[dict]:
         logger.error("Google token verification failed: %s", exc)
         return None
 
-async def login_google_user(db: AsyncSession, email: str, google_id: str) -> dict:
+async def login_google_user(db: AsyncSession, email: str, google_id: str, name: Optional[str] = None) -> dict:
     if not email:
         return {"success": False, "message": "Email is required"}
 
@@ -165,7 +167,7 @@ async def login_google_user(db: AsyncSession, email: str, google_id: str) -> dic
     user: Optional[User] = result.scalar_one_or_none()
 
     if user is None:
-        user = User(email=email, password_hash="google_oauth_no_password")
+        user = User(email=email, password_hash="google_oauth_no_password", name=name)
         db.add(user)
         try:
             await db.flush()
@@ -185,6 +187,7 @@ async def login_google_user(db: AsyncSession, email: str, google_id: str) -> dic
         "token_type": "bearer",
         "user": {
             "id": user.id,
+            "name": user.name,
             "email": user.email,
             "created_at": user.created_at,
             "updated_at": user.updated_at,
