@@ -1,6 +1,33 @@
-﻿version: "3.9"
+version: "3.9"
 
 services:
+  # ── Local PostgreSQL Database ────────────────────────────────────────────────
+  db:
+    image: postgres:15-alpine
+    container_name: datapulse_db
+    ports:
+      - "5432:5432"
+    environment:
+      POSTGRES_USER: datapulse
+      POSTGRES_PASSWORD: datapulse_secret
+      POSTGRES_DB: datapulse
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U datapulse -d datapulse"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ── Local Redis Cache ────────────────────────────────────────────────────────
+  redis:
+    image: redis:alpine
+    container_name: datapulse_redis
+    ports:
+      - "6379:6379"
+    restart: unless-stopped
+
   # ── FastAPI Backend ──────────────────────────────────────────────────────────
   backend:
     build:
@@ -13,6 +40,11 @@ services:
       - .env
     environment:
       - APP_ENV=development
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_started
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
@@ -34,3 +66,6 @@ services:
     depends_on:
       - backend
     restart: unless-stopped
+
+volumes:
+  postgres_data:
