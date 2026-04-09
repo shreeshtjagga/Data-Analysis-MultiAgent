@@ -8,9 +8,10 @@
  *  • Clears token and surfaces 401 to caller (no forced hard redirect)
  */
 
-// If deployed on Vercel, use the VITE_API_URL env variable (which points to Railway).
-// Otherwise, fallback to "/api" for local Vite proxy development.
-const BASE = import.meta.env.VITE_API_URL || "/api";
+// We use "/api" for everything. 
+// Locally, Vite proxies this to http://localhost:8000
+// In Production, vercel.json proxies this to the Render backend.
+const BASE = "/api";
 
 // ── Token storage (Local Storage for persistence across refreshes) ──────────
 
