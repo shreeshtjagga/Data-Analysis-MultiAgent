@@ -314,10 +314,26 @@ async def analyze(
     result["charts"] = _serialize_charts(result.get("charts") or {})
 
     # Make DataFrames JSON-safe
+    import json
+    import math
+
+    def sanitize_floats(obj):
+        if isinstance(obj, float):
+            return None if math.isnan(obj) or math.isinf(obj) else obj
+        elif isinstance(obj, dict):
+            return {k: sanitize_floats(v) for k, v in obj.items()}
+        elif isinstance(obj, list):
+            return [sanitize_floats(x) for x in obj]
+        return obj
+
     for key in ("raw_df", "clean_df"):
         df_val = result.get(key)
-        if hasattr(df_val, "to_dict"):
-            result[key] = df_val.head(100).to_dict(orient="records")
+        if hasattr(df_val, "to_json"):
+            # to_json converts NaNs to valid JSON nulls
+            result[key] = json.loads(df_val.head(100).to_json(orient="records"))
+
+    # Sanitize the rest of the dictionary (like stats_summary) for NaN/Inf
+    result = sanitize_floats(result)
 
     return {"from_cache": False, **result}
 
