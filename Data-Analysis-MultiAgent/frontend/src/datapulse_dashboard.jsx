@@ -280,7 +280,7 @@ export default function DataPulse({ user, onLogout }) {
   if (phase === "upload") return (
     <div style={s.app}>
       <div style={s.topbar}>
-        <span style={s.brand}>◈ DataPulse</span>
+        <span style={s.brand}>◈ Data Pulse</span>
         <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
           <span style={{ fontSize: "0.78rem", color: "#475569", fontFamily: "monospace" }}>{user?.email}</span>
           <button style={{ ...s.btn, fontSize: "0.72rem", padding: "7px 14px", background: "transparent", border: "1px solid rgba(99,102,241,0.2)", color: "#818cf8" }} onClick={onLogout}>Logout</button>
@@ -309,7 +309,7 @@ export default function DataPulse({ user, onLogout }) {
   // ── Analyzing screen ───────────────────────────────────────────────────────
   if (phase === "analyzing") return (
     <div style={s.app}>
-      <div style={s.topbar}><span style={s.brand}>◈ DataPulse</span></div>
+      <div style={s.topbar}><span style={s.brand}>◈ Data Pulse</span></div>
       <div style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center" }}>
         <div style={{ maxWidth: "440px", width: "100%", padding: "24px" }}>
           <div style={{ fontFamily: "'Syne',sans-serif", fontSize: "1.1rem", fontWeight: 700, color: "#e2e8f0", marginBottom: "24px" }}>Running pipeline…</div>
@@ -340,7 +340,7 @@ export default function DataPulse({ user, onLogout }) {
       {/* Topbar */}
       <div style={s.topbar}>
         <div style={{ display: "flex", alignItems: "center", gap: "12px" }}>
-          <span style={s.brand}>◈ DataPulse</span>
+          <span style={s.brand}>◈ Data Pulse</span>
           <span style={{ fontFamily: "monospace", fontSize: "0.72rem", background: "rgba(99,102,241,0.12)", border: "1px solid rgba(99,102,241,0.22)", color: "#818cf8", padding: "2px 10px", borderRadius: "20px" }}>{fileName}</span>
           {result?.from_cache && <span style={{ fontSize: "0.7rem", color: "#10b981", background: "rgba(16,185,129,0.08)", border: "1px solid rgba(16,185,129,0.2)", padding: "2px 8px", borderRadius: "12px" }}>CACHED</span>}
         </div>

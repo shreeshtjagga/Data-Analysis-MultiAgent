@@ -64,7 +64,7 @@ from .models.schemas import (
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(name)s] %(levelname)s %(message)s")
 
-MAX_UPLOAD_BYTES = int(os.getenv("MAX_UPLOAD_BYTES", str(25 * 1024 * 1024)))
+MAX_UPLOAD_BYTES = int(os.getenv("MAX_UPLOAD_BYTES", str(30 * 1024 * 1024)))
 MAX_QUESTION_CHARS = int(os.getenv("CHAT_MAX_QUESTION_CHARS", "1200"))
 MAX_CONTEXT_BYTES = int(os.getenv("CHAT_MAX_CONTEXT_BYTES", str(128 * 1024)))
 READ_CHUNK_BYTES = 1024 * 1024
@@ -257,8 +257,9 @@ async def analyze(
     returns the cached result immediately without re-running the pipeline.
     """
     filename = file.filename or ""
-    if not filename.lower().endswith(".csv"):
-        raise HTTPException(status_code=400, detail="Only CSV files are accepted")
+    parsed_ext = filename.lower().split('.')[-1] if '.' in filename else ""
+    if parsed_ext not in ("csv", "xlsx", "xls"):
+        raise HTTPException(status_code=400, detail="Only CSV and Excel files are accepted")
 
     total = 0
     chunks: list[bytes] = []
@@ -290,9 +291,12 @@ async def analyze(
 
     # Run full pipeline
     try:
-        df = pd.read_csv(io.BytesIO(file_bytes))
+        if parsed_ext == "csv":
+            df = pd.read_csv(io.BytesIO(file_bytes))
+        else:
+            df = pd.read_excel(io.BytesIO(file_bytes), engine="openpyxl")
     except Exception as exc:
-        raise HTTPException(status_code=422, detail=f"Could not parse CSV: {exc}")
+        raise HTTPException(status_code=422, detail=f"Could not parse file: {exc}")
 
     state = run_pipeline(df)
     result = state.model_dump()
