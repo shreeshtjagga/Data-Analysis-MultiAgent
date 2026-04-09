@@ -79,6 +79,39 @@ def verify_access_token(token: str) -> Optional[dict]:
         return None
 
 
+# ── Refresh token helpers (HttpOnly cookie) ─────────────────────────────────
+REFRESH_SECRET = os.getenv("REFRESH_SECRET", JWT_SECRET)
+REFRESH_EXPIRE_DAYS = int(os.getenv("REFRESH_EXPIRE_DAYS", "7"))
+
+
+def create_refresh_token(user_id: int, email: str) -> str:
+    expire = datetime.now(tz=timezone.utc) + timedelta(days=REFRESH_EXPIRE_DAYS)
+    payload = {
+        "sub": str(user_id),
+        "email": email,
+        "exp": expire,
+        "iat": datetime.now(tz=timezone.utc),
+        "typ": "refresh",
+    }
+    return jwt.encode(payload, REFRESH_SECRET, algorithm=JWT_ALGORITHM)
+
+
+def verify_refresh_token(token: str) -> Optional[dict]:
+    try:
+        payload = jwt.decode(token, REFRESH_SECRET, algorithms=[JWT_ALGORITHM])
+        # ensure token type is refresh
+        if payload.get("typ") != "refresh":
+            return None
+        user_id: str = payload.get("sub")
+        email: str = payload.get("email")
+        if user_id is None or email is None:
+            return None
+        return {"sub": user_id, "email": email}
+    except JWTError as exc:
+        logger.debug("Refresh token verification failed: %s", exc)
+        return None
+
+
 # ── User CRUD ─────────────────────────────────────────────────────────────────
 
 async def register_user(db: AsyncSession, email: str, password: str, name: Optional[str] = None) -> dict:

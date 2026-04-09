@@ -20,12 +20,11 @@ import io
 import logging
 import os
 import json
-import time
 from contextlib import asynccontextmanager
 from typing import Annotated, Optional
 
 import pandas as pd
-from fastapi import Body, Depends, FastAPI, File, HTTPException, UploadFile, status, Request
+from fastapi import Body, Depends, FastAPI, File, HTTPException, UploadFile, status, Request, Response
 from fastapi.responses import JSONResponse
 import traceback
 from fastapi.middleware.cors import CORSMiddleware
@@ -48,6 +47,9 @@ from .auth import (
     verify_access_token,
     verify_google_token,
     login_google_user,
+    create_refresh_token,
+    verify_refresh_token,
+    REFRESH_EXPIRE_DAYS,
 )
 from .core.graph import run_pipeline, PIPELINE_VERSION
 from .core.utils import truncate_stats_for_llm
@@ -70,6 +72,8 @@ MAX_UPLOAD_BYTES = int(os.getenv("MAX_UPLOAD_BYTES", str(30 * 1024 * 1024)))
 MAX_QUESTION_CHARS = int(os.getenv("CHAT_MAX_QUESTION_CHARS", "1200"))
 MAX_CONTEXT_BYTES = int(os.getenv("CHAT_MAX_CONTEXT_BYTES", str(128 * 1024)))
 READ_CHUNK_BYTES = 1024 * 1024
+CHAT_RATE_LIMIT = int(os.getenv("CHAT_RATE_LIMIT", "10"))
+CHAT_RATE_WINDOW = int(os.getenv("CHAT_RATE_WINDOW_SECONDS", "60"))
 
 
 # ── Lifespan ──────────────────────────────────────────────────────────────────
@@ -177,7 +181,7 @@ async def register(body: UserRegister, db: AsyncSession = Depends(get_db)):
 
 
 @app.post("/auth/login", response_model=TokenResponse, tags=["auth"])
-async def login(body: UserLogin, db: AsyncSession = Depends(get_db)):
+async def login(body: UserLogin, db: AsyncSession = Depends(get_db), response: Response = None):
     result = await login_user(db, body.email, body.password)
     if not result["success"]:
         raise HTTPException(
@@ -186,6 +190,23 @@ async def login(body: UserLogin, db: AsyncSession = Depends(get_db)):
             headers={"WWW-Authenticate": "Bearer"},
         )
     user_obj = result["user"]
+    # create an HttpOnly refresh cookie and return the short-lived access token
+    try:
+        refresh_token = create_refresh_token(user_obj["id"], user_obj["email"])
+        # set cookie path to '/' so it is sent for backend /auth/* endpoints
+        if response is not None:
+            response.set_cookie(
+                key="datapulse_refresh",
+                value=refresh_token,
+                httponly=True,
+                secure=(APP_ENV == "production"),
+                samesite="lax",
+                max_age=REFRESH_EXPIRE_DAYS * 24 * 3600,
+                path="/",
+            )
+    except Exception:
+        # If refresh creation fails, continue without cookie (login still returns access token)
+        logger.exception("Failed to create refresh token")
     return TokenResponse(
         access_token=result["access_token"],
         token_type="bearer",
@@ -199,7 +220,7 @@ async def login(body: UserLogin, db: AsyncSession = Depends(get_db)):
 
 
 @app.post("/auth/google", response_model=TokenResponse, tags=["auth"])
-async def login_with_google(request: Request, db: AsyncSession = Depends(get_db)):
+async def login_with_google(request: Request, db: AsyncSession = Depends(get_db), response: Response = None):
     body = await request.json()
     credential = body.get("credential")
     if not credential:
@@ -223,6 +244,22 @@ async def login_with_google(request: Request, db: AsyncSession = Depends(get_db)
         )
     
     user_obj = result["user"]
+    # set refresh cookie
+    try:
+        refresh_token = create_refresh_token(user_obj["id"], user_obj["email"])
+        if response is not None:
+            response.set_cookie(
+                key="datapulse_refresh",
+                value=refresh_token,
+                httponly=True,
+                secure=(APP_ENV == "production"),
+                samesite="lax",
+                max_age=REFRESH_EXPIRE_DAYS * 24 * 3600,
+                path="/",
+            )
+    except Exception:
+        logger.exception("Failed to create refresh token for google login")
+
     return TokenResponse(
         access_token=result["access_token"],
         token_type="bearer",
@@ -233,6 +270,57 @@ async def login_with_google(request: Request, db: AsyncSession = Depends(get_db)
             updated_at=user_obj["updated_at"],
         ),
     )
+
+
+
+@app.post("/auth/refresh", response_model=TokenResponse, tags=["auth"])
+async def refresh_token(request: Request, response: Response, db: AsyncSession = Depends(get_db)):
+    """Exchange an HttpOnly refresh cookie for a new access token.
+    The refresh token is rotated on successful refresh.
+    """
+    token = request.cookies.get("datapulse_refresh")
+    if not token:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Missing refresh token")
+    payload = verify_refresh_token(token)
+    if payload is None:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid or expired refresh token")
+    user_id = int(payload["sub"])
+    user = await get_user_by_id(db, user_id)
+    if user is None:
+        raise HTTPException(status_code=404, detail="User not found")
+
+    access_token = create_access_token(user.id, user.email)
+    try:
+        new_refresh = create_refresh_token(user.id, user.email)
+        response.set_cookie(
+            key="datapulse_refresh",
+            value=new_refresh,
+            httponly=True,
+            secure=(APP_ENV == "production"),
+            samesite="lax",
+            max_age=REFRESH_EXPIRE_DAYS * 24 * 3600,
+            path="/",
+        )
+    except Exception:
+        logger.exception("Failed to rotate refresh token")
+
+    return TokenResponse(
+        access_token=access_token,
+        token_type="bearer",
+        user=UserResponse(
+            id=user.id,
+            email=user.email,
+            created_at=user.created_at,
+            updated_at=user.updated_at,
+        ),
+    )
+
+
+@app.post("/auth/logout", tags=["auth"])
+async def logout(response: Response):
+    # Clear refresh cookie
+    response.delete_cookie("datapulse_refresh", path="/")
+    return {"success": True, "message": "Logged out"}
 
 
 @app.get("/auth/me", response_model=UserResponse, tags=["auth"])
@@ -390,8 +478,6 @@ async def remove_analysis(
     return DeleteResponse(success=True, message=result["message"])
 
 
-CHAT_LIMITS = {}
-
 @app.post("/chat", tags=["analysis"])
 async def chat_with_analysis(
     body: dict = Body(...),
@@ -399,14 +485,19 @@ async def chat_with_analysis(
 ):
     """Answer a user question about the current analysis context."""
     
-    # Rate Limiting: Max 10 requests per minute
-    now = time.time()
-    history = CHAT_LIMITS.get(user_id, [])
-    history = [t for t in history if now - t < 60]
-    if len(history) >= 10:
-        raise HTTPException(status_code=429, detail="Too many chat requests. Please wait a minute.")
-    history.append(now)
-    CHAT_LIMITS[user_id] = history
+    # Redis-backed counter shared across workers/deploys.
+    # Key: ratelimit:chat:{user_id} with TTL = CHAT_RATE_WINDOW seconds.
+    try:
+        key = f"ratelimit:chat:{user_id}"
+        count = await redis_cache.increment_with_ttl(key, CHAT_RATE_WINDOW)
+        if count > CHAT_RATE_LIMIT:
+            raise HTTPException(status_code=429, detail=f"Too many chat requests. Please wait {CHAT_RATE_WINDOW} seconds.")
+    except Exception as exc:
+        logger.error("Redis rate limiter failed for user %s: %s", user_id, exc)
+        raise HTTPException(
+            status_code=503,
+            detail="Rate limiter unavailable. Please retry shortly.",
+        )
 
     question = (body.get("question") or "").strip()
     context = body.get("context") or {}
