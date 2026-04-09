@@ -22,10 +22,17 @@ def load_csv(file_path: str) -> pd.DataFrame:
     return df
 
 
-def clean_dataframe(df: pd.DataFrame) -> pd.DataFrame:
-    
+def clean_dataframe(df: pd.DataFrame) -> tuple[pd.DataFrame, list]:
+    """
+    Clean the dataframe: strip strings, drop duplicates, impute missing values.
+    Returns (cleaned_df, imputation_records) where each record is a dict with:
+      - column: column name
+      - strategy: 'median' or 'mode'
+      - fill_value: the value used to fill
+      - count: number of cells that were imputed
+    """
     initial_rows = len(df)
-
+    logs = []
 
     str_cols = df.select_dtypes(include=["object"]).columns
     for col in str_cols:
@@ -38,20 +45,35 @@ def clean_dataframe(df: pd.DataFrame) -> pd.DataFrame:
 
     num_cols = df.select_dtypes(include=[np.number]).columns
     for col in num_cols:
-        if df[col].isna().any():
+        missing_count = int(df[col].isna().sum())
+        if missing_count > 0:
             median_val = df[col].median()
             df[col] = df[col].fillna(median_val)
-            logger.info("Filled missing values in '%s' with median: %s", col, median_val)
+            logger.info("Filled %d missing values in '%s' with median: %s", missing_count, col, median_val)
+            logs.append({
+                "column": col,
+                "strategy": "median",
+                "fill_value": float(median_val) if pd.notna(median_val) else None,
+                "count": missing_count,
+            })
 
     cat_cols = df.select_dtypes(include=["object"]).columns
     for col in cat_cols:
-        if df[col].isna().any():
+        missing_count = int(df[col].isna().sum())
+        if missing_count > 0:
             mode_val = df[col].mode()
             if not mode_val.empty:
-                df[col] = df[col].fillna(mode_val.iloc[0])
-                logger.info("Filled missing values in '%s' with mode: %s", col, mode_val.iloc[0])
+                fill = mode_val.iloc[0]
+                df[col] = df[col].fillna(fill)
+                logger.info("Filled %d missing values in '%s' with mode: %s", missing_count, col, fill)
+                logs.append({
+                    "column": col,
+                    "strategy": "mode",
+                    "fill_value": str(fill),
+                    "count": missing_count,
+                })
 
-    return df.reset_index(drop=True)
+    return df.reset_index(drop=True), logs
 
 
 def detect_column_types(df: pd.DataFrame) -> dict[str, str]:
@@ -91,3 +113,66 @@ def safe_describe(df: pd.DataFrame) -> dict:
         }
 
     return summary
+
+
+# ── Compact keys to keep when slimming numeric stats for LLM prompts ─────────
+_SLIM_NUMERIC_KEYS = ("mean", "median", "std", "min", "max", "skewness", "count")
+
+
+def truncate_stats_for_llm(
+    stats: dict,
+    max_numeric_cols: int = 10,
+    max_correlations: int = 5,
+    max_categorical_cols: int = 15,
+) -> dict:
+    """
+    Return a compact copy of *stats* suitable for LLM prompts.
+    Keeps the most informative columns and strips heavy sub-structures
+    (correlation matrices, full value-count dicts, outlier indices).
+    """
+    truncated = {
+        "row_count": stats.get("row_count"),
+        "column_count": stats.get("column_count"),
+        "data_quality": stats.get("data_quality"),
+        "dataset_profile": stats.get("dataset_profile"),
+        "imputations": stats.get("imputations"),
+        "excluded_columns": stats.get("excluded_columns"),
+    }
+
+    # Numeric — top N by variance (most informative columns first)
+    numeric = stats.get("numeric_columns", {})
+    items = sorted(
+        numeric.items(),
+        key=lambda kv: abs(kv[1].get("variance", 0)),
+        reverse=True,
+    )
+    selected = items[:max_numeric_cols]
+    truncated["numeric_columns"] = {
+        col: {k: v for k, v in data.items() if k in _SLIM_NUMERIC_KEYS}
+        for col, data in selected
+    }
+    if len(numeric) > max_numeric_cols:
+        truncated["numeric_columns_note"] = (
+            f"Showing top {max_numeric_cols} of {len(numeric)} by variance"
+        )
+
+    # Correlations — top N
+    truncated["strong_correlations"] = stats.get("strong_correlations", [])[:max_correlations]
+
+    # Categorical — lightweight: unique count + most common only
+    categorical = stats.get("categorical_columns", {})
+    truncated["categorical_columns"] = {
+        col: {
+            "unique_values": v.get("unique_values"),
+            "most_common": v.get("most_common"),
+        }
+        for col, v in list(categorical.items())[:max_categorical_cols]
+    }
+
+    # Outliers — counts only (drop indices, bounds)
+    outliers = stats.get("outliers", {})
+    truncated["outlier_counts"] = {
+        col: v.get("count", 0) for col, v in outliers.items()
+    }
+
+    return truncated

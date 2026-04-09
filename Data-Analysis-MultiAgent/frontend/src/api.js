@@ -3,9 +3,11 @@
  * ──────
  * Thin wrapper around fetch() that:
  *  • Prefixes every URL with /api  (Vite proxy → FastAPI)
- *  • Injects the stored JWT as  Authorization: Bearer <token>
+ *  • Reads the JWT from localStorage and injects it as  Authorization: Bearer <token>
  *  • Throws a structured error on non-2xx responses
- *  • Clears token and surfaces 401 to caller (no forced hard redirect)
+ *  • Clears the localStorage token and surfaces 401 to caller (no forced hard redirect)
+ *
+ * Token persistence: localStorage (survives page refreshes; cleared on logout or 401).
  */
 
 // We use "/api" for everything. 

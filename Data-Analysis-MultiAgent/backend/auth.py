@@ -31,6 +31,10 @@ JWT_SECRET = os.getenv("JWT_SECRET", "change_this_secret_in_production")
 JWT_ALGORITHM = os.getenv("JWT_ALGORITHM", "HS256")
 JWT_EXPIRE_MINUTES = int(os.getenv("JWT_EXPIRE_MINUTES", "1440"))  # 24 h
 
+APP_ENV = os.getenv("APP_ENV", "production")
+if APP_ENV == "production" and JWT_SECRET == "change_this_secret_in_production":
+    raise RuntimeError("CRITICAL: Default JWT_SECRET is being used in production!")
+
 # bcrypt context
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
@@ -152,6 +156,9 @@ from google.auth.transport import requests as google_requests
 GOOGLE_CLIENT_ID = os.getenv("GOOGLE_CLIENT_ID")
 
 def verify_google_token(token: str) -> Optional[dict]:
+    if not GOOGLE_CLIENT_ID:
+        logger.error("Google token verification failed: GOOGLE_CLIENT_ID is unset")
+        return None
     try:
         idinfo = id_token.verify_oauth2_token(token, google_requests.Request(), GOOGLE_CLIENT_ID)
         return idinfo
