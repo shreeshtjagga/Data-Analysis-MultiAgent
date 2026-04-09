@@ -10,6 +10,7 @@ Falls back to lightweight rule-based logic if the LLM call fails.
 import json
 import logging
 import os
+from typing import Optional
 
 from ..core.state import AnalysisState
 from ..core.utils import truncate_stats_for_llm
@@ -96,7 +97,7 @@ def _build_llm_prompt(stats: dict) -> str:
     return "\n".join(lines)
 
 
-def _llm_insights(stats: dict) -> dict | None:
+def _llm_insights(stats: dict) -> Optional[dict]:
     """Call Groq LLM for narrative insights. Returns None on failure."""
     api_key = os.getenv("GROQ_API_KEY")
     if not api_key:
