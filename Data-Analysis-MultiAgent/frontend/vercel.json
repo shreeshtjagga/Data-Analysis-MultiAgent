@@ -1,0 +1,8 @@
+{
+  "rewrites": [
+    {
+      "source": "/api/(.*)",
+      "destination": "https://data-analysis-multiagent.onrender.com/$1"
+    }
+  ]
+}

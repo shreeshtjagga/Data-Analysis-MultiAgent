@@ -8,6 +8,9 @@
  *  • Clears token and surfaces 401 to caller (no forced hard redirect)
  */
 
+// We use "/api" for everything. 
+// Locally, Vite proxies this to http://localhost:8000
+// In Production, vercel.json proxies this to the Render backend.
 const BASE = "/api";
 
 // ── Token storage (Local Storage for persistence across refreshes) ──────────
