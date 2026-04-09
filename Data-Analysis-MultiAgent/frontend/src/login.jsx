@@ -85,12 +85,11 @@ const s = {
     border: "1px solid rgba(99,102,241,0.22)",
     borderRadius: "9px",
     color: "#e2e8f0",
-    padding: "13px 16px",       // was 11px 14px
-    fontSize: "1rem",           // was 0.92rem
+    padding: "13px 16px",
+    fontSize: "1rem",
     fontFamily: "'Outfit', sans-serif",
     outline: "none",
     boxSizing: "border-box",
-    marginBottom: "20px",
     transition: "border-color 0.15s",
   },
   btn: {
@@ -162,8 +161,33 @@ const s = {
   }),
 };
 
+function PasswordInput({ id, placeholder, value, onChange, onKeyDown }) {
+  const [show, setShow] = useState(false);
+  return (
+    <div style={{ position: "relative", marginBottom: "20px" }}>
+      <input
+        id={id}
+        style={{ ...s.input, paddingRight: "55px", marginBottom: 0 }}
+        type={show ? "text" : "password"}
+        placeholder={placeholder}
+        value={value}
+        onChange={onChange}
+        onKeyDown={onKeyDown}
+      />
+      <button
+        type="button"
+        tabIndex="-1"
+        onClick={(e) => { e.preventDefault(); setShow(!show); }}
+        style={{ position: "absolute", right: "12px", top: "50%", transform: "translateY(-50%)", background: "none", border: "none", color: "#64748b", cursor: "pointer", fontSize: "0.75rem", fontWeight: 600, padding: "4px", textTransform: "uppercase", letterSpacing: "0.05em" }}
+      >
+        {show ? "Hide" : "Show"}
+      </button>
+    </div>
+  );
+}
+
 /** Function passing Google credentials to the backend */
-function GoogleAuthComponent({ onLogin, setError, setLoading }) {
+function GoogleAuthComponent({ onLogin, setError, setLoading, setTab }) {
   return (
     <>
       <div style={s.divider}>
@@ -187,6 +211,7 @@ function GoogleAuthComponent({ onLogin, setError, setLoading }) {
           }}
           onError={() => {
             setError("Google initialization failed.");
+            setTab("login");
           }}
           theme="filled_black"
           size="large"
@@ -224,7 +249,7 @@ function LoginForm({ onLogin }) {
       <label style={s.label}>Email address</label>
       <input
         id="login-email"
-        style={s.input}
+        style={{ ...s.input, marginBottom: "20px" }}
         type="email"
         placeholder="you@example.com"
         value={email}
@@ -232,10 +257,8 @@ function LoginForm({ onLogin }) {
         onKeyDown={(e) => e.key === "Enter" && submit()}
       />
       <label style={s.label}>Password</label>
-      <input
+      <PasswordInput
         id="login-password"
-        style={s.input}
-        type="password"
         placeholder="••••••••"
         value={password}
         onChange={(e) => setPassword(e.target.value)}
@@ -244,12 +267,12 @@ function LoginForm({ onLogin }) {
       <button id="login-submit" style={{ ...s.btn, opacity: loading ? 0.65 : 1 }} onClick={submit} disabled={loading}>
         {loading ? "Signing in…" : "Sign in"}
       </button>
-      <GoogleAuthComponent onLogin={onLogin} setError={setError} setLoading={setLoading} />
+      <GoogleAuthComponent onLogin={onLogin} setError={setError} setLoading={setLoading} setTab={() => {}} />
     </>
   );
 }
 
-function RegisterForm() {
+function RegisterForm({ onLogin, setTab }) {
   const [name, setName] = useState("");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -266,8 +289,10 @@ function RegisterForm() {
     setLoading(true);
     try {
       await apiRegister(email, password, name);
-      setSuccess("Account created! Switch to the Sign In tab to log in.");
-      setName(""); setEmail(""); setPassword(""); setConfirm("");
+      setSuccess("Account created! Logging you in...");
+      // Auto-login instantly
+      const loginData = await apiLogin(email, password);
+      onLogin(loginData.user, loginData.access_token);
     } catch (err) {
       setError(err.message || "Registration failed");
     } finally {
@@ -280,16 +305,14 @@ function RegisterForm() {
       {error   && <div style={s.alert("error")}>{error}</div>}
       {success && <div style={s.alert("success")}>{success}</div>}
       <label style={s.label}>Full Name</label>
-      <input id="reg-name" style={s.input} type="text" placeholder="John Doe" value={name} onChange={(e) => setName(e.target.value)} />
+      <input id="reg-name" style={{ ...s.input, marginBottom: "20px" }} type="text" placeholder="John Doe" value={name} onChange={(e) => setName(e.target.value)} />
       <label style={s.label}>Email address</label>
-      <input id="reg-email" style={s.input} type="email" placeholder="you@example.com" value={email} onChange={(e) => setEmail(e.target.value)} />
+      <input id="reg-email" style={{ ...s.input, marginBottom: "20px" }} type="email" placeholder="you@example.com" value={email} onChange={(e) => setEmail(e.target.value)} />
       <label style={s.label}>Password</label>
-      <input id="reg-password" style={s.input} type="password" placeholder="••••••••" value={password} onChange={(e) => setPassword(e.target.value)} />
+      <PasswordInput id="reg-password" placeholder="••••••••" value={password} onChange={(e) => setPassword(e.target.value)} />
       <label style={s.label}>Confirm password</label>
-      <input
+      <PasswordInput
         id="reg-confirm"
-        style={s.input}
-        type="password"
         placeholder="••••••••"
         value={confirm}
         onChange={(e) => setConfirm(e.target.value)}
@@ -298,7 +321,7 @@ function RegisterForm() {
       <button id="reg-submit" style={{ ...s.btn, opacity: loading ? 0.65 : 1 }} onClick={submit} disabled={loading}>
         {loading ? "Creating account…" : "Create account"}
       </button>
-      <GoogleAuthComponent onLogin={(u, t) => {}} setError={setError} setLoading={setLoading} />
+      <GoogleAuthComponent onLogin={onLogin} setError={setError} setLoading={setLoading} setTab={setTab} />
     </>
   );
 }
@@ -320,7 +343,7 @@ export default function Login({ onLogin }) {
 
         {tab === "login"
           ? <LoginForm onLogin={onLogin} />
-          : <RegisterForm />}
+          : <RegisterForm onLogin={onLogin} setTab={setTab} />}
       </div>
     </div>
   );
