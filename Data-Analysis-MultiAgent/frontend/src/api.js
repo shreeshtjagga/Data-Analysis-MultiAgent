@@ -1,13 +1,15 @@
-/**
+/*
  * api.js
  * ──────
  * Thin wrapper around fetch() that:
  *  • Prefixes every URL with /api  (Vite proxy → FastAPI)
- *  • Reads the JWT from localStorage and injects it as  Authorization: Bearer <token>
+ *  • Injects `Authorization: Bearer <access_token>` when an in-memory token exists
+ *  • Uses an HttpOnly refresh cookie for refresh tokens and will auto-refresh
+ *    the access token when it expires
  *  • Throws a structured error on non-2xx responses
- *  • Clears the localStorage token and surfaces 401 to caller (no forced hard redirect)
  *
- * Token persistence: localStorage (survives page refreshes; cleared on logout or 401).
+ * Token persistence: access token is kept in-memory (lost on hard reload);
+ * refresh tokens are stored in an HttpOnly cookie by the backend.
  */
 
 // We use "/api" for everything. 
@@ -15,22 +17,46 @@
 // In Production, vercel.json proxies this to the Render backend.
 const BASE = "/api";
 
-// ── Token storage (Local Storage for persistence across refreshes) ──────────
+// ── Token storage: in-memory access token + HttpOnly refresh cookie ───────
+// Access token is held only in memory (lost on hard refresh). Refresh tokens
+// are stored in an HttpOnly cookie set by the backend; we call /auth/refresh
+// to obtain a new access token when needed.
+
+let accessToken = null;
 
 export function setToken(token) {
-  if (token) {
-    localStorage.setItem("datapulse_token", token);
-  } else {
-    localStorage.removeItem("datapulse_token");
-  }
+  accessToken = token || null;
 }
 
 export function getToken() {
-  return localStorage.getItem("datapulse_token");
+  return accessToken;
 }
 
 export function clearToken() {
-  localStorage.removeItem("datapulse_token");
+  accessToken = null;
+  // Best-effort: ask backend to clear the refresh cookie (HttpOnly)
+  try {
+    fetch(`${BASE}/auth/logout`, { method: "POST", credentials: "include" });
+  } catch (_) {}
+}
+
+async function refreshAccessToken() {
+  try {
+    const resp = await fetch(`${BASE}/auth/refresh`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      credentials: "include",
+    });
+    if (!resp.ok) return false;
+    const data = await resp.json();
+    if (data && data.access_token) {
+      setToken(data.access_token);
+      return true;
+    }
+  } catch (err) {
+    // ignore
+  }
+  return false;
 }
 
 // ── Core fetch helper ─────────────────────────────────────────────────────────
@@ -52,11 +78,46 @@ async function apiFetch(path, options = {}) {
   const response = await fetch(`${BASE}${path}`, {
     ...options,
     headers,
+    credentials: options.credentials ?? "include",
   });
 
   // If authorization fails on a PROTECTED route, clear token and log out.
   // We ignore /auth/login and /auth/google so their specific error messages pass through.
-  if (response.status === 401 && !path.startsWith("/auth/login") && !path.startsWith("/auth/google")) {
+  if (response.status === 401 && !path.startsWith("/auth/login") && !path.startsWith("/auth/google") && !path.startsWith("/auth/refresh")) {
+    // Attempt one refresh if the access token expired
+    const refreshed = await refreshAccessToken();
+    if (refreshed) {
+      // Retry original request once with new token
+      const retryHeaders = { ...(options.headers || {}) };
+      const token2 = getToken();
+      if (token2 && options.withAuth !== false) {
+        retryHeaders["Authorization"] = `Bearer ${token2}`;
+      }
+      if (options.body && !(options.body instanceof FormData)) {
+        retryHeaders["Content-Type"] = "application/json";
+      }
+      const retryResp = await fetch(`${BASE}${path}`, {
+        ...options,
+        headers: retryHeaders,
+        credentials: options.credentials ?? "include",
+      });
+      if (!retryResp.ok) {
+        if (retryResp.status === 401) {
+          clearToken();
+          const authErr = new Error("Session expired — please log in again");
+          authErr.status = 401;
+          throw authErr;
+        }
+        let detail = `HTTP ${retryResp.status}`;
+        try {
+          const b = await retryResp.json();
+          detail = b.detail || b.message || detail;
+        } catch (_) {}
+        throw new Error(detail);
+      }
+      if (options.raw) return retryResp;
+      return retryResp.json();
+    }
     clearToken();
     const authErr = new Error("Session expired — please log in again");
     authErr.status = 401;
