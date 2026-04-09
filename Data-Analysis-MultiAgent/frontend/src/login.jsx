@@ -310,7 +310,7 @@ export default function Login({ onLogin }) {
     <div style={s.page}>
       <div style={s.card}>
         <div style={s.logo}>◈</div>
-        <div style={s.title}>DataPulse</div>
+        <div style={s.title}>Data Pulse</div>
         <div style={s.subtitle}>AI-POWERED DATA ANALYSIS</div>
 
         <div style={s.tabRow}>
