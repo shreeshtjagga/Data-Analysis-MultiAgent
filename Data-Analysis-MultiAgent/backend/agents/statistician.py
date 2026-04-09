@@ -11,6 +11,7 @@ def statistician_agent(state: AnalysisState) -> AnalysisState:
     """
     Statistician Agent: Calculates comprehensive statistics on the clean dataset.
     Populates state.stats_summary with detailed statistical analysis.
+    Each column's calculation is isolated so one bad column cannot crash the whole summary.
     """
     state.current_agent = "statistician"
     logger.info("Statistician agent started")
@@ -41,91 +42,108 @@ def statistician_agent(state: AnalysisState) -> AnalysisState:
             for col, count in missing_data.items() if count > 0
         }
 
-        # Numeric columns analysis
+        # ── Numeric columns analysis (per-column error isolation) ─────────
         numeric_cols = df.select_dtypes(include=[np.number]).columns.tolist()
+        numeric_stats = {}
+        numeric_errors = []
         if numeric_cols:
-            numeric_stats = {}
             for col in numeric_cols:
-                col_data = df[col].dropna()
-                numeric_stats[col] = {
-                    "mean": float(col_data.mean()),
-                    "median": float(col_data.median()),
-                    "std": float(col_data.std()),
-                    "min": float(col_data.min()),
-                    "max": float(col_data.max()),
-                    "q1": float(col_data.quantile(0.25)),
-                    "q3": float(col_data.quantile(0.75)),
-                    "iqr": float(col_data.quantile(0.75) - col_data.quantile(0.25)),
-                    "skewness": float(scipy_stats.skew(col_data, nan_policy='omit')),
-                    "kurtosis": float(scipy_stats.kurtosis(col_data, nan_policy='omit')),
-                    "variance": float(col_data.var()),
-                    "count": int(col_data.count()),
-                }
-            
-            stats_summary["numeric_columns"] = numeric_stats
-        else:
-            stats_summary["numeric_columns"] = {}
+                try:
+                    col_data = df[col].dropna()
+                    numeric_stats[col] = {
+                        "mean": float(col_data.mean()),
+                        "median": float(col_data.median()),
+                        "std": float(col_data.std()),
+                        "min": float(col_data.min()),
+                        "max": float(col_data.max()),
+                        "q1": float(col_data.quantile(0.25)),
+                        "q3": float(col_data.quantile(0.75)),
+                        "iqr": float(col_data.quantile(0.75) - col_data.quantile(0.25)),
+                        "skewness": float(scipy_stats.skew(col_data, nan_policy='omit')),
+                        "kurtosis": float(scipy_stats.kurtosis(col_data, nan_policy='omit')),
+                        "variance": float(col_data.var()),
+                        "count": int(col_data.count()),
+                    }
+                except Exception as col_err:
+                    logger.warning("Skipping numeric column '%s': %s", col, col_err)
+                    numeric_errors.append({"column": col, "error": str(col_err)})
 
-        # Categorical columns analysis
+        stats_summary["numeric_columns"] = numeric_stats
+        if numeric_errors:
+            stats_summary["numeric_column_errors"] = numeric_errors
+
+        # ── Categorical columns analysis (per-column error isolation) ─────
         categorical_cols = df.select_dtypes(include=['object']).columns.tolist()
+        categorical_stats = {}
+        categorical_errors = []
         if categorical_cols:
-            categorical_stats = {}
             for col in categorical_cols:
-                value_counts = df[col].value_counts()
-                categorical_stats[col] = {
-                    "unique_values": int(df[col].nunique()),
-                    "most_common": str(value_counts.index[0]) if len(value_counts) > 0 else None,
-                    "most_common_count": int(value_counts.iloc[0]) if len(value_counts) > 0 else 0,
-                    "least_common": str(value_counts.index[-1]) if len(value_counts) > 0 else None,
-                    "least_common_count": int(value_counts.iloc[-1]) if len(value_counts) > 0 else 0,
-                    "diversity_ratio": float(df[col].nunique() / len(df)),
-                    "top_5_values": value_counts.head(5).to_dict(),
-                }
-            
-            stats_summary["categorical_columns"] = categorical_stats
-        else:
-            stats_summary["categorical_columns"] = {}
+                try:
+                    value_counts = df[col].value_counts()
+                    categorical_stats[col] = {
+                        "unique_values": int(df[col].nunique()),
+                        "most_common": str(value_counts.index[0]) if len(value_counts) > 0 else None,
+                        "most_common_count": int(value_counts.iloc[0]) if len(value_counts) > 0 else 0,
+                        "least_common": str(value_counts.index[-1]) if len(value_counts) > 0 else None,
+                        "least_common_count": int(value_counts.iloc[-1]) if len(value_counts) > 0 else 0,
+                        "diversity_ratio": float(df[col].nunique() / len(df)),
+                        "top_5_values": value_counts.head(5).to_dict(),
+                    }
+                except Exception as col_err:
+                    logger.warning("Skipping categorical column '%s': %s", col, col_err)
+                    categorical_errors.append({"column": col, "error": str(col_err)})
 
-        # Outlier detection using IQR method
+        stats_summary["categorical_columns"] = categorical_stats
+        if categorical_errors:
+            stats_summary["categorical_column_errors"] = categorical_errors
+
+        # ── Outlier detection (per-column error isolation) ────────────────
         outliers_summary = {}
         for col in numeric_cols:
-            col_data = df[col].dropna()
-            if len(col_data) > 0:
-                Q1 = col_data.quantile(0.25)
-                Q3 = col_data.quantile(0.75)
-                IQR = Q3 - Q1
-                lower_bound = Q1 - 1.5 * IQR
-                upper_bound = Q3 + 1.5 * IQR
-                
-                outliers = df[(df[col] < lower_bound) | (df[col] > upper_bound)]
-                if len(outliers) > 0:
-                    outliers_summary[col] = {
-                        "count": int(len(outliers)),
-                        "percentage": float((len(outliers) / len(df)) * 100),
-                        "lower_bound": float(lower_bound),
-                        "upper_bound": float(upper_bound),
-                        "outlier_indices": outliers.index.tolist()[:10],  # First 10 for preview
-                    }
+            try:
+                col_data = df[col].dropna()
+                if len(col_data) > 0:
+                    Q1 = col_data.quantile(0.25)
+                    Q3 = col_data.quantile(0.75)
+                    IQR = Q3 - Q1
+                    lower_bound = Q1 - 1.5 * IQR
+                    upper_bound = Q3 + 1.5 * IQR
+                    
+                    outliers = df[(df[col] < lower_bound) | (df[col] > upper_bound)]
+                    if len(outliers) > 0:
+                        outliers_summary[col] = {
+                            "count": int(len(outliers)),
+                            "percentage": float((len(outliers) / len(df)) * 100),
+                            "lower_bound": float(lower_bound),
+                            "upper_bound": float(upper_bound),
+                            "outlier_indices": outliers.index.tolist()[:10],
+                        }
+            except Exception as col_err:
+                logger.warning("Outlier detection skipped for '%s': %s", col, col_err)
         
         stats_summary["outliers"] = outliers_summary
 
         # Correlation analysis for numeric columns
         if len(numeric_cols) > 1:
-            correlation_matrix = df[numeric_cols].corr()
-            # Find strong correlations (>0.7 or <-0.7)
-            strong_correlations = []
-            for i in range(len(correlation_matrix.columns)):
-                for j in range(i + 1, len(correlation_matrix.columns)):
-                    corr_val = correlation_matrix.iloc[i, j]
-                    if abs(corr_val) > 0.7:
-                        strong_correlations.append({
-                            "col1": correlation_matrix.columns[i],
-                            "col2": correlation_matrix.columns[j],
-                            "correlation": float(corr_val)
-                        })
-            
-            stats_summary["correlation_matrix"] = correlation_matrix.to_dict()
-            stats_summary["strong_correlations"] = strong_correlations
+            try:
+                correlation_matrix = df[numeric_cols].corr()
+                strong_correlations = []
+                for i in range(len(correlation_matrix.columns)):
+                    for j in range(i + 1, len(correlation_matrix.columns)):
+                        corr_val = correlation_matrix.iloc[i, j]
+                        if abs(corr_val) > 0.7:
+                            strong_correlations.append({
+                                "col1": correlation_matrix.columns[i],
+                                "col2": correlation_matrix.columns[j],
+                                "correlation": float(corr_val)
+                            })
+                
+                stats_summary["correlation_matrix"] = correlation_matrix.to_dict()
+                stats_summary["strong_correlations"] = strong_correlations
+            except Exception as corr_err:
+                logger.warning("Correlation analysis failed: %s", corr_err)
+                stats_summary["correlation_matrix"] = {}
+                stats_summary["strong_correlations"] = []
         else:
             stats_summary["correlation_matrix"] = {}
             stats_summary["strong_correlations"] = []
@@ -137,6 +155,10 @@ def statistician_agent(state: AnalysisState) -> AnalysisState:
             "duplicate_rows": int(len(df) - len(df.drop_duplicates())),
             "completeness": float(((len(df) * len(df.columns) - missing_data.sum()) / (len(df) * len(df.columns))) * 100),
         }
+
+        # Preserve imputation records set by architect agent
+        if "imputations" in state.stats_summary:
+            stats_summary["imputations"] = state.stats_summary["imputations"]
 
         state.stats_summary = stats_summary
         logger.info("Statistician agent complete. Stats summary generated with %d metrics", 

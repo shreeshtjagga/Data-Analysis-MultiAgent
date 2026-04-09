@@ -20,6 +20,7 @@ import io
 import logging
 import os
 import json
+import time
 from contextlib import asynccontextmanager
 from typing import Annotated, Optional
 
@@ -48,7 +49,7 @@ from .auth import (
     verify_google_token,
     login_google_user,
 )
-from .core.graph import run_pipeline
+from .core.graph import run_pipeline, PIPELINE_VERSION
 from .db import get_db, init_db
 from .models.schemas import (
     AnalysisListResponse,
@@ -74,7 +75,16 @@ READ_CHUNK_BYTES = 1024 * 1024
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    logger.info("Starting DataPulse API v2")
+    logger.info("Starting DataPulse API v2 (pipeline %s)", PIPELINE_VERSION)
+
+    # ── GROQ_API_KEY is required — refuse to start without it ─────────
+    if not os.getenv("GROQ_API_KEY"):
+        raise RuntimeError(
+            "GROQ_API_KEY environment variable is not set. "
+            "The application cannot start without it. "
+            "Set it in your .env file or environment."
+        )
+
     await init_db()
     yield
     await redis_cache.close()
@@ -283,11 +293,18 @@ async def analyze(
 
     # Cache hit — return immediately
     cached = await get_analysis_by_hash(db, user_id, file_hash)
-    if cached and cached.get("stats_summary") and cached.get("insights"):
+    if (
+        cached
+        and cached.get("stats_summary")
+        and cached.get("insights")
+        and cached.get("pipeline_version") == PIPELINE_VERSION
+    ):
         logger.info("Returning cached analysis for user %d / %s", user_id, file.filename)
         # Charts stored as plain dicts — safe for JSON serialisation
         cached["charts"] = {k: v for k, v in (cached.get("charts") or {}).items()}
         return {"from_cache": True, **cached}
+    elif cached:
+        logger.info("Cache STALE (version mismatch) for user %d / %s — re-running pipeline", user_id, file.filename)
 
     # Run full pipeline
     try:
@@ -298,7 +315,8 @@ async def analyze(
     except Exception as exc:
         raise HTTPException(status_code=422, detail=f"Could not parse file: {exc}")
 
-    state = run_pipeline(df)
+    import asyncio
+    state = await asyncio.to_thread(run_pipeline, df)
     result = state.model_dump()
 
     # Persist and warm cache (fire-and-forget style — errors are logged, not raised)
@@ -339,7 +357,7 @@ async def analyze(
     # Sanitize the rest of the dictionary (like stats_summary) for NaN/Inf
     result = sanitize_floats(result)
 
-    return {"from_cache": False, **result}
+    return {"from_cache": False, "pipeline_version": PIPELINE_VERSION, **result}
 
 
 # ── History routes ────────────────────────────────────────────────────────────
@@ -371,13 +389,23 @@ async def remove_analysis(
     return DeleteResponse(success=True, message=result["message"])
 
 
+CHAT_LIMITS = {}
+
 @app.post("/chat", tags=["analysis"])
 async def chat_with_analysis(
     body: dict = Body(...),
     user_id: int = Depends(get_current_user_id),
 ):
     """Answer a user question about the current analysis context."""
-    _ = user_id  # Reserved for per-user quotas/history in future.
+    
+    # Rate Limiting: Max 10 requests per minute
+    now = time.time()
+    history = CHAT_LIMITS.get(user_id, [])
+    history = [t for t in history if now - t < 60]
+    if len(history) >= 10:
+        raise HTTPException(status_code=429, detail="Too many chat requests. Please wait a minute.")
+    history.append(now)
+    CHAT_LIMITS[user_id] = history
 
     question = (body.get("question") or "").strip()
     context = body.get("context") or {}
@@ -432,7 +460,7 @@ async def chat_with_analysis(
         except Exception as exc:
             logger.warning("Groq chat failed, using fallback response: %s", exc)
 
-    # Fallback when no LLM key is configured or provider fails.
+    # Fallback when LLM provider fails.
     row_count = stats.get("row_count", "unknown")
     col_count = stats.get("column_count", "unknown")
     completeness = (stats.get("data_quality") or {}).get("completeness")
@@ -443,5 +471,5 @@ async def chat_with_analysis(
         parts.append(f"Data completeness is {float(completeness):.2f}%.")
     if findings:
         parts.append(f"Key finding: {findings[0]}")
-    parts.append("For a deeper answer, set GROQ_API_KEY in backend environment.")
+    parts.append("AI response failed — this is a basic summary. Try again shortly.")
     return {"answer": " ".join(parts)}

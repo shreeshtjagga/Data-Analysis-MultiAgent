@@ -22,10 +22,17 @@ def load_csv(file_path: str) -> pd.DataFrame:
     return df
 
 
-def clean_dataframe(df: pd.DataFrame) -> pd.DataFrame:
-    
+def clean_dataframe(df: pd.DataFrame) -> tuple[pd.DataFrame, list]:
+    """
+    Clean the dataframe: strip strings, drop duplicates, impute missing values.
+    Returns (cleaned_df, imputation_records) where each record is a dict with:
+      - column: column name
+      - strategy: 'median' or 'mode'
+      - fill_value: the value used to fill
+      - count: number of cells that were imputed
+    """
     initial_rows = len(df)
-
+    logs = []
 
     str_cols = df.select_dtypes(include=["object"]).columns
     for col in str_cols:
@@ -38,20 +45,35 @@ def clean_dataframe(df: pd.DataFrame) -> pd.DataFrame:
 
     num_cols = df.select_dtypes(include=[np.number]).columns
     for col in num_cols:
-        if df[col].isna().any():
+        missing_count = int(df[col].isna().sum())
+        if missing_count > 0:
             median_val = df[col].median()
             df[col] = df[col].fillna(median_val)
-            logger.info("Filled missing values in '%s' with median: %s", col, median_val)
+            logger.info("Filled %d missing values in '%s' with median: %s", missing_count, col, median_val)
+            logs.append({
+                "column": col,
+                "strategy": "median",
+                "fill_value": float(median_val) if pd.notna(median_val) else None,
+                "count": missing_count,
+            })
 
     cat_cols = df.select_dtypes(include=["object"]).columns
     for col in cat_cols:
-        if df[col].isna().any():
+        missing_count = int(df[col].isna().sum())
+        if missing_count > 0:
             mode_val = df[col].mode()
             if not mode_val.empty:
-                df[col] = df[col].fillna(mode_val.iloc[0])
-                logger.info("Filled missing values in '%s' with mode: %s", col, mode_val.iloc[0])
+                fill = mode_val.iloc[0]
+                df[col] = df[col].fillna(fill)
+                logger.info("Filled %d missing values in '%s' with mode: %s", missing_count, col, fill)
+                logs.append({
+                    "column": col,
+                    "strategy": "mode",
+                    "fill_value": str(fill),
+                    "count": missing_count,
+                })
 
-    return df.reset_index(drop=True)
+    return df.reset_index(drop=True), logs
 
 
 def detect_column_types(df: pd.DataFrame) -> dict[str, str]:

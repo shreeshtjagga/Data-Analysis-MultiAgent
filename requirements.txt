@@ -1,1 +1,4 @@
 -r Data-Analysis-MultiAgent/requirements.txt
+
+pydantic==2.8.2
+pydantic_settings==2.3.4

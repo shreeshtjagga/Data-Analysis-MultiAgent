@@ -1,8 +1,4 @@
-import json
 import logging
-import os
-import pandas as pd
-from groq import Groq
 from ..core.state import AnalysisState
 
 logger = logging.getLogger(__name__)
@@ -10,9 +6,8 @@ logger = logging.getLogger(__name__)
 
 def insights_agent(state: AnalysisState) -> AnalysisState:
     """
-    Insights Agent: Generates valuable insights from the statistical analysis.
-    Uses Groq API to interpret statistics and recommend actions.
-    Populates state.insights with findings, recommendations, and outlier summaries.
+    Insights Agent: Generates findings, recommendations, and outlier summaries
+    from the statistical analysis produced by the statistician agent.
     """
     state.current_agent = "insights"
     logger.info("Insights agent started")

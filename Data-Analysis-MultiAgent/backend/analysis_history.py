@@ -1,4 +1,4 @@
-﻿"""
+"""
 analysis_history.py
 ────────────────────
 Async CRUD for analysis history.
@@ -19,6 +19,7 @@ from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from .core import cache as redis_cache
+from .core.graph import PIPELINE_VERSION
 from .db import AnalysisHistory, AnalysisMetadata
 
 logger = logging.getLogger(__name__)
@@ -225,6 +226,7 @@ async def save_analysis(
             "id": analysis_id,
             "file_name": file_name,
             "file_hash": file_hash,
+            "pipeline_version": PIPELINE_VERSION,
             "raw_df": raw_data,
             "clean_df": clean_data,
             "stats_summary": stats,
@@ -271,6 +273,7 @@ async def get_analysis_by_hash(
         "id": row.id,
         "file_name": row.file_name,
         "file_hash": file_hash,
+        "pipeline_version": PIPELINE_VERSION,
         "raw_df": json.loads(row.raw_data) if row.raw_data else None,
         "clean_df": json.loads(row.clean_data) if row.clean_data else None,
         "stats_summary": json.loads(row.stats_summary) if row.stats_summary else {},

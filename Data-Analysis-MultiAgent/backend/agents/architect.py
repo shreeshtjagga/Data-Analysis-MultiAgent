@@ -25,8 +25,13 @@ def architect_agent(state: AnalysisState) -> AnalysisState:
         )
 
         # Clean data
-        clean_df = clean_dataframe(raw_df.copy())
+        clean_df, impute_logs = clean_dataframe(raw_df.copy())
         state.clean_df = clean_df
+        
+        if impute_logs:
+            if state.stats_summary is None:
+                state.stats_summary = {}
+            state.stats_summary["imputations"] = impute_logs
 
         logger.info("Data cleaned: %d rows remaining", len(clean_df))
 

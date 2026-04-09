@@ -1,29 +1,22 @@
 /**
- * datapulse_dashboard.jsx  (v2 — API-wired)
- * ──────────────────────────────────────────
- * Changes vs the standalone v1
- * ─────────────────────────────
- * • Removed parseCSV / local analysis helpers — server does the heavy lifting.
- * • File upload calls apiAnalyze() from api.js (JWT auto-injected).
- * • callLLM() replaced by apiChat() — proxied through /api/chat or inline
- *   via the Anthropic endpoint (key stays server-side).
- * • Accepts  props: { user, onLogout }  from App.jsx.
- * • History panel calls apiHistory() / apiDeleteAnalysis().
- * • Charts arrive as plain Plotly JSON dicts; rendered with recharts helpers
- *   the same way as before (bar/donut/scatter/histogram/line).
+ * datapulse_dashboard.jsx  (v3 — Plotly-native charts)
+ * ─────────────────────────────────────────────────────
+ * Changes vs v2
+ * ─────────────
+ * • Removed recharts entirely — charts are now Plotly JSON from the backend,
+ *   rendered directly with react-plotly.js (single source of truth).
+ * • ChartPanel simply maps over `result.charts` and passes data/layout to Plot.
  */
 
-import { useState, useRef, useCallback, useEffect } from "react";
-import {
-  BarChart, Bar, LineChart, Line, ScatterChart, Scatter,
-  PieChart, Pie, Cell, XAxis, YAxis, CartesianGrid,
-  Tooltip, ResponsiveContainer, Legend,
-} from "recharts";
+import { useState, useRef, useCallback } from "react";
+import createPlotlyComponent from "react-plotly.js/factory";
+import Plotly from "plotly.js-dist-min";
 import { apiAnalyze, apiChat, apiHistory, apiDeleteAnalysis } from "./api.js";
+
+const Plot = createPlotlyComponent(Plotly);
 
 // ── Palette ───────────────────────────────────────────────────────────────────
 const PALETTE = ["#6366f1","#10b981","#f59e0b","#06b6d4","#ef4444","#a78bfa","#34d399","#f472b6"];
-const COLORS  = { tooltip: { contentStyle: { background: "#0d1220", border: "1px solid rgba(99,102,241,0.2)", borderRadius: "7px", fontSize: "11px", fontFamily: "monospace", color: "#e2e8f0" } } };
 
 // ── Styles ────────────────────────────────────────────────────────────────────
 const s = {
@@ -43,133 +36,51 @@ const s = {
   pill: (active) => ({ display: "inline-flex", alignItems: "center", gap: "5px", fontSize: "0.7rem", fontFamily: "monospace", padding: "3px 10px", borderRadius: "20px", background: active ? "rgba(99,102,241,0.15)" : "rgba(99,102,241,0.06)", border: "1px solid rgba(99,102,241,0.2)", color: "#818cf8" }),
 };
 
-// ── Chart panel (recharts) ────────────────────────────────────────────────────
+// ── Dark-themed Plotly layout defaults ────────────────────────────────────────
+const PLOTLY_DARK_LAYOUT = {
+  paper_bgcolor: "rgba(0,0,0,0)",
+  plot_bgcolor: "rgba(13,18,32,0.6)",
+  font: { color: "#94a3b8", family: "'Outfit', sans-serif", size: 12 },
+  title: { font: { color: "#e2e8f0", size: 14 } },
+  xaxis: { gridcolor: "rgba(99,102,241,0.08)", zerolinecolor: "rgba(99,102,241,0.12)" },
+  yaxis: { gridcolor: "rgba(99,102,241,0.08)", zerolinecolor: "rgba(99,102,241,0.12)" },
+  colorway: PALETTE,
+  autosize: true,
+  margin: { l: 50, r: 30, t: 50, b: 40 },
+};
+
+const PLOTLY_CONFIG = { responsive: true, displayModeBar: false };
+
+// ── Chart panel (Plotly) ──────────────────────────────────────────────────────
 function ChartPanel({ result }) {
-  const stats   = result?.stats_summary || {};
-  const numeric  = Object.keys(stats.numeric_columns || {});
-  const catCols  = Object.keys(stats.categorical_columns || {});
-  const rows     = result?.clean_df || result?.raw_df || [];
+  const charts = result?.charts || {};
+  const entries = Object.entries(charts);
 
-  if (!rows.length) return <div style={{ color: "#475569", fontSize: "0.88rem" }}>No data available for charts.</div>;
-
-  const barData = catCols.length && numeric.length
-    ? (() => {
-        const col = catCols[0], val = numeric[0];
-        const group = {};
-        rows.forEach((r) => { if (!group[r[col]]) group[r[col]] = []; if (typeof r[val] === "number") group[r[col]].push(r[val]); });
-        return Object.entries(group).slice(0, 10).map(([k, vs]) => ({ name: String(k).slice(0, 14), value: vs.length ? +(vs.reduce((a, b) => a + b, 0) / vs.length).toFixed(2) : 0 }));
-      })()
-    : null;
-
-  const donutData = catCols.length
-    ? (stats.categorical_columns[catCols[0]]?.top_5_values
-        ? Object.entries(stats.categorical_columns[catCols[0]].top_5_values).slice(0, 6).map(([name, count]) => ({ name, count }))
-        : null)
-    : null;
-
-  const scatterPair = (() => {
-    for (let i = 0; i < numeric.length - 1; i++) {
-      const a = numeric[i], b = numeric[i + 1];
-      const d = rows.slice(0, 200).filter((r) => typeof r[a] === "number" && typeof r[b] === "number").map((r) => ({ x: r[a], y: r[b] }));
-      if (d.length > 5) return { data: d, xKey: a, yKey: b };
-    }
-    return null;
-  })();
-
-  const histData = numeric.length
-    ? (() => {
-        const col = numeric[0];
-        const st  = stats.numeric_columns?.[col];
-        if (!st) return null;
-        const vals = rows.map((r) => r[col]).filter((v) => typeof v === "number");
-        const mn = st.min, mx = st.max, bins = 10;
-        const size = (mx - mn) / bins || 1;
-        const counts = Array(bins).fill(0);
-        vals.forEach((v) => { const i = Math.min(Math.floor((v - mn) / size), bins - 1); counts[i]++; });
-        return counts.map((c, i) => ({ bin: (mn + i * size).toFixed(1), count: c }));
-      })()
-    : null;
+  if (entries.length === 0) {
+    return <div style={{ color: "#475569", fontSize: "0.88rem" }}>No charts available.</div>;
+  }
 
   return (
-    <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(380px,1fr))", gap: "20px" }}>
-      {barData && (
-        <div style={s.card}>
-          <div style={s.sectionTitle}>Avg {numeric[0]} by {catCols[0]}</div>
-          <ResponsiveContainer width="100%" height={220}>
-            <BarChart data={barData}>
-              <CartesianGrid strokeDasharray="3 3" stroke="rgba(99,102,241,0.07)" />
-              <XAxis dataKey="name" tick={{ fill: "#475569", fontSize: 10, fontFamily: "monospace" }} />
-              <YAxis tick={{ fill: "#475569", fontSize: 10, fontFamily: "monospace" }} />
-              <Tooltip {...COLORS.tooltip} />
-              <Bar dataKey="value" radius={[4, 4, 0, 0]}>{barData.map((_, i) => <Cell key={i} fill={PALETTE[i % PALETTE.length]} />)}</Bar>
-            </BarChart>
-          </ResponsiveContainer>
+    <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(480px,1fr))", gap: "20px" }}>
+      {entries.map(([key, fig]) => (
+        <div key={key} style={s.card}>
+          <Plot
+            data={fig.data || []}
+            layout={{
+              ...PLOTLY_DARK_LAYOUT,
+              ...(fig.layout || {}),
+              // Force dark theme overrides regardless of backend layout
+              paper_bgcolor: PLOTLY_DARK_LAYOUT.paper_bgcolor,
+              plot_bgcolor: PLOTLY_DARK_LAYOUT.plot_bgcolor,
+              font: { ...PLOTLY_DARK_LAYOUT.font, ...(fig.layout?.font || {}) },
+              height: 380,
+            }}
+            config={PLOTLY_CONFIG}
+            style={{ width: "100%", height: "380px" }}
+            useResizeHandler
+          />
         </div>
-      )}
-      {donutData && (
-        <div style={s.card}>
-          <div style={s.sectionTitle}>Composition — {catCols[0]}</div>
-          <ResponsiveContainer width="100%" height={220}>
-            <PieChart>
-              <Pie data={donutData.map((d) => ({ name: String(d.name).slice(0, 18), value: d.count }))} cx="50%" cy="50%" innerRadius={60} outerRadius={90} paddingAngle={2} dataKey="value">
-                {donutData.map((_, i) => <Cell key={i} fill={PALETTE[i % PALETTE.length]} />)}
-              </Pie>
-              <Tooltip {...COLORS.tooltip} />
-              <Legend wrapperStyle={{ fontSize: "11px", color: "#64748b", fontFamily: "monospace" }} />
-            </PieChart>
-          </ResponsiveContainer>
-        </div>
-      )}
-      {scatterPair && (
-        <div style={s.card}>
-          <div style={s.sectionTitle}>{scatterPair.xKey} vs {scatterPair.yKey}</div>
-          <ResponsiveContainer width="100%" height={220}>
-            <ScatterChart>
-              <CartesianGrid strokeDasharray="3 3" stroke="rgba(99,102,241,0.07)" />
-              <XAxis dataKey="x" name={scatterPair.xKey} tick={{ fill: "#475569", fontSize: 10, fontFamily: "monospace" }} />
-              <YAxis dataKey="y" name={scatterPair.yKey} tick={{ fill: "#475569", fontSize: 10, fontFamily: "monospace" }} />
-              <Tooltip cursor={{ strokeDasharray: "3 3" }} {...COLORS.tooltip} />
-              <Scatter data={scatterPair.data} fill="#f59e0b" opacity={0.65} />
-            </ScatterChart>
-          </ResponsiveContainer>
-        </div>
-      )}
-      {histData && (
-        <div style={s.card}>
-          <div style={s.sectionTitle}>Distribution — {numeric[0]}</div>
-          <ResponsiveContainer width="100%" height={220}>
-            <BarChart data={histData}>
-              <CartesianGrid strokeDasharray="3 3" stroke="rgba(99,102,241,0.07)" />
-              <XAxis dataKey="bin" tick={{ fill: "#475569", fontSize: 9, fontFamily: "monospace" }} />
-              <YAxis tick={{ fill: "#475569", fontSize: 10, fontFamily: "monospace" }} />
-              <Tooltip {...COLORS.tooltip} />
-              <Bar dataKey="count" fill="#ef4444" fillOpacity={0.65} radius={[3, 3, 0, 0]} />
-            </BarChart>
-          </ResponsiveContainer>
-        </div>
-      )}
-      {numeric.length >= 2 && (() => {
-        const lineData = rows.slice(0, 120).map((r, i) => {
-          const obj = { idx: i };
-          numeric.slice(0, 3).forEach((c) => { if (typeof r[c] === "number") obj[c] = r[c]; });
-          return obj;
-        });
-        return (
-          <div style={{ ...s.card, gridColumn: "1/-1" }}>
-            <div style={s.sectionTitle}>Numeric trends across rows</div>
-            <ResponsiveContainer width="100%" height={200}>
-              <LineChart data={lineData}>
-                <CartesianGrid strokeDasharray="3 3" stroke="rgba(99,102,241,0.07)" />
-                <XAxis dataKey="idx" tick={{ fill: "#475569", fontSize: 10 }} />
-                <YAxis tick={{ fill: "#475569", fontSize: 10 }} />
-                <Tooltip {...COLORS.tooltip} />
-                <Legend wrapperStyle={{ fontSize: "11px", color: "#64748b" }} />
-                {numeric.slice(0, 3).map((c, i) => <Line key={c} type="monotone" dataKey={c} stroke={PALETTE[i]} dot={false} strokeWidth={1.5} />)}
-              </LineChart>
-            </ResponsiveContainer>
-          </div>
-        );
-      })()}
+      ))}
     </div>
   );
 }
@@ -188,6 +99,7 @@ export default function DataPulse({ user, onLogout }) {
   const [chatLoading, setChatLoading] = useState(false);
   const [history, setHistory] = useState([]);
   const [showHistory, setShowHistory] = useState(false);
+  const [deleteLoading, setDeleteLoading] = useState(null);
   const fileRef = useRef();
 
   const log = (msg) => setAgentLog((p) => [...p, { time: new Date().toLocaleTimeString(), msg }]);
@@ -204,7 +116,7 @@ export default function DataPulse({ user, onLogout }) {
 
     log("Uploading CSV to server…");
     try {
-      log("Running multi-agent pipeline (architect → statistician → visualizer → insights)…");
+      log("Running multi-agent pipeline (architect → statistician → insights)…");
       const data = await apiAnalyze(file);
       log(data.from_cache ? "Returned cached analysis." : "Pipeline complete.");
       setResult(data);
@@ -236,12 +148,14 @@ export default function DataPulse({ user, onLogout }) {
   };
 
   const deleteItem = async (id) => {
+    setDeleteLoading(id);
     try {
       await apiDeleteAnalysis(id);
       setHistory((h) => h.filter((x) => x.analysis_id !== id));
     } catch (err) {
       alert(`Delete failed: ${err.message}`);
     }
+    setDeleteLoading(null);
   };
 
   // ── Chat ───────────────────────────────────────────────────────────────────
@@ -275,6 +189,7 @@ export default function DataPulse({ user, onLogout }) {
   const outlierCols  = Object.keys(stats.outliers || {});
   const missingTotal = dq.missing_cells || 0;
   const completeness = dq.completeness || 100;
+  const imputations  = stats.imputations || [];
 
   // ── Upload screen ──────────────────────────────────────────────────────────
   if (phase === "upload") return (
@@ -297,7 +212,7 @@ export default function DataPulse({ user, onLogout }) {
             <input ref={fileRef} type="file" accept=".csv" style={{ display: "none" }} onChange={(e) => onFile(e.target.files[0])} />
           </div>
           <div style={{ marginTop: "24px", display: "flex", justifyContent: "center", gap: "8px", flexWrap: "wrap" }}>
-            {["Architect","Statistician","Visualizer","Insights","Chat"].map((a) => (
+            {["Architect","Statistician","Insights","Chat"].map((a) => (
               <span key={a} style={s.pill(false)}>{a}</span>
             ))}
           </div>
@@ -364,7 +279,9 @@ export default function DataPulse({ user, onLogout }) {
                 <div key={item.analysis_id} style={{ background: "#0d1220", border: "1px solid rgba(99,102,241,0.15)", borderRadius: "8px", padding: "10px 14px", fontSize: "0.78rem", display: "flex", alignItems: "center", gap: "14px" }}>
                   <span style={{ color: "#94a3b8" }}>{item.file_name}</span>
                   <span style={{ color: "#475569", fontFamily: "monospace", fontSize: "0.7rem" }}>{item.row_count}r × {item.column_count}c</span>
-                  <button onClick={() => deleteItem(item.analysis_id)} style={{ background: "transparent", border: "none", color: "#ef4444", cursor: "pointer", fontSize: "0.75rem", padding: "0" }}>✕</button>
+                  <button onClick={() => deleteItem(item.analysis_id)} disabled={deleteLoading === item.analysis_id} style={{ background: "transparent", border: "none", color: "#ef4444", cursor: deleteLoading === item.analysis_id ? "wait" : "pointer", fontSize: "0.75rem", padding: "0" }}>
+                    {deleteLoading === item.analysis_id ? "..." : "✕"}
+                  </button>
                 </div>
               ))}
             </div>
@@ -405,6 +322,20 @@ export default function DataPulse({ user, onLogout }) {
                 </div>
               ))}
             </div>
+            {imputations.length > 0 && (
+              <div style={s.card}>
+                <div style={s.sectionTitle}>Data imputations applied</div>
+                {imputations.map((imp, i) => (
+                  <div key={i} style={{ display: "flex", gap: "10px", marginBottom: "8px", fontSize: "0.84rem", color: "#fde68a" }}>
+                    <span style={{ color: "#f59e0b" }}>⚑</span>
+                    <span>
+                      <strong>{imp.column}</strong> — {imp.count} values filled with {imp.strategy}
+                      {imp.fill_value != null && <span style={{ fontFamily: "monospace", color: "#94a3b8" }}> ({imp.fill_value})</span>}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            )}
             {insights?.risk_flags?.length > 0 && (
               <div style={s.card}>
                 <div style={s.sectionTitle}>Risk flags</div>
@@ -565,9 +496,14 @@ export default function DataPulse({ user, onLogout }) {
                 </div>
               )}
             </div>
-            <div style={{ display: "flex", gap: "8px" }}>
-              <input style={s.input} value={chatInput} onChange={(e) => setChatInput(e.target.value)} onKeyDown={(e) => e.key === "Enter" && sendChat()} placeholder="Ask about your data…" />
-              <button style={{ ...s.btn, padding: "10px 16px", flexShrink: 0 }} onClick={sendChat} disabled={chatLoading}>→</button>
+            <div>
+              <div style={{ display: "flex", gap: "8px" }}>
+                <input style={s.input} value={chatInput} onChange={(e) => e.target.value.length <= 1200 && setChatInput(e.target.value)} onKeyDown={(e) => e.key === "Enter" && sendChat()} placeholder="Ask about your data…" />
+                <button style={{ ...s.btn, padding: "10px 16px", flexShrink: 0 }} onClick={sendChat} disabled={chatLoading}>→</button>
+              </div>
+              <div style={{ fontSize: "0.7rem", color: chatInput.length >= 1200 ? "#ef4444" : "#64748b", textAlign: "right", marginTop: "6px" }}>
+                {chatInput.length} / 1200
+              </div>
             </div>
           </div>
         )}
