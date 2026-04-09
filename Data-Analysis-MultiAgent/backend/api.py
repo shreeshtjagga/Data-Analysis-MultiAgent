@@ -50,6 +50,7 @@ from .auth import (
     login_google_user,
 )
 from .core.graph import run_pipeline, PIPELINE_VERSION
+from .core.utils import truncate_stats_for_llm
 from .db import get_db, init_db
 from .models.schemas import (
     AnalysisListResponse,
@@ -429,12 +430,17 @@ async def chat_with_analysis(
     insights = context.get("insights") or {}
     file_name = context.get("fileName") or "dataset"
 
+    # Truncate stats to stay within token limits on wide datasets (Fix 12)
+    slim_stats = truncate_stats_for_llm(stats)
+    profile = slim_stats.get("dataset_profile") or {}
+
     prompt = (
         "You are a data analyst assistant. "
         "Answer clearly in 2-4 short sentences based only on provided context. "
         "If context is insufficient, say what is missing.\n\n"
         f"File: {file_name}\n"
-        f"Stats: {stats}\n"
+        f"Dataset: {profile.get('label', 'unknown')} ({profile.get('domain', 'general')})\n"
+        f"Stats: {slim_stats}\n"
         f"Insights: {insights}\n"
         f"Question: {question}"
     )

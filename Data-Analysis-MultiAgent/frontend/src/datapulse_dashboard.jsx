@@ -190,6 +190,9 @@ export default function DataPulse({ user, onLogout }) {
   const missingTotal = dq.missing_cells || 0;
   const completeness = dq.completeness || 100;
   const imputations  = stats.imputations || [];
+  const profile      = stats.dataset_profile || {};
+  const excluded     = stats.excluded_columns || [];
+  const coerced      = stats.coerced_columns || [];
 
   // ── Upload screen ──────────────────────────────────────────────────────────
   if (phase === "upload") return (
@@ -257,6 +260,7 @@ export default function DataPulse({ user, onLogout }) {
         <div style={{ display: "flex", alignItems: "center", gap: "12px" }}>
           <span style={s.brand}>◈ Data Pulse</span>
           <span style={{ fontFamily: "monospace", fontSize: "0.72rem", background: "rgba(99,102,241,0.12)", border: "1px solid rgba(99,102,241,0.22)", color: "#818cf8", padding: "2px 10px", borderRadius: "20px" }}>{fileName}</span>
+          {profile.label && profile.label !== "unknown" && <span style={{ fontSize: "0.7rem", color: "#a78bfa", background: "rgba(167,139,250,0.08)", border: "1px solid rgba(167,139,250,0.2)", padding: "2px 8px", borderRadius: "12px" }}>{profile.label}</span>}
           {result?.from_cache && <span style={{ fontSize: "0.7rem", color: "#10b981", background: "rgba(16,185,129,0.08)", border: "1px solid rgba(16,185,129,0.2)", padding: "2px 8px", borderRadius: "12px" }}>CACHED</span>}
         </div>
         <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
@@ -336,6 +340,30 @@ export default function DataPulse({ user, onLogout }) {
                 ))}
               </div>
             )}
+            {excluded.length > 0 && (
+              <div style={s.card}>
+                <div style={s.sectionTitle}>Excluded columns</div>
+                <div style={{ fontSize: "0.78rem", color: "#64748b", marginBottom: "10px" }}>These columns were auto-excluded from analysis (noisy / uninformative)</div>
+                {excluded.map((ex, i) => (
+                  <div key={i} style={{ display: "flex", gap: "10px", marginBottom: "6px", fontSize: "0.82rem" }}>
+                    <span style={{ color: "#ef4444" }}>✕</span>
+                    <span style={{ color: "#94a3b8" }}><strong style={{ color: "#e2e8f0" }}>{ex.column}</strong> — {ex.reason}</span>
+                  </div>
+                ))}
+              </div>
+            )}
+            {coerced.length > 0 && (
+              <div style={s.card}>
+                <div style={s.sectionTitle}>Type-coerced columns</div>
+                <div style={{ fontSize: "0.78rem", color: "#64748b", marginBottom: "10px" }}>Object columns auto-converted to numeric</div>
+                {coerced.map((c, i) => (
+                  <div key={i} style={{ display: "flex", gap: "10px", marginBottom: "6px", fontSize: "0.82rem" }}>
+                    <span style={{ color: "#06b6d4" }}>↻</span>
+                    <span style={{ color: "#94a3b8" }}><strong style={{ color: "#e2e8f0" }}>{c.column}</strong> — {(c.valid_ratio * 100).toFixed(0)}% valid numeric values</span>
+                  </div>
+                ))}
+              </div>
+            )}
             {insights?.risk_flags?.length > 0 && (
               <div style={s.card}>
                 <div style={s.sectionTitle}>Risk flags</div>
@@ -344,6 +372,13 @@ export default function DataPulse({ user, onLogout }) {
                     <span style={{ color: "#f59e0b" }}>⚠</span> {f}
                   </div>
                 ))}
+              </div>
+            )}
+            {profile.description && profile.label !== "unknown" && (
+              <div style={{ ...s.card, borderLeft: "3px solid #a78bfa", background: "rgba(167,139,250,0.04)" }}>
+                <div style={{ fontSize: "0.72rem", fontFamily: "monospace", color: "#a78bfa", letterSpacing: "0.1em", marginBottom: "6px" }}>DATASET CLASSIFICATION</div>
+                <div style={{ fontSize: "0.94rem", color: "#e2e8f0", marginBottom: "4px" }}>{profile.description}</div>
+                <div style={{ fontSize: "0.76rem", color: "#64748b" }}>Domain: <span style={{ color: "#a78bfa" }}>{profile.domain}</span></div>
               </div>
             )}
             <div style={s.card}>

@@ -113,3 +113,66 @@ def safe_describe(df: pd.DataFrame) -> dict:
         }
 
     return summary
+
+
+# ── Compact keys to keep when slimming numeric stats for LLM prompts ─────────
+_SLIM_NUMERIC_KEYS = ("mean", "median", "std", "min", "max", "skewness", "count")
+
+
+def truncate_stats_for_llm(
+    stats: dict,
+    max_numeric_cols: int = 10,
+    max_correlations: int = 5,
+    max_categorical_cols: int = 15,
+) -> dict:
+    """
+    Return a compact copy of *stats* suitable for LLM prompts.
+    Keeps the most informative columns and strips heavy sub-structures
+    (correlation matrices, full value-count dicts, outlier indices).
+    """
+    truncated = {
+        "row_count": stats.get("row_count"),
+        "column_count": stats.get("column_count"),
+        "data_quality": stats.get("data_quality"),
+        "dataset_profile": stats.get("dataset_profile"),
+        "imputations": stats.get("imputations"),
+        "excluded_columns": stats.get("excluded_columns"),
+    }
+
+    # Numeric — top N by variance (most informative columns first)
+    numeric = stats.get("numeric_columns", {})
+    items = sorted(
+        numeric.items(),
+        key=lambda kv: abs(kv[1].get("variance", 0)),
+        reverse=True,
+    )
+    selected = items[:max_numeric_cols]
+    truncated["numeric_columns"] = {
+        col: {k: v for k, v in data.items() if k in _SLIM_NUMERIC_KEYS}
+        for col, data in selected
+    }
+    if len(numeric) > max_numeric_cols:
+        truncated["numeric_columns_note"] = (
+            f"Showing top {max_numeric_cols} of {len(numeric)} by variance"
+        )
+
+    # Correlations — top N
+    truncated["strong_correlations"] = stats.get("strong_correlations", [])[:max_correlations]
+
+    # Categorical — lightweight: unique count + most common only
+    categorical = stats.get("categorical_columns", {})
+    truncated["categorical_columns"] = {
+        col: {
+            "unique_values": v.get("unique_values"),
+            "most_common": v.get("most_common"),
+        }
+        for col, v in list(categorical.items())[:max_categorical_cols]
+    }
+
+    # Outliers — counts only (drop indices, bounds)
+    outliers = stats.get("outliers", {})
+    truncated["outlier_counts"] = {
+        col: v.get("count", 0) for col, v in outliers.items()
+    }
+
+    return truncated

@@ -11,7 +11,7 @@ logger = logging.getLogger(__name__)
 # Bump this when the pipeline logic changes materially.
 # Cached results with older versions are ignored so users always
 # get results from the current pipeline.
-PIPELINE_VERSION = "v1"
+PIPELINE_VERSION = "v2"
 
 
 def run_pipeline(df) -> AnalysisState:
