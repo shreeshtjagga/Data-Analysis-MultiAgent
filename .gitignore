@@ -20,6 +20,7 @@ lib64/
 # ─── Virtual environments ─────────────────────────────────────────────────────
 venv/
 .venv/
+.venv_bash/
 env/
 ENV/
 env.bak/

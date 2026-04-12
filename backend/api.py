@@ -21,6 +21,7 @@ import csv
 import logging
 import os
 import json
+import zipfile
 from contextlib import asynccontextmanager
 from typing import Annotated, Optional
 
@@ -92,12 +93,12 @@ CHAT_RATE_WINDOW = int(os.getenv("CHAT_RATE_WINDOW_SECONDS", "60"))
 
 
 def _looks_like_csv(file_bytes: bytes) -> bool:
-    sample = file_bytes[:8192]
-    if not sample or b"\x00" in sample:
+    sample = file_bytes[:16384]
+    if not sample:
         return False
 
     text: Optional[str] = None
-    for encoding in ("utf-8", "latin-1"):
+    for encoding in ("utf-8-sig", "utf-16", "utf-16-le", "utf-16-be", "latin-1"):
         try:
             text = sample.decode(encoding)
             break
@@ -126,7 +127,7 @@ def _validate_upload_magic(parsed_ext: str, file_bytes: bytes) -> None:
         return
 
     if parsed_ext == "xlsx":
-        if not file_bytes.startswith(b"PK\x03\x04"):
+        if not zipfile.is_zipfile(io.BytesIO(file_bytes)):
             raise HTTPException(status_code=400, detail="Invalid XLSX file signature")
         return
 
@@ -165,12 +166,12 @@ def _read_csv_with_fallback(file_bytes: bytes) -> pd.DataFrame:
     delimiter = _detect_csv_delimiter(file_bytes)
 
     attempts = []
-    if delimiter:
-        attempts.append({"engine": "python", "sep": delimiter})
-    attempts.extend([
-        {"engine": "python", "sep": None},
-        {},
-    ])
+    encodings = ["utf-8-sig", "utf-8", "utf-16", "latin-1"]
+    for encoding in encodings:
+        if delimiter:
+            attempts.append({"engine": "python", "sep": delimiter, "encoding": encoding})
+        attempts.append({"engine": "python", "sep": None, "encoding": encoding})
+    attempts.append({})
 
     errors = []
     for csv_kwargs in attempts:
@@ -546,37 +547,53 @@ async def analyze(
         if parsed_ext == "csv":
             df = _read_csv_with_fallback(file_bytes)
         else:
-            from openpyxl import load_workbook
+            if parsed_ext == "xlsx":
+                from openpyxl import load_workbook
 
-            wb = load_workbook(io.BytesIO(file_bytes), read_only=True, data_only=True)
-            try:
-                sheet_count = len(wb.sheetnames)
-                if sheet_count > MAX_EXCEL_SHEETS:
+                wb = load_workbook(io.BytesIO(file_bytes), read_only=True, data_only=True)
+                try:
+                    sheet_count = len(wb.sheetnames)
+                    if sheet_count > MAX_EXCEL_SHEETS:
+                        raise HTTPException(
+                            status_code=413,
+                            detail=f"Excel file has {sheet_count} sheets. Maximum allowed is {MAX_EXCEL_SHEETS}.",
+                        )
+
+                    active_sheet = wb[wb.sheetnames[0]]
+                    if (active_sheet.max_row or 0) > MAX_ANALYZE_ROWS:
+                        raise HTTPException(
+                            status_code=413,
+                            detail=f"Excel file has {active_sheet.max_row} rows. Maximum allowed is {MAX_ANALYZE_ROWS}.",
+                        )
+                    if (active_sheet.max_column or 0) > MAX_ANALYZE_COLUMNS:
+                        raise HTTPException(
+                            status_code=413,
+                            detail=f"Excel file has {active_sheet.max_column} columns. Maximum allowed is {MAX_ANALYZE_COLUMNS}.",
+                        )
+                finally:
+                    wb.close()
+
+                df = pd.read_excel(
+                    io.BytesIO(file_bytes),
+                    engine="openpyxl",
+                    sheet_name=0,
+                    nrows=MAX_ANALYZE_ROWS + 1,
+                )
+            else:
+                try:
+                    import xlrd  # noqa: F401
+                except Exception:
                     raise HTTPException(
-                        status_code=413,
-                        detail=f"Excel file has {sheet_count} sheets. Maximum allowed is {MAX_EXCEL_SHEETS}.",
+                        status_code=422,
+                        detail="Legacy .xls upload requires the 'xlrd' package. Please upload CSV/XLSX or install xlrd on the backend.",
                     )
 
-                active_sheet = wb[wb.sheetnames[0]]
-                if (active_sheet.max_row or 0) > MAX_ANALYZE_ROWS:
-                    raise HTTPException(
-                        status_code=413,
-                        detail=f"Excel file has {active_sheet.max_row} rows. Maximum allowed is {MAX_ANALYZE_ROWS}.",
-                    )
-                if (active_sheet.max_column or 0) > MAX_ANALYZE_COLUMNS:
-                    raise HTTPException(
-                        status_code=413,
-                        detail=f"Excel file has {active_sheet.max_column} columns. Maximum allowed is {MAX_ANALYZE_COLUMNS}.",
-                    )
-            finally:
-                wb.close()
-
-            df = pd.read_excel(
-                io.BytesIO(file_bytes),
-                engine="openpyxl",
-                sheet_name=0,
-                nrows=MAX_ANALYZE_ROWS + 1,
-            )
+                df = pd.read_excel(
+                    io.BytesIO(file_bytes),
+                    engine="xlrd",
+                    sheet_name=0,
+                    nrows=MAX_ANALYZE_ROWS + 1,
+                )
     except Exception as exc:
         if isinstance(exc, HTTPException):
             raise exc
@@ -621,6 +638,8 @@ async def analyze(
     )
     if not save_result["success"]:
         logger.warning("Failed to persist analysis: %s", save_result["message"])
+    else:
+        result["analysis_id"] = save_result.get("analysis_id")
 
     # Serialise charts to plain dicts before returning
     from .analysis_history import _serialize_charts
@@ -699,11 +718,8 @@ async def chat_with_analysis(
         if count > CHAT_RATE_LIMIT:
             raise HTTPException(status_code=429, detail=f"Too many chat requests. Please wait {CHAT_RATE_WINDOW} seconds.")
     except Exception as exc:
-        logger.error("Redis rate limiter failed for user %s: %s", user_id, exc)
-        raise HTTPException(
-            status_code=503,
-            detail="Rate limiter unavailable. Please retry shortly.",
-        )
+        # Graceful degradation: keep chat functional even if Redis is unavailable.
+        logger.warning("Redis rate limiter unavailable for user %s, continuing without rate limit: %s", user_id, exc)
 
     question = body.question.strip()
     context = body.context or {}
@@ -723,20 +739,37 @@ async def chat_with_analysis(
             detail=f"Context too large. Max size is {MAX_CONTEXT_BYTES // 1024} KB",
         )
 
-    stats = context.get("stats") or {}
+    stats = context.get("stats") or context.get("stats_summary") or {}
     insights = context.get("insights") or {}
     file_name = context.get("fileName") or "dataset"
 
     # Truncate stats to stay within token limits on wide datasets (Fix 12)
     slim_stats = truncate_stats_for_llm(stats)
     profile = slim_stats.get("dataset_profile") or {}
+    outlier_counts = slim_stats.get("outlier_counts") or {}
+    if not outlier_counts:
+        outlier_counts = {
+            k: int((v or {}).get("count", 0))
+            for k, v in (stats.get("outliers") or {}).items()
+        }
+    top_outliers = sorted(outlier_counts.items(), key=lambda kv: kv[1], reverse=True)[:10]
+    correlations = context.get("correlations") or slim_stats.get("strong_correlations") or []
+    quality = context.get("dataQuality") or slim_stats.get("data_quality") or {}
+    outlier_summary = context.get("outlierSummary") or [
+        {"column": col, "count": count} for col, count in top_outliers
+    ]
 
     prompt = (
         "You are a data analyst assistant. "
         "Answer clearly in 2-4 short sentences based only on provided context. "
-        "If context is insufficient, say what is missing.\n\n"
+        "Never claim data is missing if it exists in context. "
+        "If context is insufficient, say exactly which field is missing.\n\n"
         f"File: {file_name}\n"
         f"Dataset: {profile.get('label', 'unknown')} ({profile.get('domain', 'general')})\n"
+        f"Data Quality: {quality}\n"
+        f"Outlier Counts: {outlier_counts}\n"
+        f"Outlier Summary: {outlier_summary}\n"
+        f"Correlations: {correlations}\n"
         f"Stats: {slim_stats}\n"
         f"Insights: {insights}\n"
         f"Question: {question}"
@@ -763,16 +796,36 @@ async def chat_with_analysis(
         except Exception as exc:
             logger.warning("Groq chat failed, using fallback response: %s", exc)
 
-    # Fallback when LLM provider fails.
+    # Deterministic fallback when LLM provider fails.
+    q_lower = question.lower()
     row_count = stats.get("row_count", "unknown")
     col_count = stats.get("column_count", "unknown")
-    completeness = (stats.get("data_quality") or {}).get("completeness")
+    completeness = quality.get("completeness")
+    missing_cells = quality.get("missing_cells")
+    duplicate_rows = quality.get("duplicate_rows")
     findings = insights.get("findings") or []
+
+    if "outlier" in q_lower:
+        if top_outliers and top_outliers[0][1] > 0:
+            summary = ", ".join([f"{col}: {cnt}" for col, cnt in top_outliers[:5]])
+            return {"answer": f"Top outlier columns in {file_name} are {summary}."}
+        return {"answer": f"No outlier counts are present for {file_name}, or all detected counts are zero."}
+
+    if any(k in q_lower for k in ["quality", "missing", "duplicate", "completeness"]):
+        parts = [f"For {file_name}, data quality shows {missing_cells or 0} missing cells and {duplicate_rows or 0} duplicate rows."]
+        if completeness is not None:
+            parts.append(f"Completeness is {float(completeness):.2f}%.")
+        return {"answer": " ".join(parts)}
+
+    if "correlation" in q_lower:
+        if correlations:
+            top = correlations[0]
+            return {"answer": f"The strongest reported correlation is {top.get('col1')} and {top.get('col2')} with r={float(top.get('correlation', 0)):.3f}."}
+        return {"answer": "No strong correlations were provided in the current analysis context."}
 
     parts = [f"I analyzed {file_name} with {row_count} rows and {col_count} columns."]
     if completeness is not None:
         parts.append(f"Data completeness is {float(completeness):.2f}%.")
     if findings:
         parts.append(f"Key finding: {findings[0]}")
-    parts.append("AI response failed — this is a basic summary. Try again shortly.")
     return {"answer": " ".join(parts)}

@@ -8,9 +8,10 @@
  * • ChartPanel simply maps over `result.charts` and passes data/layout to Plot.
  */
 
-import { useState, useRef, useCallback, useEffect } from "react";
+import { useState, useRef, useCallback, useEffect, useMemo } from "react";
 import createPlotlyComponent from "react-plotly.js/factory";
 import Plotly from "plotly.js-dist-min";
+import jsPDF from "jspdf";
 import { apiAnalyze, apiChat, apiHistory, apiHistoryAnalysis, apiDeleteAnalysis } from "./api.js";
 
 const Plot = createPlotlyComponent(Plotly);
@@ -93,7 +94,9 @@ function ChartPanel({ result, viewportWidth }) {
 
 // ── Main dashboard ────────────────────────────────────────────────────────────
 const PRIMARY_TABS = ["overview", "charts", "insights"];
+// Keep reference tabs ordered with chat last for faster analytical workflow.
 const SECONDARY_TABS = ["statistics", "quality", "chat"];
+const MAX_CHAT_MESSAGES = 40;
 
 export default function DataPulse({ user, onLogout }) {
   const [phase, setPhase]     = useState("upload");
@@ -109,6 +112,7 @@ export default function DataPulse({ user, onLogout }) {
   const [chatInput, setChatInput] = useState("");
   const [chatLoading, setChatLoading] = useState(false);
   const [history, setHistory] = useState([]);
+  const [historyError, setHistoryError] = useState("");
   const [showHistory, setShowHistory] = useState(false);
   const [historyLoading, setHistoryLoading] = useState(false);
   const [deleteLoading, setDeleteLoading] = useState(null);
@@ -182,6 +186,21 @@ export default function DataPulse({ user, onLogout }) {
       clearStageTimers();
       log(data.from_cache ? "Returned cached analysis." : "Pipeline complete.");
       setResult(data);
+      if (data?.analysis_id) {
+        setHistory((prev) => {
+          const next = [
+            {
+              analysis_id: data.analysis_id,
+              file_name: file.name,
+              row_count: data?.stats_summary?.row_count || 0,
+              column_count: data?.stats_summary?.column_count || 0,
+              analyzed_at: new Date().toISOString(),
+            },
+            ...prev.filter((x) => x.analysis_id !== data.analysis_id),
+          ];
+          return next.slice(0, 20);
+        });
+      }
       setPhase("done");
     } catch (err) {
       clearStageTimers();
@@ -212,11 +231,14 @@ export default function DataPulse({ user, onLogout }) {
   // ── History ────────────────────────────────────────────────────────────────
   const loadHistory = async () => {
     setHistoryLoading(true);
+    setHistoryError("");
     try {
       const resp = await apiHistory();
       setHistory(resp.analyses || []);
     } catch (err) {
-      console.error("History load failed:", err.message);
+      const msg = err?.message || "Failed to load history";
+      setHistoryError(msg);
+      console.error("History load failed:", msg);
     } finally {
       setHistoryLoading(false);
     }
@@ -240,6 +262,10 @@ export default function DataPulse({ user, onLogout }) {
   };
 
   const loadHistoryItem = async (item) => {
+    if (item?.isLocal) {
+      setShowHistory(false);
+      return;
+    }
     setHistorySelectLoading(item.analysis_id);
     try {
       const full = await apiHistoryAnalysis(item.analysis_id);
@@ -256,27 +282,59 @@ export default function DataPulse({ user, onLogout }) {
     }
   };
 
+  const chatContext = useMemo(() => {
+    if (!result) return null;
+
+    const outlierSummary = Object.entries(result.stats_summary?.outliers || {})
+      .map(([column, info]) => ({
+        column,
+        count: Number(info?.count || 0),
+        percentage: Number(info?.percentage || 0),
+      }))
+      .sort((a, b) => b.count - a.count)
+      .slice(0, 10);
+
+    return {
+      fileName,
+      stats: result.stats_summary,
+      insights: result.insights,
+      outlierSummary,
+      dataQuality: result.stats_summary?.data_quality || {},
+      correlations: result.stats_summary?.strong_correlations?.slice(0, 5),
+    };
+  }, [result, fileName]);
+
+  const historyItems = useMemo(() => {
+    if (history.length > 0) return history;
+    if (!result) return [];
+    return [
+      {
+        analysis_id: "local-current",
+        file_name: fileName || "Current analysis",
+        row_count: result?.stats_summary?.row_count || 0,
+        column_count: result?.stats_summary?.column_count || 0,
+        analyzed_at: new Date().toISOString(),
+        isLocal: true,
+      },
+    ];
+  }, [history, result, fileName]);
+
   // ── Chat ───────────────────────────────────────────────────────────────────
   const sendChat = useCallback(async () => {
     const q = chatInput.trim();
     if (!q || chatLoading || !result) return;
     setChatInput("");
-    setChatMsgs((p) => [...p, { role: "user", text: q }]);
+    setChatMsgs((p) => [...p, { role: "user", text: q }].slice(-MAX_CHAT_MESSAGES));
     setChatLoading(true);
     try {
-      const ctx = {
-        fileName,
-        stats: result.stats_summary,
-        insights: result.insights,
-        correlations: result.stats_summary?.strong_correlations?.slice(0, 5),
-      };
-      const resp = await apiChat(q, ctx);
-      setChatMsgs((p) => [...p, { role: "ai", text: (resp.answer || "").trim() || "No response generated." }]);
-    } catch {
-      setChatMsgs((p) => [...p, { role: "ai", text: "Unable to reach AI. Try again." }]);
+      const resp = await apiChat(q, chatContext || {});
+      setChatMsgs((p) => [...p, { role: "ai", text: (resp.answer || "").trim() || "No response generated." }].slice(-MAX_CHAT_MESSAGES));
+    } catch (err) {
+      const detail = err?.message || "Unable to reach AI";
+      setChatMsgs((p) => [...p, { role: "ai", text: `Chat error: ${detail}` }].slice(-MAX_CHAT_MESSAGES));
     }
     setChatLoading(false);
-  }, [chatInput, chatLoading, result, fileName]);
+  }, [chatInput, chatLoading, result, chatContext]);
 
   // ── Computed metrics ───────────────────────────────────────────────────────
   const stats        = result?.stats_summary || {};
@@ -344,23 +402,97 @@ export default function DataPulse({ user, onLogout }) {
 
   const downloadDashboard = () => {
     if (!result) return;
-    const payload = {
-      file_name: fileName,
-      exported_at: new Date().toISOString(),
-      from_cache: Boolean(result?.from_cache),
-      stats_summary: result?.stats_summary || {},
-      insights: result?.insights || {},
-      charts: Object.keys(result?.charts || {}),
+    const doc = new jsPDF({ unit: "pt", format: "a4" });
+    const pageWidth = doc.internal.pageSize.getWidth();
+    const pageHeight = doc.internal.pageSize.getHeight();
+    const margin = 42;
+    const maxTextWidth = pageWidth - margin * 2;
+    let y = margin;
+
+    const ensureSpace = (needed = 18) => {
+      if (y + needed <= pageHeight - margin) return;
+      doc.addPage();
+      y = margin;
     };
-    const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
-    const a = document.createElement("a");
-    a.href = URL.createObjectURL(blob);
+
+    const writeLine = (text, size = 10) => {
+      ensureSpace(size + 8);
+      doc.setFont("helvetica", "normal");
+      doc.setFontSize(size);
+      doc.text(String(text), margin, y);
+      y += size + 6;
+    };
+
+    const writeHeading = (text) => {
+      ensureSpace(24);
+      doc.setFont("helvetica", "bold");
+      doc.setFontSize(14);
+      doc.text(String(text), margin, y);
+      y += 18;
+    };
+
+    const writeParagraph = (text) => {
+      const lines = doc.splitTextToSize(String(text || ""), maxTextWidth);
+      lines.forEach((line) => writeLine(line, 10));
+    };
+
+    const stats = result?.stats_summary || {};
+    const insights = result?.insights || {};
+    const quality = stats?.data_quality || {};
+
+    writeHeading("Data Pulse Analysis Report");
+    writeLine(`File: ${fileName || "dataset"}`);
+    writeLine(`Generated: ${new Date().toLocaleString()}`);
+    writeLine(`Rows: ${Number(stats?.row_count || 0).toLocaleString()} | Columns: ${Number(stats?.column_count || 0).toLocaleString()}`);
+    writeLine(`Completeness: ${formatPercent(Number(quality?.completeness ?? 100))}`);
+    y += 6;
+
+    if (insights?.headline) {
+      writeHeading("Executive Summary");
+      writeParagraph(insights.headline);
+      y += 4;
+    }
+
+    writeHeading("Data Quality");
+    writeLine(`Missing cells: ${Number(quality?.missing_cells || 0).toLocaleString()}`);
+    writeLine(`Duplicate rows: ${Number(quality?.duplicate_rows || 0).toLocaleString()}`);
+    writeLine(`Total cells: ${Number(quality?.total_cells || 0).toLocaleString()}`);
+    y += 4;
+
+    const findings = Array.isArray(insights?.findings) ? insights.findings : [];
+    if (findings.length > 0) {
+      writeHeading("Key Findings");
+      findings.slice(0, 8).forEach((f, idx) => writeParagraph(`${idx + 1}. ${f}`));
+      y += 4;
+    }
+
+    const recs = Array.isArray(insights?.recommendations) ? insights.recommendations : [];
+    if (recs.length > 0) {
+      writeHeading("Recommendations");
+      recs.slice(0, 8).forEach((r, idx) => writeParagraph(`${idx + 1}. ${r}`));
+      y += 4;
+    }
+
+    const outlierEntries = Object.entries(stats?.outliers || {})
+      .map(([col, info]) => ({ col, count: Number(info?.count || 0), pct: Number(info?.percentage || 0) }))
+      .sort((a, b) => b.count - a.count)
+      .slice(0, 10);
+    writeHeading("Outlier Summary");
+    if (outlierEntries.length === 0) {
+      writeLine("No outliers detected.");
+    } else {
+      outlierEntries.forEach((o) => writeLine(`${o.col}: ${o.count} outliers (${o.pct.toFixed(1)}%)`));
+    }
+    y += 4;
+
+    const corrs = Array.isArray(stats?.strong_correlations) ? stats.strong_correlations : [];
+    if (corrs.length > 0) {
+      writeHeading("Top Correlations");
+      corrs.slice(0, 10).forEach((c) => writeLine(`${c.col1} <-> ${c.col2}: ${Number(c.correlation || 0).toFixed(3)}`));
+    }
+
     const safeName = (fileName || "analysis").replace(/\.[^/.]+$/, "").replace(/[^a-zA-Z0-9_-]/g, "_");
-    a.download = `${safeName}_dashboard.json`;
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
-    URL.revokeObjectURL(a.href);
+    doc.save(`${safeName}_report.pdf`);
   };
 
   // ── Upload screen ──────────────────────────────────────────────────────────
@@ -395,19 +527,6 @@ export default function DataPulse({ user, onLogout }) {
           <p style={{ color: "#94a3b8", fontSize: "0.92rem", marginBottom: "20px", lineHeight: 1.7 }}>
             Drop a CSV or Excel file and get instant profiling, anomaly detection, chart generation, and AI recommendations.
           </p>
-
-          <div style={{ display: "grid", gridTemplateColumns: isMobile ? "1fr" : "repeat(3,minmax(0,1fr))", gap: "10px", marginBottom: "20px" }}>
-            {[
-              { k: "Profile", v: "Columns typed + cleaned" },
-              { k: "Visuals", v: "Auto-ranked Plotly charts" },
-              { k: "Insights", v: "Actionable findings + risks" },
-            ].map((item) => (
-              <div key={item.k} style={{ background: "#121929", border: "1px solid rgba(99,102,241,0.15)", borderRadius: "8px", padding: "10px" }}>
-                <div style={{ fontSize: "0.68rem", color: "#818cf8", fontWeight: 700, letterSpacing: "0.08em", textTransform: "uppercase" }}>{item.k}</div>
-                <div style={{ fontSize: "0.78rem", color: "#cbd5e1", marginTop: "4px" }}>{item.v}</div>
-              </div>
-            ))}
-          </div>
 
           <div
             onClick={() => fileRef.current.click()}
@@ -515,11 +634,14 @@ export default function DataPulse({ user, onLogout }) {
       {showHistory && (
         <div style={{ background: "#080f1c", borderBottom: "1px solid rgba(99,102,241,0.12)", padding: "16px 32px" }}>
           <div style={s.sectionTitle}>Analysis history</div>
-          {history.length === 0 ? (
+          {historyError && (
+            <div style={{ fontSize: "0.82rem", color: "#fca5a5", marginBottom: "10px" }}>History error: {historyError}</div>
+          )}
+          {historyItems.length === 0 ? (
             <div style={{ fontSize: "0.82rem", color: "#475569" }}>No saved analyses yet.</div>
           ) : (
             <div style={{ display: "flex", flexWrap: "wrap", gap: "10px" }}>
-              {history.map((item) => (
+              {historyItems.map((item) => (
                 <div
                   key={item.analysis_id}
                   onClick={() => historySelectLoading == null && loadHistoryItem(item)}
@@ -537,12 +659,14 @@ export default function DataPulse({ user, onLogout }) {
                   }}
                 >
                   <span style={{ color: "#94a3b8" }}>
-                    {historySelectLoading === item.analysis_id ? "Loading…" : item.file_name}
+                    {item.isLocal ? `${item.file_name} (current session)` : (historySelectLoading === item.analysis_id ? "Loading…" : item.file_name)}
                   </span>
                   <span style={{ color: "#475569", fontFamily: "monospace", fontSize: "0.7rem" }}>{item.row_count}r × {item.column_count}c</span>
-                  <button onClick={(e) => { e.stopPropagation(); deleteItem(item.analysis_id); }} disabled={deleteLoading === item.analysis_id} style={{ background: "transparent", border: "none", color: "#ef4444", cursor: deleteLoading === item.analysis_id ? "wait" : "pointer", fontSize: "0.75rem", padding: "0" }}>
-                    {deleteLoading === item.analysis_id ? "..." : "✕"}
-                  </button>
+                  {!item.isLocal && (
+                    <button onClick={(e) => { e.stopPropagation(); deleteItem(item.analysis_id); }} disabled={deleteLoading === item.analysis_id} style={{ background: "transparent", border: "none", color: "#ef4444", cursor: deleteLoading === item.analysis_id ? "wait" : "pointer", fontSize: "0.75rem", padding: "0" }}>
+                      {deleteLoading === item.analysis_id ? "..." : "✕"}
+                    </button>
+                  )}
                 </div>
               ))}
             </div>
@@ -825,7 +949,7 @@ export default function DataPulse({ user, onLogout }) {
                 Analyze a file first to chat with dataset context.
               </div>
             )}
-            <div style={{ height: "340px", overflowY: "auto", marginBottom: "14px", display: "flex", flexDirection: "column", gap: "10px" }}>
+            <div style={{ height: "340px", overflowY: "auto", marginBottom: "14px", display: "flex", flexDirection: "column", gap: "10px", paddingRight: "4px" }}>
               {chatMsgs.length === 0 && (
                 <div style={{ textAlign: "center", padding: "40px", color: "#475569", fontSize: "0.85rem" }}>
                   <div style={{ fontSize: "1.8rem", color: "#6366f1", marginBottom: "10px" }}>◈</div>
@@ -852,8 +976,21 @@ export default function DataPulse({ user, onLogout }) {
             </div>
             <div>
               <div style={{ display: "flex", gap: "8px" }}>
-                <input style={s.input} value={chatInput} onChange={(e) => e.target.value.length <= 1200 && setChatInput(e.target.value)} onKeyDown={(e) => e.key === "Enter" && sendChat()} placeholder="Ask about your data…" />
-                <button style={{ ...s.btn, padding: "10px 16px", flexShrink: 0 }} onClick={sendChat} disabled={chatLoading}>→</button>
+                <input
+                  style={s.input}
+                  value={chatInput}
+                  onChange={(e) => e.target.value.length <= 1200 && setChatInput(e.target.value)}
+                  onKeyDown={(e) => e.key === "Enter" && sendChat()}
+                  placeholder="Ask about your data…"
+                  disabled={!result || chatLoading}
+                />
+                <button
+                  style={{ ...s.btn, padding: "10px 16px", flexShrink: 0, opacity: (!result || chatLoading || !chatInput.trim()) ? 0.7 : 1 }}
+                  onClick={sendChat}
+                  disabled={!result || chatLoading || !chatInput.trim()}
+                >
+                  →
+                </button>
               </div>
               <div style={{ fontSize: "0.7rem", color: chatInput.length >= 1200 ? "#ef4444" : "#64748b", textAlign: "right", marginTop: "6px" }}>
                 {chatInput.length} / 1200
