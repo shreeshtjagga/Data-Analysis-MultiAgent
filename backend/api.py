@@ -70,9 +70,15 @@ logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(name)s] %(levelname)s %(message)s")
 
 APP_ENV = os.getenv("APP_ENV", "production")
+GOOGLE_CLIENT_ID = os.getenv("GOOGLE_CLIENT_ID", "").strip()
+FRONTEND_GOOGLE_CLIENT_ID = (
+    os.getenv("FRONTEND_GOOGLE_CLIENT_ID", "").strip()
+    or os.getenv("VITE_GOOGLE_CLIENT_ID", "").strip()
+)
 MAX_UPLOAD_BYTES = int(os.getenv("MAX_UPLOAD_BYTES", str(30 * 1024 * 1024)))
 MAX_ANALYZE_ROWS = int(os.getenv("MAX_ANALYZE_ROWS", "250000"))
 MAX_ANALYZE_COLUMNS = int(os.getenv("MAX_ANALYZE_COLUMNS", "300"))
+MAX_EXCEL_SHEETS = int(os.getenv("MAX_EXCEL_SHEETS", "5"))
 MAX_QUESTION_CHARS = int(os.getenv("CHAT_MAX_QUESTION_CHARS", "1200"))
 MAX_CONTEXT_BYTES = int(os.getenv("CHAT_MAX_CONTEXT_BYTES", str(128 * 1024)))
 READ_CHUNK_BYTES = 1024 * 1024
@@ -139,6 +145,14 @@ async def lifespan(app: FastAPI):
             "GROQ_API_KEY environment variable is not set. "
             "The application cannot start without it. "
             "Set it in your .env file or environment."
+        )
+
+    if APP_ENV == "production" and "*" in origins:
+        raise RuntimeError("CORS_ORIGINS cannot contain '*' in production")
+
+    if GOOGLE_CLIENT_ID and FRONTEND_GOOGLE_CLIENT_ID and GOOGLE_CLIENT_ID != FRONTEND_GOOGLE_CLIENT_ID:
+        raise RuntimeError(
+            "Google OAuth Client ID mismatch between backend and frontend configuration"
         )
 
     await init_db()
@@ -281,9 +295,15 @@ async def login_with_google(request: Request, db: AsyncSession = Depends(get_db)
     if not credential:
         raise HTTPException(status_code=400, detail="Missing Google credential")
 
+    frontend_client_id = (body.get("client_id") or "").strip()
+    if frontend_client_id and GOOGLE_CLIENT_ID and frontend_client_id != GOOGLE_CLIENT_ID:
+        raise HTTPException(status_code=400, detail="Google client ID mismatch")
+
     idinfo = verify_google_token(credential)
     if not idinfo:
         raise HTTPException(status_code=401, detail="Invalid Google token")
+    if GOOGLE_CLIENT_ID and idinfo.get("aud") != GOOGLE_CLIENT_ID:
+        raise HTTPException(status_code=401, detail="Invalid Google token audience")
 
     email = idinfo.get("email")
     google_id = idinfo.get("sub")
@@ -459,10 +479,47 @@ async def analyze(
     # Run full pipeline
     try:
         if parsed_ext == "csv":
-            df = pd.read_csv(io.BytesIO(file_bytes))
+            df = pd.read_csv(
+                io.BytesIO(file_bytes),
+                nrows=MAX_ANALYZE_ROWS + 1,
+                usecols=range(MAX_ANALYZE_COLUMNS + 1),
+            )
         else:
-            df = pd.read_excel(io.BytesIO(file_bytes), engine="openpyxl")
+            from openpyxl import load_workbook
+
+            wb = load_workbook(io.BytesIO(file_bytes), read_only=True, data_only=True)
+            try:
+                sheet_count = len(wb.sheetnames)
+                if sheet_count > MAX_EXCEL_SHEETS:
+                    raise HTTPException(
+                        status_code=413,
+                        detail=f"Excel file has {sheet_count} sheets. Maximum allowed is {MAX_EXCEL_SHEETS}.",
+                    )
+
+                active_sheet = wb[wb.sheetnames[0]]
+                if (active_sheet.max_row or 0) > MAX_ANALYZE_ROWS:
+                    raise HTTPException(
+                        status_code=413,
+                        detail=f"Excel file has {active_sheet.max_row} rows. Maximum allowed is {MAX_ANALYZE_ROWS}.",
+                    )
+                if (active_sheet.max_column or 0) > MAX_ANALYZE_COLUMNS:
+                    raise HTTPException(
+                        status_code=413,
+                        detail=f"Excel file has {active_sheet.max_column} columns. Maximum allowed is {MAX_ANALYZE_COLUMNS}.",
+                    )
+            finally:
+                wb.close()
+
+            df = pd.read_excel(
+                io.BytesIO(file_bytes),
+                engine="openpyxl",
+                sheet_name=0,
+                nrows=MAX_ANALYZE_ROWS + 1,
+                usecols=range(MAX_ANALYZE_COLUMNS + 1),
+            )
     except Exception as exc:
+        if isinstance(exc, HTTPException):
+            raise exc
         raise HTTPException(status_code=422, detail=f"Could not parse file: {exc}")
 
     row_count, column_count = df.shape

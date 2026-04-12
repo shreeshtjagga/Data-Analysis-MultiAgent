@@ -19,6 +19,7 @@ logger = logging.getLogger(__name__)
 
 _CSV_FORMULA_PREFIXES = ("=", "+", "-", "@")
 _MAX_CATEGORY_VALUE_CHARS = 200
+_MAX_STRONG_CORRELATIONS = 200
 
 
 def _sanitize_cell_for_output(value: object) -> str:
@@ -199,7 +200,6 @@ def statistician_agent(state: AnalysisState) -> AnalysisState:
                         "percentage": float((len(outliers) / len(df)) * 100),
                         "lower_bound": float(lower_bound),
                         "upper_bound": float(upper_bound),
-                        "outlier_indices": outliers.index.tolist()[:10],
                     }
             except Exception as col_err:
                 logger.warning(
@@ -225,14 +225,16 @@ def statistician_agent(state: AnalysisState) -> AnalysisState:
                                 }
                             )
 
-                stats_summary["correlation_matrix"] = correlation_matrix.to_dict()
+                strong_correlations = sorted(
+                    strong_correlations,
+                    key=lambda item: abs(item["correlation"]),
+                    reverse=True,
+                )[:_MAX_STRONG_CORRELATIONS]
                 stats_summary["strong_correlations"] = strong_correlations
             except Exception as corr_err:
                 logger.warning("Correlation analysis failed: %s", corr_err)
-                stats_summary["correlation_matrix"] = {}
                 stats_summary["strong_correlations"] = []
         else:
-            stats_summary["correlation_matrix"] = {}
             stats_summary["strong_correlations"] = []
 
         # Data quality metrics
