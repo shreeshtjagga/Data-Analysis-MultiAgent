@@ -19,6 +19,7 @@ class AnalysisState(BaseModel):
 
     # Error tracking
     errors: list[str] = Field(default_factory=list)
+    partial: bool = False
 
     # Agent tracking
     current_agent: Optional[str] = None

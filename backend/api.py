@@ -17,6 +17,7 @@ Routes
 """
 
 import io
+import csv
 import logging
 import os
 import json
@@ -68,12 +69,62 @@ from .models.schemas import (
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(name)s] %(levelname)s %(message)s")
 
+APP_ENV = os.getenv("APP_ENV", "production")
 MAX_UPLOAD_BYTES = int(os.getenv("MAX_UPLOAD_BYTES", str(30 * 1024 * 1024)))
+MAX_ANALYZE_ROWS = int(os.getenv("MAX_ANALYZE_ROWS", "250000"))
+MAX_ANALYZE_COLUMNS = int(os.getenv("MAX_ANALYZE_COLUMNS", "300"))
 MAX_QUESTION_CHARS = int(os.getenv("CHAT_MAX_QUESTION_CHARS", "1200"))
 MAX_CONTEXT_BYTES = int(os.getenv("CHAT_MAX_CONTEXT_BYTES", str(128 * 1024)))
 READ_CHUNK_BYTES = 1024 * 1024
 CHAT_RATE_LIMIT = int(os.getenv("CHAT_RATE_LIMIT", "10"))
 CHAT_RATE_WINDOW = int(os.getenv("CHAT_RATE_WINDOW_SECONDS", "60"))
+
+
+def _looks_like_csv(file_bytes: bytes) -> bool:
+    sample = file_bytes[:8192]
+    if not sample or b"\x00" in sample:
+        return False
+
+    text: Optional[str] = None
+    for encoding in ("utf-8", "latin-1"):
+        try:
+            text = sample.decode(encoding)
+            break
+        except UnicodeDecodeError:
+            continue
+
+    if text is None:
+        return False
+
+    lines = [line for line in text.splitlines() if line.strip()]
+    if len(lines) < 1:
+        return False
+
+    sniff_sample = "\n".join(lines[:10])
+    try:
+        csv.Sniffer().sniff(sniff_sample)
+        return True
+    except csv.Error:
+        return any(delim in lines[0] for delim in (",", ";", "\t", "|"))
+
+
+def _validate_upload_magic(parsed_ext: str, file_bytes: bytes) -> None:
+    if parsed_ext == "csv":
+        if not _looks_like_csv(file_bytes):
+            raise HTTPException(status_code=400, detail="Invalid CSV content")
+        return
+
+    if parsed_ext == "xlsx":
+        if not file_bytes.startswith(b"PK\x03\x04"):
+            raise HTTPException(status_code=400, detail="Invalid XLSX file signature")
+        return
+
+    if parsed_ext == "xls":
+        if not file_bytes.startswith(b"\xD0\xCF\x11\xE0\xA1\xB1\x1A\xE1"):
+            raise HTTPException(status_code=400, detail="Invalid XLS file signature")
+        return
+
+    raise HTTPException(status_code=400, detail="Unsupported file type")
 
 
 # ── Lifespan ──────────────────────────────────────────────────────────────────
@@ -382,6 +433,8 @@ async def analyze(
     if len(file_bytes) == 0:
         raise HTTPException(status_code=400, detail="Uploaded file is empty")
 
+    _validate_upload_magic(parsed_ext, file_bytes)
+
     file_hash = compute_file_hash(file_bytes, filename)
 
     # Cache hit — return immediately
@@ -390,6 +443,7 @@ async def analyze(
         cached
         and cached.get("stats_summary")
         and cached.get("insights")
+        and not (cached.get("errors") or [])
         and cached.get("pipeline_version") == PIPELINE_VERSION
     ):
         logger.info("Returning cached analysis for user %d / %s", user_id, file.filename)
@@ -397,7 +451,10 @@ async def analyze(
         cached["charts"] = {k: v for k, v in (cached.get("charts") or {}).items()}
         return {"from_cache": True, **cached}
     elif cached:
-        logger.info("Cache STALE (version mismatch) for user %d / %s — re-running pipeline", user_id, file.filename)
+        logger.info("Cache not eligible for reuse for user %d / %s — re-running pipeline", user_id, file.filename)
+
+    # End the read transaction before expensive parsing and agent execution.
+    await db.rollback()
 
     # Run full pipeline
     try:
@@ -408,9 +465,33 @@ async def analyze(
     except Exception as exc:
         raise HTTPException(status_code=422, detail=f"Could not parse file: {exc}")
 
+    row_count, column_count = df.shape
+    if row_count > MAX_ANALYZE_ROWS:
+        raise HTTPException(
+            status_code=413,
+            detail=f"Dataset has {row_count} rows. Maximum allowed is {MAX_ANALYZE_ROWS}.",
+        )
+    if column_count > MAX_ANALYZE_COLUMNS:
+        raise HTTPException(
+            status_code=413,
+            detail=f"Dataset has {column_count} columns. Maximum allowed is {MAX_ANALYZE_COLUMNS}.",
+        )
+
     import asyncio
     state = await asyncio.to_thread(run_pipeline, df)
     result = state.model_dump()
+
+    if state.errors or state.partial:
+        logger.error("Pipeline failed for user %d / %s: %s", user_id, filename, state.errors)
+        raise HTTPException(
+            status_code=500,
+            detail={
+                "message": "Analysis pipeline failed",
+                "partial": True,
+                "errors": state.errors,
+                "completed_agents": state.completed_agents,
+            },
+        )
 
     # Persist and warm cache (fire-and-forget style — errors are logged, not raised)
     save_result = await save_analysis(
@@ -427,6 +508,7 @@ async def analyze(
     # Serialise charts to plain dicts before returning
     from .analysis_history import _serialize_charts
     result["charts"] = _serialize_charts(result.get("charts") or {})
+    result["partial"] = False
 
     # Make DataFrames JSON-safe
     import json

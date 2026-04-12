@@ -141,6 +141,9 @@ async def save_analysis(
 ) -> dict:
     try:
         stats = analysis_result.get("stats_summary") or {}
+        insights = analysis_result.get("insights") or {}
+        errors = analysis_result.get("errors") or []
+        is_partial = bool(analysis_result.get("partial"))
         row_count = stats.get("row_count")
         column_count = stats.get("column_count")
         completeness = (stats.get("data_quality") or {}).get("completeness")
@@ -167,8 +170,8 @@ async def save_analysis(
             existing.clean_data = _to_json(clean_data)
             existing.stats_summary = _to_json(stats)
             existing.charts = charts_json
-            existing.insights = _to_json(analysis_result.get("insights"))
-            existing.errors = _to_json(analysis_result.get("errors", []))
+            existing.insights = _to_json(insights)
+            existing.errors = _to_json(errors)
             existing.completed_agents = _to_json(analysis_result.get("completed_agents", []))
             existing.analysis_date = datetime.now(tz=timezone.utc)
             analysis_id = existing.id
@@ -182,8 +185,8 @@ async def save_analysis(
                 clean_data=_to_json(clean_data),
                 stats_summary=_to_json(stats),
                 charts=charts_json,
-                insights=_to_json(analysis_result.get("insights")),
-                errors=_to_json(analysis_result.get("errors", [])),
+                insights=_to_json(insights),
+                errors=_to_json(errors),
                 completed_agents=_to_json(analysis_result.get("completed_agents", [])),
             )
             db.add(row)
@@ -219,29 +222,34 @@ async def save_analysis(
 
         await db.flush()
         await _enforce_cache_policy(user_id, db)
+        await db.commit()
 
-        # Warm Redis cache
-        cache_key = redis_cache.analysis_key(user_id, file_hash)
-        cacheable = {
-            "id": analysis_id,
-            "file_name": file_name,
-            "file_hash": file_hash,
-            "pipeline_version": PIPELINE_VERSION,
-            "raw_df": raw_data,
-            "clean_df": clean_data,
-            "stats_summary": stats,
-            "charts": _serialize_charts(analysis_result.get("charts") or {}),
-            "insights": analysis_result.get("insights", {}),
-            "errors": analysis_result.get("errors", []),
-            "completed_agents": analysis_result.get("completed_agents", []),
-            "from_cache": True,
-        }
-        await redis_cache.set(cache_key, cacheable, ttl=redis_cache.CACHE_TTL_ANALYSIS)
+        # Cache only complete successful analyses.
+        is_cacheable = bool(stats) and bool(insights) and not errors and not is_partial
+        if is_cacheable:
+            cache_key = redis_cache.analysis_key(user_id, file_hash)
+            cacheable = {
+                "id": analysis_id,
+                "file_name": file_name,
+                "file_hash": file_hash,
+                "pipeline_version": PIPELINE_VERSION,
+                "raw_df": raw_data,
+                "clean_df": clean_data,
+                "stats_summary": stats,
+                "charts": _serialize_charts(analysis_result.get("charts") or {}),
+                "insights": insights,
+                "errors": errors,
+                "completed_agents": analysis_result.get("completed_agents", []),
+                "partial": False,
+                "from_cache": True,
+            }
+            await redis_cache.set(cache_key, cacheable, ttl=redis_cache.CACHE_TTL_ANALYSIS)
 
         logger.info("Saved analysis id=%d for user %d (%s)", analysis_id, user_id, file_name)
         return {"success": True, "message": message, "analysis_id": analysis_id}
 
     except Exception as exc:
+        await db.rollback()
         logger.exception("save_analysis error: %s", exc)
         return {"success": False, "message": f"Failed to save analysis: {exc}"}
 
@@ -255,8 +263,12 @@ async def get_analysis_by_hash(
     cache_key = redis_cache.analysis_key(user_id, file_hash)
     cached = await redis_cache.get(cache_key)
     if cached is not None:
-        logger.info("Cache HIT for user %d / hash %s", user_id, file_hash[:8])
-        return cached
+        if cached.get("errors"):
+            logger.info("Ignoring cached failed analysis for user %d / hash %s", user_id, file_hash[:8])
+            await redis_cache.delete(cache_key)
+        else:
+            logger.info("Cache HIT for user %d / hash %s", user_id, file_hash[:8])
+            return cached
 
     # 2. Database fallback
     result = await db.execute(
@@ -281,12 +293,14 @@ async def get_analysis_by_hash(
         "insights": json.loads(row.insights) if row.insights else {},
         "errors": json.loads(row.errors) if row.errors else [],
         "completed_agents": json.loads(row.completed_agents) if row.completed_agents else [],
+        "partial": bool(json.loads(row.errors)) if row.errors else False,
         "analysis_date": row.analysis_date.isoformat() if row.analysis_date else None,
         "from_cache": True,
     }
 
-    # Back-fill Redis from DB
-    await redis_cache.set(cache_key, analysis, ttl=redis_cache.CACHE_TTL_ANALYSIS)
+    # Back-fill Redis from DB only for complete successful analyses.
+    if analysis.get("stats_summary") and analysis.get("insights") and not analysis.get("errors"):
+        await redis_cache.set(cache_key, analysis, ttl=redis_cache.CACHE_TTL_ANALYSIS)
     logger.info("Cache MISS — loaded from DB for user %d / hash %s", user_id, file_hash[:8])
     return analysis
 
@@ -344,6 +358,7 @@ async def delete_analysis(
     file_hash = row.file_hash
     await db.delete(row)
     await db.flush()
+    await db.commit()
 
     # Purge Redis entry
     cache_key = redis_cache.analysis_key(user_id, file_hash)

@@ -17,6 +17,18 @@ from ..core.state import AnalysisState
 
 logger = logging.getLogger(__name__)
 
+_CSV_FORMULA_PREFIXES = ("=", "+", "-", "@")
+_MAX_CATEGORY_VALUE_CHARS = 200
+
+
+def _sanitize_cell_for_output(value: object) -> str:
+    text = str(value).replace("\r", " ").replace("\n", " ").strip()
+    while text.startswith(_CSV_FORMULA_PREFIXES):
+        text = text[1:].lstrip()
+    if len(text) > _MAX_CATEGORY_VALUE_CHARS:
+        text = text[:_MAX_CATEGORY_VALUE_CHARS] + "..."
+    return text
+
 
 def statistician_agent(state: AnalysisState) -> AnalysisState:
     state.current_agent = "statistician"
@@ -135,22 +147,27 @@ def statistician_agent(state: AnalysisState) -> AnalysisState:
         for col in categorical_cols:
             try:
                 value_counts = df[col].value_counts()
+                top_5_values: dict[str, int] = {}
+                for raw_value, count in value_counts.head(5).items():
+                    safe_key = _sanitize_cell_for_output(raw_value)
+                    top_5_values[safe_key] = top_5_values.get(safe_key, 0) + int(count)
+
                 categorical_stats[col] = {
                     "unique_values": int(df[col].nunique()),
                     "most_common": (
-                        str(value_counts.index[0]) if len(value_counts) > 0 else None
+                        _sanitize_cell_for_output(value_counts.index[0]) if len(value_counts) > 0 else None
                     ),
                     "most_common_count": (
                         int(value_counts.iloc[0]) if len(value_counts) > 0 else 0
                     ),
                     "least_common": (
-                        str(value_counts.index[-1]) if len(value_counts) > 0 else None
+                        _sanitize_cell_for_output(value_counts.index[-1]) if len(value_counts) > 0 else None
                     ),
                     "least_common_count": (
                         int(value_counts.iloc[-1]) if len(value_counts) > 0 else 0
                     ),
                     "diversity_ratio": float(df[col].nunique() / len(df)),
-                    "top_5_values": value_counts.head(5).to_dict(),
+                    "top_5_values": top_5_values,
                 }
             except Exception as col_err:
                 logger.warning(

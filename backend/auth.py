@@ -130,6 +130,7 @@ async def register_user(db: AsyncSession, email: str, password: str, name: Optio
     try:
         await db.flush()
         await db.refresh(user)
+        await db.commit()
     except IntegrityError:
         await db.rollback()
         return {"success": False, "message": "Email already registered. Please log in instead."}
@@ -214,6 +215,7 @@ async def login_google_user(db: AsyncSession, email: str, google_id: str, name: 
         try:
             await db.flush()
             await db.refresh(user)
+            await db.commit()
             logger.info("Google User registered: %s (id=%d)", email, user.id)
         except IntegrityError:
             await db.rollback()
