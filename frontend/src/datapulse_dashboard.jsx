@@ -91,7 +91,8 @@ function ChartPanel({ result }) {
 }
 
 // ── Main dashboard ────────────────────────────────────────────────────────────
-const TABS = ["overview", "charts", "insights", "statistics", "quality", "chat"];
+const PRIMARY_TABS = ["overview", "charts", "insights"];
+const SECONDARY_TABS = ["statistics", "quality", "chat"];
 
 export default function DataPulse({ user, onLogout }) {
   const [phase, setPhase]     = useState("upload");
@@ -122,6 +123,18 @@ export default function DataPulse({ user, onLogout }) {
     window.addEventListener("resize", onResize);
     return () => window.removeEventListener("resize", onResize);
   }, []);
+
+  useEffect(() => {
+    if (phase === "upload") {
+      document.title = "Data Pulse - AI Data Analyst";
+      return;
+    }
+    if (phase === "analyzing") {
+      document.title = fileName ? `Analyzing ${fileName} - Data Pulse` : "Analyzing - Data Pulse";
+      return;
+    }
+    document.title = fileName ? `${fileName} - Data Pulse` : "Analysis Complete - Data Pulse";
+  }, [phase, fileName]);
 
   useEffect(() => {
     if (tab !== "chat") return;
@@ -285,38 +298,101 @@ export default function DataPulse({ user, onLogout }) {
           <button style={{ ...s.btn, fontSize: "0.72rem", padding: "7px 14px", background: "transparent", border: "1px solid rgba(99,102,241,0.2)", color: "#818cf8" }} onClick={onLogout}>Logout</button>
         </div>
       </div>
-      <div style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center", padding: "40px" }}>
+      <div style={{ flex: 1, display: "grid", gridTemplateColumns: isMobile ? "1fr" : "1.1fr 1fr", gap: "28px", alignItems: "stretch", padding: isMobile ? "20px" : "32px" }}>
         <div
-          style={{ textAlign: "center", maxWidth: "480px", width: "100%" }}
+          style={{
+            ...s.card,
+            display: "flex",
+            flexDirection: "column",
+            justifyContent: "center",
+            minHeight: isMobile ? "unset" : "560px",
+            textAlign: "left",
+          }}
           onDrop={onDrop}
           onDragOver={(e) => e.preventDefault()}
           onDragEnter={onDragEnter}
           onDragLeave={onDragLeave}
         >
-          <div style={{ fontSize: "2.8rem", marginBottom: "20px", color: "#6366f1" }}>◈</div>
-          <h1 style={{ fontFamily: "'Syne',sans-serif", fontSize: "1.8rem", fontWeight: 800, color: "#f1f5f9", marginBottom: "10px" }}>AI Data Analyst</h1>
-          <p style={{ color: "#64748b", fontSize: "0.9rem", marginBottom: "32px", lineHeight: 1.7 }}>Upload any CSV and get instant AI-powered insights, charts, correlations, and recommendations.</p>
+          <div style={{ fontSize: "2.6rem", marginBottom: "14px", color: "#6366f1" }}>◈</div>
+          <h1 style={{ fontFamily: "'Syne',sans-serif", fontSize: "2rem", fontWeight: 800, color: "#f1f5f9", marginBottom: "10px" }}>From Spreadsheet to Insight, Fast</h1>
+          <p style={{ color: "#94a3b8", fontSize: "0.92rem", marginBottom: "20px", lineHeight: 1.7 }}>
+            Drop a CSV or Excel file and get instant profiling, anomaly detection, chart generation, and AI recommendations.
+          </p>
+
+          <div style={{ display: "grid", gridTemplateColumns: isMobile ? "1fr" : "repeat(3,minmax(0,1fr))", gap: "10px", marginBottom: "20px" }}>
+            {[
+              { k: "Profile", v: "Columns typed + cleaned" },
+              { k: "Visuals", v: "Auto-ranked Plotly charts" },
+              { k: "Insights", v: "Actionable findings + risks" },
+            ].map((item) => (
+              <div key={item.k} style={{ background: "#121929", border: "1px solid rgba(99,102,241,0.15)", borderRadius: "8px", padding: "10px" }}>
+                <div style={{ fontSize: "0.68rem", color: "#818cf8", fontWeight: 700, letterSpacing: "0.08em", textTransform: "uppercase" }}>{item.k}</div>
+                <div style={{ fontSize: "0.78rem", color: "#cbd5e1", marginTop: "4px" }}>{item.v}</div>
+              </div>
+            ))}
+          </div>
+
           <div
             onClick={() => fileRef.current.click()}
             style={{
               border: isDragOver ? "2px dashed rgba(99,102,241,0.85)" : "2px dashed rgba(99,102,241,0.3)",
               borderRadius: "12px",
-              padding: "40px",
+              padding: "28px",
               cursor: "pointer",
               background: isDragOver ? "rgba(99,102,241,0.14)" : "rgba(99,102,241,0.03)",
               transition: "all 0.18s ease",
+              textAlign: "center",
             }}
           >
-            <div style={{ fontSize: "2rem", marginBottom: "12px", color: "#475569" }}>↑</div>
+            <div style={{ fontSize: "1.8rem", marginBottom: "10px", color: "#475569" }}>↑</div>
             <p style={{ color: "#94a3b8", fontSize: "0.88rem" }}>
               {isDragOver ? "Drop file to start analysis" : "Click to upload or drag CSV/Excel (.csv, .xlsx, .xls)"}
             </p>
             <input ref={fileRef} type="file" accept=".csv,.xlsx,.xls" style={{ display: "none" }} onChange={(e) => onFile(e.target.files[0])} />
           </div>
-          <div style={{ marginTop: "24px", display: "flex", justifyContent: "center", gap: "8px", flexWrap: "wrap" }}>
+
+          <div style={{ marginTop: "16px", display: "flex", justifyContent: "center", gap: "8px", flexWrap: "wrap" }}>
             {["Architect","Statistician","Insights","Chat"].map((a) => (
               <span key={a} style={s.pill(false)}>{a}</span>
             ))}
+          </div>
+        </div>
+
+        <div style={{ ...s.card, minHeight: isMobile ? "unset" : "560px" }}>
+          <div style={s.sectionTitle}>What You Will Get</div>
+          <div style={{ display: "grid", gap: "12px" }}>
+            {[
+              "Executive summary tailored to your dataset domain",
+              "Top correlations and outlier columns with severity",
+              "Interactive charts with hover, zoom, and export",
+              "Data quality report with completeness and imputations",
+              "Chat assistant grounded on your computed stats",
+            ].map((line) => (
+              <div key={line} style={{ display: "flex", gap: "10px", alignItems: "flex-start" }}>
+                <span style={{ color: "#10b981", marginTop: "2px" }}>✓</span>
+                <span style={{ color: "#cbd5e1", fontSize: "0.84rem", lineHeight: 1.5 }}>{line}</span>
+              </div>
+            ))}
+          </div>
+
+          <div style={{ marginTop: "18px", padding: "12px", borderRadius: "10px", background: "#121929", border: "1px solid rgba(99,102,241,0.15)" }}>
+            <div style={{ fontSize: "0.68rem", color: "#64748b", letterSpacing: "0.1em", textTransform: "uppercase", marginBottom: "8px" }}>Preview</div>
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(4,minmax(0,1fr))", gap: "8px" }}>
+              {[
+                ["Rows", "12,540"],
+                ["Cols", "27"],
+                ["Outliers", "3"],
+                ["Completeness", "98%"],
+              ].map(([k, v]) => (
+                <div key={k} style={{ background: "rgba(99,102,241,0.06)", border: "1px solid rgba(99,102,241,0.15)", borderRadius: "7px", padding: "8px" }}>
+                  <div style={{ fontSize: "0.65rem", color: "#64748b" }}>{k}</div>
+                  <div style={{ fontFamily: "'Syne',sans-serif", color: "#e2e8f0", fontSize: "0.95rem" }}>{v}</div>
+                </div>
+              ))}
+            </div>
+            <div style={{ marginTop: "10px", fontSize: "0.78rem", color: "#94a3b8" }}>
+              Sample outcomes are illustrative. Actual metrics depend on uploaded data.
+            </div>
           </div>
         </div>
       </div>
@@ -435,8 +511,16 @@ export default function DataPulse({ user, onLogout }) {
       )}
 
       {/* Tab bar */}
-      <div style={{ background: "#0d1220", borderBottom: "1px solid rgba(99,102,241,0.12)", padding: "0 16px", display: "flex", gap: 0, overflowX: "auto" }}>
-        {TABS.map((t) => <button key={t} style={s.tab(tab === t)} onClick={() => setTab(t)}>{t}</button>)}
+      <div style={{ background: "#0d1220", borderBottom: "1px solid rgba(99,102,241,0.12)", padding: "6px 16px", display: "flex", gap: "14px", overflowX: "auto", alignItems: "center" }}>
+        <div style={{ display: "flex", alignItems: "center", gap: "2px" }}>
+          <span style={{ fontSize: "0.65rem", color: "#64748b", letterSpacing: "0.08em", textTransform: "uppercase", marginRight: "6px" }}>Primary</span>
+          {PRIMARY_TABS.map((t) => <button key={t} style={s.tab(tab === t)} onClick={() => setTab(t)}>{t}</button>)}
+        </div>
+        <div style={{ width: "1px", height: "22px", background: "rgba(99,102,241,0.2)" }} />
+        <div style={{ display: "flex", alignItems: "center", gap: "2px" }}>
+          <span style={{ fontSize: "0.65rem", color: "#64748b", letterSpacing: "0.08em", textTransform: "uppercase", marginRight: "6px" }}>Reference</span>
+          {SECONDARY_TABS.map((t) => <button key={t} style={s.tab(tab === t)} onClick={() => setTab(t)}>{t}</button>)}
+        </div>
       </div>
 
       <div style={s.content}>
