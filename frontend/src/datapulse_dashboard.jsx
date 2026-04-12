@@ -23,7 +23,7 @@ const s = {
   app: { minHeight: "100vh", background: "#060912", color: "#e2e8f0", fontFamily: "'Outfit', sans-serif", display: "flex", flexDirection: "column" },
   topbar: { background: "#0d1220", borderBottom: "1px solid rgba(99,102,241,0.15)", padding: "14px 28px", display: "flex", alignItems: "center", justifyContent: "space-between", position: "sticky", top: 0, zIndex: 20 },
   brand: { fontFamily: "'Syne', sans-serif", fontWeight: 800, fontSize: "1.15rem", letterSpacing: "-0.02em", color: "#818cf8" },
-  content: { flex: 1, padding: "28px 32px", display: "flex", flexDirection: "column", gap: "24px", maxWidth: "1300px", margin: "0 auto", width: "100%" },
+  content: { flex: 1, padding: "28px 32px", display: "flex", flexDirection: "column", gap: "24px", maxWidth: "1600px", margin: "0 auto", width: "100%" },
   card: { background: "#0d1220", border: "1px solid rgba(99,102,241,0.13)", borderRadius: "10px", padding: "20px 24px" },
   sectionTitle: { fontFamily: "'Syne', sans-serif", fontSize: "0.7rem", fontWeight: 700, letterSpacing: "0.12em", textTransform: "uppercase", color: "#475569", marginBottom: "16px" },
   metric: { background: "#121929", border: "1px solid rgba(99,102,241,0.12)", borderTop: "2px solid #6366f1", borderRadius: "8px", padding: "14px 18px" },
@@ -57,16 +57,17 @@ const PLOTLY_CONFIG = {
 };
 
 // ── Chart panel (Plotly) ──────────────────────────────────────────────────────
-function ChartPanel({ result }) {
+function ChartPanel({ result, viewportWidth }) {
   const charts = result?.charts || {};
   const entries = Object.entries(charts);
+  const columnCount = viewportWidth >= 1500 ? 3 : viewportWidth >= 980 ? 2 : 1;
 
   if (entries.length === 0) {
     return <div style={{ color: "#475569", fontSize: "0.88rem" }}>No charts available.</div>;
   }
 
   return (
-    <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(280px,1fr))", gap: "20px" }}>
+    <div style={{ display: "grid", gridTemplateColumns: `repeat(${columnCount}, minmax(0,1fr))`, gap: "20px" }}>
       {entries.map(([key, fig]) => (
         <div key={key} style={s.card}>
           <Plot
@@ -102,6 +103,7 @@ export default function DataPulse({ user, onLogout }) {
   const [analysisError, setAnalysisError] = useState("");
   const [isDragOver, setIsDragOver] = useState(false);
   const [isMobile, setIsMobile] = useState(typeof window !== "undefined" ? window.innerWidth < 900 : false);
+  const [viewportWidth, setViewportWidth] = useState(typeof window !== "undefined" ? window.innerWidth : 1280);
   const [tab, setTab]         = useState("overview");
   const [chatMsgs, setChatMsgs]   = useState([]);
   const [chatInput, setChatInput] = useState("");
@@ -111,6 +113,9 @@ export default function DataPulse({ user, onLogout }) {
   const [historyLoading, setHistoryLoading] = useState(false);
   const [deleteLoading, setDeleteLoading] = useState(null);
   const [historySelectLoading, setHistorySelectLoading] = useState(null);
+  const [statsSortKey, setStatsSortKey] = useState("outliers");
+  const [statsSortDirection, setStatsSortDirection] = useState("desc");
+  const [statsFilter, setStatsFilter] = useState("");
   const fileRef = useRef();
   const chatEndRef = useRef(null);
   const dragCounterRef = useRef(0);
@@ -119,7 +124,10 @@ export default function DataPulse({ user, onLogout }) {
   const log = (msg) => setAgentLog((p) => [...p, { time: new Date().toLocaleTimeString(), msg }]);
 
   useEffect(() => {
-    const onResize = () => setIsMobile(window.innerWidth < 900);
+    const onResize = () => {
+      setIsMobile(window.innerWidth < 900);
+      setViewportWidth(window.innerWidth);
+    };
     window.addEventListener("resize", onResize);
     return () => window.removeEventListener("resize", onResize);
   }, []);
@@ -286,6 +294,73 @@ export default function DataPulse({ user, onLogout }) {
   const formatPercent = (value) => {
     const n = Number.isFinite(value) ? Number(value) : 100;
     return Number.isInteger(n) ? `${n}%` : `${n.toFixed(1)}%`;
+  };
+
+  const keyMetrics = [
+    { label: "Rows", val: (stats.row_count || 0).toLocaleString(), tone: "#818cf8" },
+    { label: "Completeness", val: formatPercent(completeness), tone: "#10b981" },
+    { label: "Outlier cols", val: outlierCols.length, tone: outlierCols.length > 0 ? "#f59e0b" : "#10b981" },
+  ];
+  const secondaryMetrics = [
+    { label: "Columns", val: stats.column_count || 0 },
+    { label: "Numeric cols", val: numericCols.length },
+    { label: "Categorical cols", val: catCols.length },
+    { label: "Missing values", val: missingTotal },
+    { label: "Correlations", val: (stats.strong_correlations || []).length },
+  ];
+
+  const numericRows = numericCols
+    .map((col) => {
+      const st = stats.numeric_columns?.[col];
+      if (!st) return null;
+      return {
+        column: col,
+        count: Number(st.count || 0),
+        mean: Number(st.mean || 0),
+        std: Number(st.std || 0),
+        min: Number(st.min || 0),
+        max: Number(st.max || 0),
+        skewness: Number(st.skewness || 0),
+        outliers: Number(stats.outliers?.[col]?.count || 0),
+      };
+    })
+    .filter(Boolean)
+    .filter((row) => row.column.toLowerCase().includes(statsFilter.trim().toLowerCase()));
+
+  const sortedNumericRows = [...numericRows].sort((a, b) => {
+    const dir = statsSortDirection === "asc" ? 1 : -1;
+    if (statsSortKey === "column") return a.column.localeCompare(b.column) * dir;
+    return (Number(a[statsSortKey]) - Number(b[statsSortKey])) * dir;
+  });
+
+  const toggleSort = (key) => {
+    if (statsSortKey === key) {
+      setStatsSortDirection((d) => (d === "asc" ? "desc" : "asc"));
+      return;
+    }
+    setStatsSortKey(key);
+    setStatsSortDirection(key === "column" ? "asc" : "desc");
+  };
+
+  const downloadDashboard = () => {
+    if (!result) return;
+    const payload = {
+      file_name: fileName,
+      exported_at: new Date().toISOString(),
+      from_cache: Boolean(result?.from_cache),
+      stats_summary: result?.stats_summary || {},
+      insights: result?.insights || {},
+      charts: Object.keys(result?.charts || {}),
+    };
+    const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(blob);
+    const safeName = (fileName || "analysis").replace(/\.[^/.]+$/, "").replace(/[^a-zA-Z0-9_-]/g, "_");
+    a.download = `${safeName}_dashboard.json`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(a.href);
   };
 
   // ── Upload screen ──────────────────────────────────────────────────────────
@@ -457,6 +532,7 @@ export default function DataPulse({ user, onLogout }) {
           <button style={{ ...s.btn, fontSize: "0.72rem", padding: "7px 14px", opacity: historyLoading ? 0.7 : 1 }} onClick={toggleHistory} disabled={historyLoading}>
             {historyLoading ? "Loading…" : "History"}
           </button>
+          <button style={{ ...s.btn, fontSize: "0.72rem", padding: "7px 14px" }} onClick={downloadDashboard}>Download</button>
           <button
             style={{ ...s.btn, fontSize: "0.72rem", padding: "7px 14px" }}
             onClick={() => {
@@ -534,20 +610,19 @@ export default function DataPulse({ user, onLogout }) {
                 <div style={{ fontSize: "1rem", color: "#e2e8f0", lineHeight: 1.6 }}>{insights.headline}</div>
               </div>
             )}
-            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(140px,1fr))", gap: "12px" }}>
-              {[
-                { label: "Rows",             val: (stats.row_count || 0).toLocaleString() },
-                { label: "Columns",          val: stats.column_count || 0 },
-                { label: "Numeric cols",     val: numericCols.length },
-                { label: "Categorical cols", val: catCols.length },
-                { label: "Missing values",   val: missingTotal },
-                { label: "Completeness",     val: formatPercent(completeness) },
-                { label: "Outlier cols",     val: outlierCols.length },
-                { label: "Correlations",     val: (stats.strong_correlations || []).length },
-              ].map(({ label, val }) => (
+            <div style={{ display: "grid", gridTemplateColumns: isMobile ? "1fr" : "repeat(3,minmax(0,1fr))", gap: "12px" }}>
+              {keyMetrics.map(({ label, val, tone }) => (
+                <div key={label} style={{ ...s.metric, borderTop: `3px solid ${tone}`, background: "linear-gradient(180deg, rgba(99,102,241,0.08), rgba(13,18,32,0.9))", padding: "16px 18px" }}>
+                  <div style={{ ...s.metricLabel, color: "#94a3b8" }}>{label}</div>
+                  <div style={{ ...s.metricVal, fontSize: "2rem", color: tone }}>{val}</div>
+                </div>
+              ))}
+            </div>
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(150px,1fr))", gap: "10px" }}>
+              {secondaryMetrics.map(({ label, val }) => (
                 <div key={label} style={s.metric}>
                   <div style={s.metricLabel}>{label}</div>
-                  <div style={s.metricVal}>{val}</div>
+                  <div style={{ ...s.metricVal, fontSize: "1.25rem" }}>{val}</div>
                 </div>
               ))}
             </div>
@@ -617,12 +692,12 @@ export default function DataPulse({ user, onLogout }) {
         )}
 
         {/* CHARTS */}
-        {tab === "charts" && <ChartPanel result={result} />}
+        {tab === "charts" && <ChartPanel result={result} viewportWidth={viewportWidth} />}
 
         {/* INSIGHTS */}
         {tab === "insights" && (
-          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(320px,1fr))", gap: "20px" }}>
-            <div style={s.card}>
+          <div style={{ display: "grid", gridTemplateColumns: isMobile ? "1fr" : "minmax(0,1.45fr) minmax(0,1fr)", gap: "20px" }}>
+            <div style={{ ...s.card, minHeight: "100%" }}>
               <div style={s.sectionTitle}>Key findings</div>
               {(insights?.findings || []).map((f, i) => (
                 <div key={i} style={{ display: "flex", gap: "10px", marginBottom: "10px", fontSize: "0.84rem", color: "#cbd5e1", lineHeight: 1.55 }}>
@@ -630,25 +705,27 @@ export default function DataPulse({ user, onLogout }) {
                 </div>
               ))}
             </div>
-            <div style={s.card}>
-              <div style={s.sectionTitle}>Recommendations</div>
-              {(insights?.recommendations || []).map((r, i) => (
-                <div key={i} style={{ display: "flex", gap: "10px", marginBottom: "10px", fontSize: "0.84rem", color: "#cbd5e1", lineHeight: 1.55 }}>
-                  <span style={{ color: "#10b981" }}>→</span> {r}
-                </div>
-              ))}
-            </div>
-            {(stats.strong_correlations || []).length > 0 && (
+            <div style={{ display: "flex", flexDirection: "column", gap: "20px" }}>
               <div style={s.card}>
-                <div style={s.sectionTitle}>Notable correlations</div>
-                {stats.strong_correlations.slice(0, 8).map((c, i) => (
-                  <div key={i} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "8px", fontSize: "0.8rem" }}>
-                    <span style={{ color: "#94a3b8", fontFamily: "monospace" }}>{c.col1} ↔ {c.col2}</span>
-                    <span style={{ fontFamily: "monospace", fontWeight: 700, color: c.correlation > 0 ? "#10b981" : "#ef4444", background: c.correlation > 0 ? "rgba(16,185,129,0.1)" : "rgba(239,68,68,0.1)", padding: "2px 8px", borderRadius: "4px" }}>r = {c.correlation.toFixed(3)}</span>
+                <div style={s.sectionTitle}>Recommendations</div>
+                {(insights?.recommendations || []).map((r, i) => (
+                  <div key={i} style={{ display: "flex", gap: "10px", marginBottom: "10px", fontSize: "0.84rem", color: "#cbd5e1", lineHeight: 1.55 }}>
+                    <span style={{ color: "#10b981" }}>→</span> {r}
                   </div>
                 ))}
               </div>
-            )}
+              {(stats.strong_correlations || []).length > 0 && (
+                <div style={s.card}>
+                  <div style={s.sectionTitle}>Notable correlations</div>
+                  {stats.strong_correlations.slice(0, 8).map((c, i) => (
+                    <div key={i} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "8px", fontSize: "0.8rem" }}>
+                      <span style={{ color: "#94a3b8", fontFamily: "monospace" }}>{c.col1} ↔ {c.col2}</span>
+                      <span style={{ fontFamily: "monospace", fontWeight: 700, color: c.correlation > 0 ? "#10b981" : "#ef4444", background: c.correlation > 0 ? "rgba(16,185,129,0.1)" : "rgba(239,68,68,0.1)", padding: "2px 8px", borderRadius: "4px" }}>r = {c.correlation.toFixed(3)}</span>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
           </div>
         )}
 
@@ -666,33 +743,72 @@ export default function DataPulse({ user, onLogout }) {
             {numericCols.length > 0 && (
               <div style={s.card}>
                 <div style={s.sectionTitle}>Numeric columns</div>
+                <div style={{ marginBottom: "10px", display: "flex", justifyContent: "space-between", gap: "10px", alignItems: "center", flexWrap: "wrap" }}>
+                  <input
+                    style={{ ...s.input, maxWidth: "260px", fontFamily: "monospace", fontSize: "0.78rem", padding: "8px 10px" }}
+                    placeholder="Filter columns…"
+                    value={statsFilter}
+                    onChange={(e) => setStatsFilter(e.target.value)}
+                  />
+                  <span style={{ fontSize: "0.72rem", color: "#64748b", fontFamily: "monospace" }}>
+                    Sort: {statsSortKey} ({statsSortDirection})
+                  </span>
+                </div>
                 <div style={{ overflowX: "auto" }}>
                   <table style={{ width: "100%", borderCollapse: "collapse", fontSize: "0.78rem", fontFamily: "monospace" }}>
                     <thead>
                       <tr style={{ color: "#475569", borderBottom: "1px solid rgba(99,102,241,0.1)" }}>
-                        {["Column","Count","Mean","Std","Min","Max","Skewness","Outliers"].map((h) => (
-                          <th key={h} style={{ padding: "8px 12px", textAlign: "left", fontWeight: 600, fontSize: "0.68rem", textTransform: "uppercase" }}>{h}</th>
+                        {[
+                          ["Column", "column"],
+                          ["Count", "count"],
+                          ["Mean", "mean"],
+                          ["Std", "std"],
+                          ["Min", "min"],
+                          ["Max", "max"],
+                          ["Skewness", "skewness"],
+                          ["Outliers", "outliers"],
+                        ].map(([label, key]) => (
+                          <th
+                            key={label}
+                            onClick={() => toggleSort(key)}
+                            style={{
+                              padding: "8px 12px",
+                              textAlign: "left",
+                              fontWeight: 600,
+                              fontSize: "0.68rem",
+                              textTransform: "uppercase",
+                              cursor: "pointer",
+                              color: statsSortKey === key ? "#818cf8" : "#475569",
+                              background: statsSortKey === key ? "rgba(99,102,241,0.08)" : "transparent",
+                            }}
+                          >
+                            {label} {statsSortKey === key ? (statsSortDirection === "asc" ? "↑" : "↓") : ""}
+                          </th>
                         ))}
                       </tr>
                     </thead>
                     <tbody>
-                      {numericCols.map((col) => {
-                        const st = stats.numeric_columns[col];
-                        const outlierCount = stats.outliers?.[col]?.count || 0;
-                        if (!st) return null;
+                      {sortedNumericRows.map((row) => {
                         return (
-                          <tr key={col} style={{ borderBottom: "1px solid rgba(99,102,241,0.06)" }}>
-                            <td style={{ padding: "8px 12px", color: "#818cf8", fontWeight: 600 }}>{col}</td>
-                            <td style={{ padding: "8px 12px", color: "#94a3b8" }}>{st.count}</td>
-                            <td style={{ padding: "8px 12px", color: "#e2e8f0" }}>{st.mean?.toFixed(2)}</td>
-                            <td style={{ padding: "8px 12px", color: "#94a3b8" }}>{st.std?.toFixed(2)}</td>
-                            <td style={{ padding: "8px 12px", color: "#64748b" }}>{st.min?.toFixed(2)}</td>
-                            <td style={{ padding: "8px 12px", color: "#64748b" }}>{st.max?.toFixed(2)}</td>
-                            <td style={{ padding: "8px 12px", color: Math.abs(st.skewness) > 1 ? "#f59e0b" : "#10b981" }}>{st.skewness?.toFixed(2)}</td>
-                            <td style={{ padding: "8px 12px", color: outlierCount > 0 ? "#ef4444" : "#10b981" }}>{outlierCount}</td>
+                          <tr key={row.column} style={{ borderBottom: "1px solid rgba(99,102,241,0.06)" }}>
+                            <td style={{ padding: "8px 12px", color: "#818cf8", fontWeight: 600 }}>{row.column}</td>
+                            <td style={{ padding: "8px 12px", color: "#94a3b8", background: statsSortKey === "count" ? "rgba(99,102,241,0.06)" : "transparent" }}>{row.count}</td>
+                            <td style={{ padding: "8px 12px", color: "#e2e8f0", background: statsSortKey === "mean" ? "rgba(99,102,241,0.06)" : "transparent" }}>{row.mean.toFixed(2)}</td>
+                            <td style={{ padding: "8px 12px", color: "#94a3b8", background: statsSortKey === "std" ? "rgba(99,102,241,0.06)" : "transparent" }}>{row.std.toFixed(2)}</td>
+                            <td style={{ padding: "8px 12px", color: "#64748b", background: statsSortKey === "min" ? "rgba(99,102,241,0.06)" : "transparent" }}>{row.min.toFixed(2)}</td>
+                            <td style={{ padding: "8px 12px", color: "#64748b", background: statsSortKey === "max" ? "rgba(99,102,241,0.06)" : "transparent" }}>{row.max.toFixed(2)}</td>
+                            <td style={{ padding: "8px 12px", color: Math.abs(row.skewness) > 1 ? "#f59e0b" : "#10b981", background: statsSortKey === "skewness" ? "rgba(99,102,241,0.06)" : "transparent" }}>{row.skewness.toFixed(2)}</td>
+                            <td style={{ padding: "8px 12px", color: row.outliers > 0 ? "#ef4444" : "#10b981", background: statsSortKey === "outliers" ? "rgba(99,102,241,0.06)" : "transparent" }}>{row.outliers}</td>
                           </tr>
                         );
                       })}
+                      {sortedNumericRows.length === 0 && (
+                        <tr>
+                          <td colSpan={8} style={{ padding: "12px", color: "#64748b", fontSize: "0.8rem" }}>
+                            No numeric columns match the current filter.
+                          </td>
+                        </tr>
+                      )}
                     </tbody>
                   </table>
                 </div>
