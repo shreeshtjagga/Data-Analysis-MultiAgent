@@ -11,7 +11,7 @@
 import { useState, useRef, useCallback, useEffect } from "react";
 import createPlotlyComponent from "react-plotly.js/factory";
 import Plotly from "plotly.js-dist-min";
-import { apiAnalyze, apiChat, apiHistory, apiDeleteAnalysis } from "./api.js";
+import { apiAnalyze, apiChat, apiHistory, apiHistoryAnalysis, apiDeleteAnalysis } from "./api.js";
 
 const Plot = createPlotlyComponent(Plotly);
 
@@ -109,6 +109,7 @@ export default function DataPulse({ user, onLogout }) {
   const [showHistory, setShowHistory] = useState(false);
   const [historyLoading, setHistoryLoading] = useState(false);
   const [deleteLoading, setDeleteLoading] = useState(null);
+  const [historySelectLoading, setHistorySelectLoading] = useState(null);
   const fileRef = useRef();
   const chatEndRef = useRef(null);
   const dragCounterRef = useRef(0);
@@ -217,6 +218,23 @@ export default function DataPulse({ user, onLogout }) {
     setDeleteLoading(null);
   };
 
+  const loadHistoryItem = async (item) => {
+    setHistorySelectLoading(item.analysis_id);
+    try {
+      const full = await apiHistoryAnalysis(item.analysis_id);
+      setResult(full);
+      setFileName(full.file_name || item.file_name || "");
+      setChatMsgs([]);
+      setTab("overview");
+      setPhase("done");
+      setShowHistory(false);
+    } catch (err) {
+      alert(`Load failed: ${err.message}`);
+    } finally {
+      setHistorySelectLoading(null);
+    }
+  };
+
   // ── Chat ───────────────────────────────────────────────────────────────────
   const sendChat = useCallback(async () => {
     const q = chatInput.trim();
@@ -291,9 +309,9 @@ export default function DataPulse({ user, onLogout }) {
           >
             <div style={{ fontSize: "2rem", marginBottom: "12px", color: "#475569" }}>↑</div>
             <p style={{ color: "#94a3b8", fontSize: "0.88rem" }}>
-              {isDragOver ? "Drop file to start analysis" : "Click to upload or drag a CSV file here"}
+              {isDragOver ? "Drop file to start analysis" : "Click to upload or drag CSV/Excel (.csv, .xlsx, .xls)"}
             </p>
-            <input ref={fileRef} type="file" accept=".csv" style={{ display: "none" }} onChange={(e) => onFile(e.target.files[0])} />
+            <input ref={fileRef} type="file" accept=".csv,.xlsx,.xls" style={{ display: "none" }} onChange={(e) => onFile(e.target.files[0])} />
           </div>
           <div style={{ marginTop: "24px", display: "flex", justifyContent: "center", gap: "8px", flexWrap: "wrap" }}>
             {["Architect","Statistician","Insights","Chat"].map((a) => (
@@ -386,10 +404,27 @@ export default function DataPulse({ user, onLogout }) {
           ) : (
             <div style={{ display: "flex", flexWrap: "wrap", gap: "10px" }}>
               {history.map((item) => (
-                <div key={item.analysis_id} style={{ background: "#0d1220", border: "1px solid rgba(99,102,241,0.15)", borderRadius: "8px", padding: "10px 14px", fontSize: "0.78rem", display: "flex", alignItems: "center", gap: "14px" }}>
-                  <span style={{ color: "#94a3b8" }}>{item.file_name}</span>
+                <div
+                  key={item.analysis_id}
+                  onClick={() => historySelectLoading == null && loadHistoryItem(item)}
+                  style={{
+                    background: "#0d1220",
+                    border: "1px solid rgba(99,102,241,0.15)",
+                    borderRadius: "8px",
+                    padding: "10px 14px",
+                    fontSize: "0.78rem",
+                    display: "flex",
+                    alignItems: "center",
+                    gap: "14px",
+                    cursor: historySelectLoading == null ? "pointer" : "wait",
+                    opacity: historySelectLoading === item.analysis_id ? 0.7 : 1,
+                  }}
+                >
+                  <span style={{ color: "#94a3b8" }}>
+                    {historySelectLoading === item.analysis_id ? "Loading…" : item.file_name}
+                  </span>
                   <span style={{ color: "#475569", fontFamily: "monospace", fontSize: "0.7rem" }}>{item.row_count}r × {item.column_count}c</span>
-                  <button onClick={() => deleteItem(item.analysis_id)} disabled={deleteLoading === item.analysis_id} style={{ background: "transparent", border: "none", color: "#ef4444", cursor: deleteLoading === item.analysis_id ? "wait" : "pointer", fontSize: "0.75rem", padding: "0" }}>
+                  <button onClick={(e) => { e.stopPropagation(); deleteItem(item.analysis_id); }} disabled={deleteLoading === item.analysis_id} style={{ background: "transparent", border: "none", color: "#ef4444", cursor: deleteLoading === item.analysis_id ? "wait" : "pointer", fontSize: "0.75rem", padding: "0" }}>
                     {deleteLoading === item.analysis_id ? "..." : "✕"}
                   </button>
                 </div>

@@ -189,6 +189,10 @@ export async function apiHistory(limit = 20) {
   return apiFetch(`/history?limit=${limit}`);
 }
 
+export async function apiHistoryAnalysis(analysisId) {
+  return apiFetch(`/history/${analysisId}`);
+}
+
 export async function apiDeleteAnalysis(analysisId) {
   return apiFetch(`/history/${analysisId}`, { method: "DELETE" });
 }

@@ -36,6 +36,7 @@ from .core import cache as redis_cache
 from .analysis_history import (
     compute_file_hash,
     delete_analysis,
+    get_analysis_by_id,
     get_analysis_by_hash,
     get_user_analysis_history,
     save_analysis,
@@ -600,6 +601,19 @@ async def history(
         total=len(items),
         analyses=items,
     )
+
+
+@app.get("/history/{analysis_id}", tags=["history"])
+async def history_item(
+    analysis_id: int,
+    user_id: int = Depends(get_current_user_id),
+    db: AsyncSession = Depends(get_db),
+):
+    item = await get_analysis_by_id(db, user_id, analysis_id)
+    if item is None:
+        raise HTTPException(status_code=404, detail="Analysis not found or access denied")
+    item["charts"] = {k: v for k, v in (item.get("charts") or {}).items()}
+    return item
 
 
 @app.delete("/history/{analysis_id}", response_model=DeleteResponse, tags=["history"])

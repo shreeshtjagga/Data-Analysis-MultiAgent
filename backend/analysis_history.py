@@ -306,6 +306,22 @@ async def get_user_analysis_history(
     return output
 
 
+async def get_analysis_by_id(
+    db: AsyncSession, user_id: int, analysis_id: int
+) -> Optional[dict]:
+    """Return full analysis payload for one analysis id owned by the user."""
+    result = await db.execute(
+        select(AnalysisHistory.file_hash).where(
+            AnalysisHistory.id == analysis_id,
+            AnalysisHistory.user_id == user_id,
+        )
+    )
+    file_hash: Optional[str] = result.scalar_one_or_none()
+    if file_hash is None:
+        return None
+    return await get_analysis_by_hash(db, user_id, file_hash)
+
+
 # ── Delete ────────────────────────────────────────────────────────────────────
 
 async def delete_analysis(
