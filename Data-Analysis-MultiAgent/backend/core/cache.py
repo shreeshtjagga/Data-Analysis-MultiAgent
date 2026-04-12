@@ -165,3 +165,24 @@ async def ping() -> bool:
         return await client.ping()
     except Exception:
         return False
+
+
+async def increment_with_ttl(key: str, ttl_seconds: int) -> int:
+    """
+    Atomically increment a key and set its expiry on first use.
+    Returns the post-increment count.
+    """
+    try:
+        client = _get_client()
+        script = """
+        local current = redis.call('INCR', KEYS[1])
+        if current == 1 then
+            redis.call('EXPIRE', KEYS[1], ARGV[1])
+        end
+        return current
+        """
+        count = await client.eval(script, 1, key, ttl_seconds)
+        return int(count)
+    except Exception as exc:
+        logger.warning("Cache INCR+EXPIRE failed for key '%s': %s", key, exc)
+        raise
