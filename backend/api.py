@@ -121,7 +121,11 @@ app.add_middleware(
 async def catch_all_exception_handler(request: Request, exc: Exception):
     error_trace = "".join(traceback.format_exception(type(exc), exc, exc.__traceback__))
     logger.error(f"Unhandled error: {error_trace}")
-    return JSONResponse(status_code=500, content={"detail": str(exc), "trace": error_trace})
+    
+    if os.getenv("APP_ENV", "production") == "development":
+        return JSONResponse(status_code=500, content={"detail": str(exc), "trace": error_trace})
+        
+    return JSONResponse(status_code=500, content={"detail": "Internal Server Error"})
 
 
 
