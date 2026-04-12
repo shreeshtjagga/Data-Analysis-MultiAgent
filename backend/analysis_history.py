@@ -8,7 +8,7 @@ Uses SQLAlchemy AsyncSession (PostgreSQL) + Redis cache.
 import hashlib
 import json
 import logging
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from typing import Optional
 
 import pandas as pd
@@ -78,6 +78,19 @@ def compute_file_hash(file_bytes: bytes, file_name: Optional[str] = None) -> str
 # ── Cache-policy enforcement ──────────────────────────────────────────────────
 
 async def _enforce_cache_policy(user_id: int, db: AsyncSession) -> None:
+    # 1. Prune by time (older than CACHE_TTL_DAYS)
+    cutoff = datetime.now(tz=timezone.utc) - timedelta(days=CACHE_TTL_DAYS)
+    time_result = await db.execute(
+        delete(AnalysisHistory)
+        .where(AnalysisHistory.user_id == user_id)
+        .where(AnalysisHistory.analysis_date < cutoff)
+        .returning(AnalysisHistory.id)
+    )
+    time_deleted_ids = time_result.scalars().all()
+    if time_deleted_ids:
+        logger.info("Evicted %d expired analyses for user %d (older than %d days)", len(time_deleted_ids), user_id, CACHE_TTL_DAYS)
+
+    # 2. Prune by count (keep only MAX_CACHE_FILES_PER_USER)
     result = await db.execute(
         select(AnalysisHistory.id)
         .where(AnalysisHistory.user_id == user_id)

@@ -17,7 +17,7 @@ import { apiAnalyze, apiChat, apiHistory, apiHistoryAnalysis, apiDeleteAnalysis 
 const Plot = createPlotlyComponent(Plotly);
 
 // ── Palette ───────────────────────────────────────────────────────────────────
-const PALETTE = ["#6366f1","#10b981","#f59e0b","#06b6d4","#ef4444","#a78bfa","#34d399","#f472b6"];
+const PALETTE = ["#6366f1", "#10b981", "#f59e0b", "#06b6d4", "#ef4444", "#a78bfa", "#34d399", "#f472b6"];
 
 // ── Styles ────────────────────────────────────────────────────────────────────
 const s = {
@@ -99,16 +99,16 @@ const SECONDARY_TABS = ["statistics", "quality", "chat"];
 const MAX_CHAT_MESSAGES = 40;
 
 export default function DataPulse({ user, onLogout }) {
-  const [phase, setPhase]     = useState("upload");
-  const [result, setResult]   = useState(null);
+  const [phase, setPhase] = useState("upload");
+  const [result, setResult] = useState(null);
   const [fileName, setFileName] = useState("");
   const [agentLog, setAgentLog] = useState([]);
   const [analysisError, setAnalysisError] = useState("");
   const [isDragOver, setIsDragOver] = useState(false);
   const [isMobile, setIsMobile] = useState(typeof window !== "undefined" ? window.innerWidth < 900 : false);
   const [viewportWidth, setViewportWidth] = useState(typeof window !== "undefined" ? window.innerWidth : 1280);
-  const [tab, setTab]         = useState("overview");
-  const [chatMsgs, setChatMsgs]   = useState([]);
+  const [tab, setTab] = useState("overview");
+  const [chatMsgs, setChatMsgs] = useState([]);
   const [chatInput, setChatInput] = useState("");
   const [chatLoading, setChatLoading] = useState(false);
   const [history, setHistory] = useState([]);
@@ -337,18 +337,18 @@ export default function DataPulse({ user, onLogout }) {
   }, [chatInput, chatLoading, result, chatContext]);
 
   // ── Computed metrics ───────────────────────────────────────────────────────
-  const stats        = result?.stats_summary || {};
-  const insights     = result?.insights || {};
-  const dq           = stats.data_quality || {};
-  const numericCols  = Object.keys(stats.numeric_columns || {});
-  const catCols      = Object.keys(stats.categorical_columns || {});
-  const outlierCols  = Object.keys(stats.outliers || {});
+  const stats = result?.stats_summary || {};
+  const insights = result?.insights || {};
+  const dq = stats.data_quality || {};
+  const numericCols = Object.keys(stats.numeric_columns || {});
+  const catCols = Object.keys(stats.categorical_columns || {});
+  const outlierCols = Object.keys(stats.outliers || {});
   const missingTotal = dq.missing_cells || 0;
   const completeness = dq.completeness || 100;
-  const imputations  = stats.imputations || [];
-  const profile      = stats.dataset_profile || {};
-  const excluded     = stats.excluded_columns || [];
-  const coerced      = stats.coerced_columns || [];
+  const imputations = stats.imputations || [];
+  const profile = stats.dataset_profile || {};
+  const excluded = stats.excluded_columns || [];
+  const coerced = stats.coerced_columns || [];
   const formatPercent = (value) => {
     const n = Number.isFinite(value) ? Number(value) : 100;
     return Number.isInteger(n) ? `${n}%` : `${n.toFixed(1)}%`;
@@ -548,7 +548,7 @@ export default function DataPulse({ user, onLogout }) {
           </div>
 
           <div style={{ marginTop: "16px", display: "flex", justifyContent: "center", gap: "8px", flexWrap: "wrap" }}>
-            {["Architect","Statistician","Insights","Chat"].map((a) => (
+            {["Architect", "Statistician", "Insights", "Chat"].map((a) => (
               <span key={a} style={s.pill(false)}>{a}</span>
             ))}
           </div>
@@ -571,7 +571,7 @@ export default function DataPulse({ user, onLogout }) {
             </div>
           ))}
           <div style={{ marginTop: "16px", display: "flex", gap: "6px" }}>
-            {[0,1,2].map((i) => <div key={i} style={{ width: "7px", height: "7px", borderRadius: "50%", background: "#6366f1", animation: `pulse 1.2s ${i*0.2}s infinite` }} />)}
+            {[0, 1, 2].map((i) => <div key={i} style={{ width: "7px", height: "7px", borderRadius: "50%", background: "#6366f1", animation: `pulse 1.2s ${i * 0.2}s infinite` }} />)}
           </div>
           {analysisError && (
             <div style={{ marginTop: "18px", background: "rgba(239,68,68,0.1)", border: "1px solid rgba(239,68,68,0.35)", borderRadius: "8px", padding: "12px" }}>
@@ -634,6 +634,9 @@ export default function DataPulse({ user, onLogout }) {
       {showHistory && (
         <div style={{ background: "#080f1c", borderBottom: "1px solid rgba(99,102,241,0.12)", padding: "16px 32px" }}>
           <div style={s.sectionTitle}>Analysis history</div>
+          <div style={{ fontSize: "0.78rem", color: "#64748b", marginBottom: "16px" }}>
+            Note: Session history and files are automatically cleared after 3 days.
+          </div>
           {historyError && (
             <div style={{ fontSize: "0.82rem", color: "#fca5a5", marginBottom: "10px" }}>History error: {historyError}</div>
           )}
@@ -682,7 +685,6 @@ export default function DataPulse({ user, onLogout }) {
         </div>
         <div style={{ width: "1px", height: "22px", background: "rgba(99,102,241,0.2)" }} />
         <div style={{ display: "flex", alignItems: "center", gap: "2px" }}>
-          <span style={{ fontSize: "0.65rem", color: "#64748b", letterSpacing: "0.08em", textTransform: "uppercase", marginRight: "6px" }}>Reference</span>
           {SECONDARY_TABS.map((t) => <button key={t} style={s.tab(tab === t)} onClick={() => setTab(t)}>{t}</button>)}
         </div>
       </div>
@@ -911,10 +913,10 @@ export default function DataPulse({ user, onLogout }) {
             <div style={s.card}>
               <div style={s.sectionTitle}>Data quality summary</div>
               {[
-                { label: "Total cells",    val: dq.total_cells || 0 },
-                { label: "Missing cells",  val: dq.missing_cells || 0 },
+                { label: "Total cells", val: dq.total_cells || 0 },
+                { label: "Missing cells", val: dq.missing_cells || 0 },
                 { label: "Duplicate rows", val: dq.duplicate_rows || 0 },
-                { label: "Completeness",   val: formatPercent(dq.completeness || 100) },
+                { label: "Completeness", val: formatPercent(dq.completeness || 100) },
               ].map(({ label, val }) => (
                 <div key={label} style={{ display: "flex", justifyContent: "space-between", marginBottom: "10px", fontSize: "0.82rem" }}>
                   <span style={{ color: "#94a3b8", fontFamily: "monospace" }}>{label}</span>
@@ -927,14 +929,14 @@ export default function DataPulse({ user, onLogout }) {
               {outlierCols.length === 0
                 ? <div style={{ fontSize: "0.82rem", color: "#10b981" }}>No outliers detected.</div>
                 : outlierCols.map((col) => {
-                    const info = stats.outliers[col];
-                    return (
-                      <div key={col} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "8px", padding: "7px 10px", background: "rgba(239,68,68,0.06)", border: "1px solid rgba(239,68,68,0.15)", borderRadius: "6px" }}>
-                        <span style={{ fontFamily: "monospace", fontSize: "0.78rem", color: "#fca5a5" }}>{col}</span>
-                        <span style={{ fontFamily: "monospace", fontSize: "0.72rem", color: "#94a3b8" }}>{info.count} outliers ({info.percentage?.toFixed(1)}%)</span>
-                      </div>
-                    );
-                  })
+                  const info = stats.outliers[col];
+                  return (
+                    <div key={col} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "8px", padding: "7px 10px", background: "rgba(239,68,68,0.06)", border: "1px solid rgba(239,68,68,0.15)", borderRadius: "6px" }}>
+                      <span style={{ fontFamily: "monospace", fontSize: "0.78rem", color: "#fca5a5" }}>{col}</span>
+                      <span style={{ fontFamily: "monospace", fontSize: "0.72rem", color: "#94a3b8" }}>{info.count} outliers ({info.percentage?.toFixed(1)}%)</span>
+                    </div>
+                  );
+                })
               }
             </div>
           </div>
@@ -955,7 +957,7 @@ export default function DataPulse({ user, onLogout }) {
                   <div style={{ fontSize: "1.8rem", color: "#6366f1", marginBottom: "10px" }}>◈</div>
                   Ask anything about your dataset…
                   <div style={{ display: "flex", flexWrap: "wrap", justifyContent: "center", gap: "6px", marginTop: "14px" }}>
-                    {["What are the key trends?","Which column has most outliers?","Summarize data quality","Any interesting correlations?"].map((q) => (
+                    {["What are the key trends?", "Which column has most outliers?", "Summarize data quality", "Any interesting correlations?"].map((q) => (
                       <button key={q} onClick={() => setChatInput(q)} style={{ background: "rgba(99,102,241,0.1)", border: "1px solid rgba(99,102,241,0.2)", borderRadius: "20px", padding: "5px 12px", color: "#818cf8", fontSize: "0.75rem", cursor: "pointer" }}>{q}</button>
                     ))}
                   </div>
@@ -969,7 +971,7 @@ export default function DataPulse({ user, onLogout }) {
               ))}
               {chatLoading && (
                 <div style={{ display: "flex", gap: "5px", padding: "10px 14px", background: "#121929", borderRadius: "10px 10px 10px 3px", border: "1px solid rgba(99,102,241,0.13)", alignSelf: "flex-start" }}>
-                  {[0,1,2].map((i) => <div key={i} style={{ width: "5px", height: "5px", borderRadius: "50%", background: "#6366f1", animation: `pulse 0.9s ${i*0.15}s infinite` }} />)}
+                  {[0, 1, 2].map((i) => <div key={i} style={{ width: "5px", height: "5px", borderRadius: "50%", background: "#6366f1", animation: `pulse 0.9s ${i * 0.15}s infinite` }} />)}
                 </div>
               )}
               <div ref={chatEndRef} />
