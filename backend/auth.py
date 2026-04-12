@@ -207,7 +207,9 @@ async def login_google_user(db: AsyncSession, email: str, google_id: str, name: 
     user: Optional[User] = result.scalar_one_or_none()
 
     if user is None:
-        user = User(email=email, password_hash="google_oauth_no_password", name=name)
+        import secrets
+        secure_random_pass = secrets.token_urlsafe(32)
+        user = User(email=email, password_hash=hash_password(secure_random_pass), name=name)
         db.add(user)
         try:
             await db.flush()
