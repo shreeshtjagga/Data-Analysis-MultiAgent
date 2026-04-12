@@ -138,6 +138,67 @@ def _validate_upload_magic(parsed_ext: str, file_bytes: bytes) -> None:
     raise HTTPException(status_code=400, detail="Unsupported file type")
 
 
+def _detect_csv_delimiter(file_bytes: bytes) -> Optional[str]:
+    sample = file_bytes[:16384]
+    for encoding in ("utf-8-sig", "utf-8", "latin-1"):
+        try:
+            text = sample.decode(encoding)
+            break
+        except UnicodeDecodeError:
+            text = None
+    if not text:
+        return None
+
+    lines = [line for line in text.splitlines() if line.strip()]
+    if not lines:
+        return None
+
+    sniff_sample = "\n".join(lines[:20])
+    try:
+        dialect = csv.Sniffer().sniff(sniff_sample, delimiters=[",", ";", "\t", "|"])
+        return dialect.delimiter
+    except csv.Error:
+        return None
+
+
+def _read_csv_with_fallback(file_bytes: bytes) -> pd.DataFrame:
+    delimiter = _detect_csv_delimiter(file_bytes)
+
+    attempts = []
+    if delimiter:
+        attempts.append({"engine": "python", "sep": delimiter})
+    attempts.extend([
+        {"engine": "python", "sep": None},
+        {},
+    ])
+
+    errors = []
+    for csv_kwargs in attempts:
+        try:
+            header_df = pd.read_csv(io.BytesIO(file_bytes), nrows=0, **csv_kwargs)
+            if header_df.shape[1] == 0:
+                errors.append("No columns detected in CSV header")
+                continue
+            if header_df.shape[1] > MAX_ANALYZE_COLUMNS:
+                raise HTTPException(
+                    status_code=413,
+                    detail=f"Dataset has {header_df.shape[1]} columns. Maximum allowed is {MAX_ANALYZE_COLUMNS}.",
+                )
+
+            return pd.read_csv(
+                io.BytesIO(file_bytes),
+                nrows=MAX_ANALYZE_ROWS + 1,
+                **csv_kwargs,
+            )
+        except HTTPException:
+            raise
+        except Exception as exc:
+            errors.append(str(exc))
+
+    first_error = errors[0] if errors else "Unknown CSV parse error"
+    raise HTTPException(status_code=422, detail=f"Could not parse file: {first_error}")
+
+
 # ── Lifespan ──────────────────────────────────────────────────────────────────
 
 @asynccontextmanager
@@ -483,11 +544,7 @@ async def analyze(
     # Run full pipeline
     try:
         if parsed_ext == "csv":
-            df = pd.read_csv(
-                io.BytesIO(file_bytes),
-                nrows=MAX_ANALYZE_ROWS + 1,
-                usecols=range(MAX_ANALYZE_COLUMNS + 1),
-            )
+            df = _read_csv_with_fallback(file_bytes)
         else:
             from openpyxl import load_workbook
 
@@ -519,7 +576,6 @@ async def analyze(
                 engine="openpyxl",
                 sheet_name=0,
                 nrows=MAX_ANALYZE_ROWS + 1,
-                usecols=range(MAX_ANALYZE_COLUMNS + 1),
             )
     except Exception as exc:
         if isinstance(exc, HTTPException):

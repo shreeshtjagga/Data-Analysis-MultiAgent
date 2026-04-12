@@ -1,6 +1,6 @@
 """Structured pipeline error helpers."""
 
-from typing import Any
+from typing import Any, Optional
 
 
 def make_pipeline_error(
@@ -9,7 +9,7 @@ def make_pipeline_error(
     message: str,
     agent: str,
     error_type: str = "pipeline",
-    details: dict[str, Any] | None = None,
+    details: Optional[dict[str, Any]] = None,
 ) -> dict[str, Any]:
     return {
         "code": code,
@@ -27,7 +27,7 @@ def add_pipeline_error(
     message: str,
     agent: str,
     error_type: str = "pipeline",
-    details: dict[str, Any] | None = None,
+    details: Optional[dict[str, Any]] = None,
 ) -> None:
     errors.append(
         make_pipeline_error(

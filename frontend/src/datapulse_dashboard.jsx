@@ -373,7 +373,7 @@ export default function DataPulse({ user, onLogout }) {
           <button style={{ ...s.btn, fontSize: "0.72rem", padding: "7px 14px", background: "transparent", border: "1px solid rgba(99,102,241,0.2)", color: "#818cf8" }} onClick={onLogout}>Logout</button>
         </div>
       </div>
-      <div style={{ flex: 1, display: "grid", gridTemplateColumns: isMobile ? "1fr" : "1.1fr 1fr", gap: "28px", alignItems: "stretch", padding: isMobile ? "20px" : "32px" }}>
+      <div style={{ flex: 1, display: "flex", justifyContent: "center", alignItems: "stretch", padding: isMobile ? "20px" : "32px" }}>
         <div
           style={{
             ...s.card,
@@ -381,6 +381,8 @@ export default function DataPulse({ user, onLogout }) {
             flexDirection: "column",
             justifyContent: "center",
             minHeight: isMobile ? "unset" : "560px",
+            width: "100%",
+            maxWidth: "980px",
             textAlign: "left",
           }}
           onDrop={onDrop}
@@ -430,44 +432,6 @@ export default function DataPulse({ user, onLogout }) {
             {["Architect","Statistician","Insights","Chat"].map((a) => (
               <span key={a} style={s.pill(false)}>{a}</span>
             ))}
-          </div>
-        </div>
-
-        <div style={{ ...s.card, minHeight: isMobile ? "unset" : "560px" }}>
-          <div style={s.sectionTitle}>What You Will Get</div>
-          <div style={{ display: "grid", gap: "12px" }}>
-            {[
-              "Executive summary tailored to your dataset domain",
-              "Top correlations and outlier columns with severity",
-              "Interactive charts with hover, zoom, and export",
-              "Data quality report with completeness and imputations",
-              "Chat assistant grounded on your computed stats",
-            ].map((line) => (
-              <div key={line} style={{ display: "flex", gap: "10px", alignItems: "flex-start" }}>
-                <span style={{ color: "#10b981", marginTop: "2px" }}>✓</span>
-                <span style={{ color: "#cbd5e1", fontSize: "0.84rem", lineHeight: 1.5 }}>{line}</span>
-              </div>
-            ))}
-          </div>
-
-          <div style={{ marginTop: "18px", padding: "12px", borderRadius: "10px", background: "#121929", border: "1px solid rgba(99,102,241,0.15)" }}>
-            <div style={{ fontSize: "0.68rem", color: "#64748b", letterSpacing: "0.1em", textTransform: "uppercase", marginBottom: "8px" }}>Preview</div>
-            <div style={{ display: "grid", gridTemplateColumns: "repeat(4,minmax(0,1fr))", gap: "8px" }}>
-              {[
-                ["Rows", "12,540"],
-                ["Cols", "27"],
-                ["Outliers", "3"],
-                ["Completeness", "98%"],
-              ].map(([k, v]) => (
-                <div key={k} style={{ background: "rgba(99,102,241,0.06)", border: "1px solid rgba(99,102,241,0.15)", borderRadius: "7px", padding: "8px" }}>
-                  <div style={{ fontSize: "0.65rem", color: "#64748b" }}>{k}</div>
-                  <div style={{ fontFamily: "'Syne',sans-serif", color: "#e2e8f0", fontSize: "0.95rem" }}>{v}</div>
-                </div>
-              ))}
-            </div>
-            <div style={{ marginTop: "10px", fontSize: "0.78rem", color: "#94a3b8" }}>
-              Sample outcomes are illustrative. Actual metrics depend on uploaded data.
-            </div>
           </div>
         </div>
       </div>
