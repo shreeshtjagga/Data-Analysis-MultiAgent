@@ -1,8 +1,59 @@
 @echo off
+setlocal EnableDelayedExpansion
+
 echo.
-echo  Starting DataPulse Frontend on http://localhost:5173
+echo  ==============================================
+echo      DataPulse - Frontend Dev Server
+echo  ==============================================
 echo.
+
+:: Change to the frontend directory
 cd /d "%~dp0frontend"
-call npm install
-call npm run dev
+
+:: ── Check node / npm is available ──────────────────────────────────
+where npm >nul 2>&1
+if errorlevel 1 goto npm_missing
+goto npm_ok
+
+:npm_missing
+echo  [ERROR] npm not found on PATH.
+echo          Install Node.js from https://nodejs.org/ (v18 or later recommended)
 pause
+exit /b 1
+
+:npm_ok
+
+:: ── Check .env file ────────────────────────────────────────────────
+if not exist ".env" (
+    echo  [WARN]  No frontend\.env file found.
+    echo          VITE_GOOGLE_CLIENT_ID will be undefined and Google login will not work.
+    echo          Create frontend\.env with:  VITE_GOOGLE_CLIENT_ID=your_client_id
+    echo.
+)
+
+:: ── Install dependencies (skips if node_modules is up to date) ─────
+echo  [1/2] Checking Node dependencies ...
+call npm install
+if errorlevel 1 (
+    echo  [ERROR] npm install failed. Check your internet connection.
+    pause
+    exit /b 1
+)
+
+:: ── Start Vite dev server ──────────────────────────────────────────
+echo  [2/2] Starting Vite on http://localhost:5173
+echo.
+echo        Make sure the backend is also running (start-backend.bat).
+echo        Press Ctrl+C to stop the dev server.
+echo.
+
+:: Open the browser immediately to save time
+start "" "http://localhost:5173"
+
+call npm run dev
+
+if errorlevel 1 (
+    echo.
+    echo  [ERROR] Vite exited with an error. Check the logs above.
+    pause
+)

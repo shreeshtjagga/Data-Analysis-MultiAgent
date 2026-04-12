@@ -188,10 +188,10 @@ def _try_scatter(
     """Scatter for the strongest numeric correlation."""
     if len(df) < 10 or len(num_cols) < 2:
         return None
-    top_corr = stats.get("top_correlations", [])
+    top_corr = stats.get("strong_correlations", [])
     if top_corr:
-        best      = max(top_corr, key=lambda x: abs(x[2]))
-        x_col, y_col, r = best
+        best      = max(top_corr, key=lambda x: abs(x["correlation"]))
+        x_col, y_col, r = best["col1"], best["col2"], best["correlation"]
     else:
         x_col, y_col = num_cols[0], num_cols[1]
         r = float(df[[x_col, y_col]].corr().iloc[0, 1])
@@ -225,7 +225,7 @@ def _try_histogram(
     if not num_cols:
         return None
     outlier_keys = set(stats.get("outliers", {}).keys())
-    num_stats    = stats.get("numeric_stats", {})
+    num_stats    = stats.get("numeric_columns", {})
 
     def _col_score(col: str) -> float:
         if col in used:
@@ -284,7 +284,7 @@ def _try_heatmap(
     comp_avg = float(np.mean([_completeness(df[c]) for c in num_cols]))
     if comp_avg < 0.80:
         return None
-    n_corr = len(stats.get("top_correlations", []))
+    n_corr = len(stats.get("strong_correlations", []))
     score  = comp_avg * 40 + min(len(num_cols) * 3, 20) + min(n_corr * 5, 20)
     corr   = df[num_cols].corr().round(2)
     fig    = px.imshow(

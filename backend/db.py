@@ -181,7 +181,7 @@ async def init_db() -> None:
     """Create all tables if they do not exist. Called once at application startup."""
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
-    logger.info("Database tables initialised (PostgreSQL / Neon)")
+    logger.info("Database tables initialised (PostgreSQL)")
 
 
 async def drop_all() -> None:

@@ -1,4 +1,4 @@
-﻿"""
+"""
 core/cache.py
 ─────────────
 Redis client singleton and helper functions for the DataPulse cache layer.
@@ -8,11 +8,6 @@ import json
 import logging
 import os
 from typing import Any, Optional
-
-from dotenv import load_dotenv
-
-# Load .env before reading env vars
-load_dotenv()
 
 import redis.asyncio as aioredis
 

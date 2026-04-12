@@ -15,6 +15,8 @@ from typing import Optional
 from dotenv import load_dotenv
 load_dotenv()
 
+from google.oauth2 import id_token
+from google.auth.transport import requests as google_requests
 from jose import JWTError, jwt
 from passlib.context import CryptContext
 from sqlalchemy.exc import IntegrityError
@@ -184,10 +186,9 @@ async def get_user_by_email(db: AsyncSession, email: str) -> Optional[User]:
     result = await db.execute(select(User).where(User.email == email))
     return result.scalar_one_or_none()
 
-from google.oauth2 import id_token
-from google.auth.transport import requests as google_requests
 
 GOOGLE_CLIENT_ID = os.getenv("GOOGLE_CLIENT_ID")
+
 
 def verify_google_token(token: str) -> Optional[dict]:
     if not GOOGLE_CLIENT_ID:

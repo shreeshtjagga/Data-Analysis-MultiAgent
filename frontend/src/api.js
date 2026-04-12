@@ -33,11 +33,11 @@ export function getToken() {
 }
 
 export function clearToken() {
+  if (!accessToken) return;   // already logged out — skip the logout request
   accessToken = null;
-  // Best-effort: ask backend to clear the refresh cookie (HttpOnly)
-  try {
-    fetch(`${BASE}/auth/logout`, { method: "POST", credentials: "include" });
-  } catch (_) {}
+  // Best-effort: ask backend to clear the HttpOnly refresh cookie.
+  // Fire-and-forget is intentional — we don't need to await this.
+  fetch(`${BASE}/auth/logout`, { method: "POST", credentials: "include" }).catch(() => {});
 }
 
 async function refreshAccessToken() {
@@ -199,3 +199,6 @@ export async function apiDeleteAnalysis(analysisId) {
 
 // ── Health ────────────────────────────────────────────────────────────────────
 
+export async function apiHealth() {
+  return apiFetch("/health", { withAuth: false });
+}

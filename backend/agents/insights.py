@@ -140,7 +140,7 @@ def _rule_based_insights(stats: dict) -> dict:
         recommendations.insert(0, "Review and decide on outlier handling")
 
     return {
-        "headline": None,
+        "headline": "",
         "findings": findings,
         "recommendations": recommendations,
         "risk_flags": [],

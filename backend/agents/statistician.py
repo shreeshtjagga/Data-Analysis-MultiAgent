@@ -25,8 +25,12 @@ _MAX_STRONG_CORRELATIONS = 200
 
 def _sanitize_cell_for_output(value: object) -> str:
     text = str(value).replace("\r", " ").replace("\n", " ").strip()
-    while text.startswith(_CSV_FORMULA_PREFIXES):
+    # Strip leading formula characters (single pass to avoid infinite loop)
+    max_strip = len(text)
+    stripped = 0
+    while stripped < max_strip and text.startswith(_CSV_FORMULA_PREFIXES):
         text = text[1:].lstrip()
+        stripped += 1
     if len(text) > _MAX_CATEGORY_VALUE_CHARS:
         text = text[:_MAX_CATEGORY_VALUE_CHARS] + "..."
     return text
@@ -264,6 +268,7 @@ def statistician_agent(state: AnalysisState) -> AnalysisState:
             len(numeric_stats),
             len(categorical_stats),
         )
+        state.completed_agents.append("statistician")
 
     except Exception as e:
         logger.error("Statistician error: %s", e)
@@ -275,5 +280,4 @@ def statistician_agent(state: AnalysisState) -> AnalysisState:
             error_type="agent",
         )
 
-    state.completed_agents.append("statistician")
     return state

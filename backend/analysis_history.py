@@ -87,9 +87,7 @@ async def _enforce_cache_policy(user_id: int, db: AsyncSession) -> None:
     overflow_ids = all_ids[MAX_CACHE_FILES_PER_USER:]
 
     if overflow_ids:
-        await db.execute(
-            delete(AnalysisMetadata).where(AnalysisMetadata.analysis_id.in_(overflow_ids))
-        )
+        # Delete parent rows first; CASCADE constraint removes metadata rows automatically
         await db.execute(
             delete(AnalysisHistory).where(AnalysisHistory.id.in_(overflow_ids))
         )

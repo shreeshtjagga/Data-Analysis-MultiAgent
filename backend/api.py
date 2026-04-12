@@ -18,6 +18,7 @@ Routes
 
 import io
 import csv
+import asyncio
 import logging
 import os
 import json
@@ -35,6 +36,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from .core import cache as redis_cache
 from .analysis_history import (
+    _serialize_charts,
     compute_file_hash,
     delete_analysis,
     get_analysis_by_id,
@@ -90,6 +92,10 @@ MAX_CONTEXT_BYTES = int(os.getenv("CHAT_MAX_CONTEXT_BYTES", str(128 * 1024)))
 READ_CHUNK_BYTES = 1024 * 1024
 CHAT_RATE_LIMIT = int(os.getenv("CHAT_RATE_LIMIT", "10"))
 CHAT_RATE_WINDOW = int(os.getenv("CHAT_RATE_WINDOW_SECONDS", "60"))
+
+# CORS origins — resolved at module load time, before lifespan() runs
+_raw_origins = os.getenv("CORS_ORIGINS", "http://localhost:5173,http://localhost:3000")
+origins = [o.strip() for o in _raw_origins.split(",") if o.strip()]
 
 
 def _looks_like_csv(file_bytes: bytes) -> bool:
@@ -236,10 +242,6 @@ app = FastAPI(
     version=APP_VERSION,
     lifespan=lifespan,
 )
-
-# CORS — allow the Vite dev server and any configured production origins
-_raw_origins = os.getenv("CORS_ORIGINS", "http://localhost:5173,http://localhost:3000")
-origins = [o.strip() for o in _raw_origins.split(",") if o.strip()]
 
 app.add_middleware(
     CORSMiddleware,
@@ -611,7 +613,6 @@ async def analyze(
             detail=f"Dataset has {column_count} columns. Maximum allowed is {MAX_ANALYZE_COLUMNS}.",
         )
 
-    import asyncio
     state = await asyncio.to_thread(run_pipeline, df)
     result = state.model_dump()
 
@@ -642,13 +643,10 @@ async def analyze(
         result["analysis_id"] = save_result.get("analysis_id")
 
     # Serialise charts to plain dicts before returning
-    from .analysis_history import _serialize_charts
     result["charts"] = _serialize_charts(result.get("charts") or {})
     result["partial"] = False
 
     # Make DataFrames JSON-safe
-    import json
-
     for key in ("raw_df", "clean_df"):
         df_val = result.get(key)
         if hasattr(df_val, "to_json"):
