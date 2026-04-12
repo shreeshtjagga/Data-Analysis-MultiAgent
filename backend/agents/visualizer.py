@@ -18,6 +18,7 @@ import plotly.express as px
 import plotly.graph_objects as go
 
 from ..core.state import AnalysisState
+from ..core.errors import add_pipeline_error
 
 logger = logging.getLogger(__name__)
 
@@ -415,7 +416,13 @@ def run(state: AnalysisState) -> AnalysisState:
     state.current_agent = "visualizer"
 
     if state.clean_df is None or state.clean_df.empty:
-        state.errors.append("visualizer skipped: no clean_df available")
+        add_pipeline_error(
+            state.errors,
+            code="VISUALIZER_NO_DATA",
+            message="No clean_df available",
+            agent="visualizer",
+            error_type="validation",
+        )
         return state
 
     try:
@@ -425,7 +432,13 @@ def run(state: AnalysisState) -> AnalysisState:
         state.completed_agents.append("visualizer")
 
     except Exception as exc:
-        state.errors.append(f"visualizer error: {exc}")
+        add_pipeline_error(
+            state.errors,
+            code="VISUALIZER_FAILED",
+            message=str(exc),
+            agent="visualizer",
+            error_type="agent",
+        )
         logger.exception("Visualizer error")
 
     return state

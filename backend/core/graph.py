@@ -1,5 +1,6 @@
 import logging
 from .state import AnalysisState
+from .constants import PIPELINE_VERSION
 from ..agents.architect import architect_agent
 from ..agents.statistician import statistician_agent
 from ..agents.visualizer import visualizer_agent
@@ -7,12 +8,6 @@ from ..agents.insights import insights_agent
 from dotenv import load_dotenv
 load_dotenv()
 logger = logging.getLogger(__name__)
-
-# Bump this when the pipeline logic changes materially.
-# Cached results with older versions are ignored so users always
-# get results from the current pipeline.
-PIPELINE_VERSION = "v2"
-
 
 def run_pipeline(df) -> AnalysisState:
     state = AnalysisState(raw_df=df)

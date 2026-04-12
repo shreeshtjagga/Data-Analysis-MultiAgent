@@ -14,6 +14,7 @@ import pandas as pd
 from scipy import stats as scipy_stats
 
 from ..core.state import AnalysisState
+from ..core.errors import add_pipeline_error
 
 logger = logging.getLogger(__name__)
 
@@ -265,9 +266,14 @@ def statistician_agent(state: AnalysisState) -> AnalysisState:
         )
 
     except Exception as e:
-        error_msg = f"Statistician error: {e}"
-        logger.error(error_msg)
-        state.errors.append(error_msg)
+        logger.error("Statistician error: %s", e)
+        add_pipeline_error(
+            state.errors,
+            code="STATISTICIAN_FAILED",
+            message=str(e),
+            agent="statistician",
+            error_type="agent",
+        )
 
     state.completed_agents.append("statistician")
     return state

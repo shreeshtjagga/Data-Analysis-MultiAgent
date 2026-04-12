@@ -19,7 +19,7 @@ from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from .core import cache as redis_cache
-from .core.graph import PIPELINE_VERSION
+from .core.constants import PIPELINE_VERSION
 from .db import AnalysisHistory, AnalysisMetadata
 
 logger = logging.getLogger(__name__)

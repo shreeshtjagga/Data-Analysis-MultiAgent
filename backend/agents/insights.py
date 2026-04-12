@@ -13,6 +13,7 @@ import os
 from typing import Optional
 
 from ..core.state import AnalysisState
+from ..core.errors import add_pipeline_error
 from ..core.utils import truncate_stats_for_llm
 
 logger = logging.getLogger(__name__)
@@ -227,9 +228,14 @@ def insights_agent(state: AnalysisState) -> AnalysisState:
         )
 
     except Exception as e:
-        error_msg = f"Insights error: {e}"
-        logger.error(error_msg)
-        state.errors.append(error_msg)
+        logger.error("Insights error: %s", e)
+        add_pipeline_error(
+            state.errors,
+            code="INSIGHTS_FAILED",
+            message=str(e),
+            agent="insights",
+            error_type="agent",
+        )
 
     state.completed_agents.append("insights")
     return state

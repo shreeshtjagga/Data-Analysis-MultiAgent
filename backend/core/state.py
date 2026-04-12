@@ -18,7 +18,7 @@ class AnalysisState(BaseModel):
     insights: dict[str, Any] = Field(default_factory=dict)
 
     # Error tracking
-    errors: list[str] = Field(default_factory=list)
+    errors: list[dict[str, Any]] = Field(default_factory=list)
     partial: bool = False
 
     # Agent tracking

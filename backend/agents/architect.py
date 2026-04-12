@@ -16,6 +16,7 @@ import os
 import pandas as pd
 
 from ..core.state import AnalysisState
+from ..core.errors import add_pipeline_error
 from ..core.utils import clean_dataframe, detect_column_types
 
 logger = logging.getLogger(__name__)
@@ -180,8 +181,13 @@ def architect_agent(state: AnalysisState) -> AnalysisState:
         state.completed_agents.append("architect")
 
     except Exception as e:
-        error_msg = f"Architect error: {e}"
-        logger.error(error_msg)
-        state.errors.append(error_msg)
+        logger.error("Architect error: %s", e)
+        add_pipeline_error(
+            state.errors,
+            code="ARCHITECT_FAILED",
+            message=str(e),
+            agent="architect",
+            error_type="agent",
+        )
 
     return state

@@ -15,6 +15,8 @@ from typing import Any, List, Optional
 
 from pydantic import BaseModel, ConfigDict, EmailStr, Field, field_validator
 
+from ..core.constants import APP_VERSION
+
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # AUTH SCHEMAS
@@ -52,6 +54,13 @@ class UserLogin(BaseModel):
 
     email: EmailStr
     password: str
+
+
+class GoogleLoginRequest(BaseModel):
+    """Payload for POST /auth/google."""
+
+    credential: str = Field(..., min_length=1)
+    client_id: Optional[str] = None
 
 
 class UserResponse(BaseModel):
@@ -134,6 +143,13 @@ class AnalysisStatsSummary(BaseModel):
     strong_correlations: int
 
 
+class ChatRequest(BaseModel):
+    """Payload for POST /chat."""
+
+    question: str = Field(..., min_length=1, max_length=1200)
+    context: dict[str, Any] = Field(default_factory=dict)
+
+
 # ═══════════════════════════════════════════════════════════════════════════════
 # GENERIC RESPONSE SCHEMAS
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -155,4 +171,4 @@ class HealthResponse(BaseModel):
     status: str
     postgres: bool
     redis: bool
-    version: str = "2.0.0"
+    version: str = APP_VERSION

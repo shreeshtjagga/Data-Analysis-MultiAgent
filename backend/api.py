@@ -25,7 +25,7 @@ from contextlib import asynccontextmanager
 from typing import Annotated, Optional
 
 import pandas as pd
-from fastapi import Body, Depends, FastAPI, File, HTTPException, UploadFile, status, Request, Response
+from fastapi import Depends, FastAPI, File, HTTPException, UploadFile, status, Request, Response, Query
 from fastapi.responses import JSONResponse
 import traceback
 from fastapi.middleware.cors import CORSMiddleware
@@ -52,13 +52,17 @@ from .auth import (
     verify_refresh_token,
     REFRESH_EXPIRE_DAYS,
 )
-from .core.graph import run_pipeline, PIPELINE_VERSION
-from .core.utils import truncate_stats_for_llm
+from .core.constants import APP_VERSION, PIPELINE_VERSION
+from .core.graph import run_pipeline
+from .core.logging_config import configure_logging
+from .core.utils import sanitize_floats, truncate_stats_for_llm
 from .db import get_db, init_db
 from .models.schemas import (
     AnalysisListResponse,
     AuthResponse,
+    ChatRequest,
     DeleteResponse,
+    GoogleLoginRequest,
     HealthResponse,
     TokenResponse,
     UserLogin,
@@ -66,8 +70,8 @@ from .models.schemas import (
     UserResponse,
 )
 
+configure_logging()
 logger = logging.getLogger(__name__)
-logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(name)s] %(levelname)s %(message)s")
 
 APP_ENV = os.getenv("APP_ENV", "production")
 GOOGLE_CLIENT_ID = os.getenv("GOOGLE_CLIENT_ID", "").strip()
@@ -166,7 +170,7 @@ async def lifespan(app: FastAPI):
 app = FastAPI(
     title="DataPulse API",
     description="Multi-agent CSV analysis API",
-    version="2.0.0",
+    version=APP_VERSION,
     lifespan=lifespan,
 )
 
@@ -289,13 +293,12 @@ async def login(body: UserLogin, db: AsyncSession = Depends(get_db), response: R
 
 
 @app.post("/auth/google", response_model=TokenResponse, tags=["auth"])
-async def login_with_google(request: Request, db: AsyncSession = Depends(get_db), response: Response = None):
-    body = await request.json()
-    credential = body.get("credential")
+async def login_with_google(body: GoogleLoginRequest, db: AsyncSession = Depends(get_db), response: Response = None):
+    credential = body.credential
     if not credential:
         raise HTTPException(status_code=400, detail="Missing Google credential")
 
-    frontend_client_id = (body.get("client_id") or "").strip()
+    frontend_client_id = (body.client_id or "").strip()
     if frontend_client_id and GOOGLE_CLIENT_ID and frontend_client_id != GOOGLE_CLIENT_ID:
         raise HTTPException(status_code=400, detail="Google client ID mismatch")
 
@@ -569,16 +572,6 @@ async def analyze(
 
     # Make DataFrames JSON-safe
     import json
-    import math
-
-    def sanitize_floats(obj):
-        if isinstance(obj, float):
-            return None if math.isnan(obj) or math.isinf(obj) else obj
-        elif isinstance(obj, dict):
-            return {k: sanitize_floats(v) for k, v in obj.items()}
-        elif isinstance(obj, list):
-            return [sanitize_floats(x) for x in obj]
-        return obj
 
     for key in ("raw_df", "clean_df"):
         df_val = result.get(key)
@@ -598,7 +591,7 @@ async def analyze(
 async def history(
     user_id: int = Depends(get_current_user_id),
     db: AsyncSession = Depends(get_db),
-    limit: int = 20,
+    limit: int = Query(default=20, ge=1, le=100),
 ):
     items = await get_user_analysis_history(db, user_id, limit=limit)
     return AnalysisListResponse(
@@ -623,7 +616,7 @@ async def remove_analysis(
 
 @app.post("/chat", tags=["analysis"])
 async def chat_with_analysis(
-    body: dict = Body(...),
+    body: ChatRequest,
     user_id: int = Depends(get_current_user_id),
 ):
     """Answer a user question about the current analysis context."""
@@ -642,8 +635,8 @@ async def chat_with_analysis(
             detail="Rate limiter unavailable. Please retry shortly.",
         )
 
-    question = (body.get("question") or "").strip()
-    context = body.get("context") or {}
+    question = body.question.strip()
+    context = body.context or {}
 
     if not question:
         raise HTTPException(status_code=400, detail="Question is required")
