@@ -98,6 +98,7 @@ export default function DataPulse({ user, onLogout }) {
   const [result, setResult]   = useState(null);
   const [fileName, setFileName] = useState("");
   const [agentLog, setAgentLog] = useState([]);
+  const [analysisError, setAnalysisError] = useState("");
   const [isDragOver, setIsDragOver] = useState(false);
   const [isMobile, setIsMobile] = useState(typeof window !== "undefined" ? window.innerWidth < 900 : false);
   const [tab, setTab]         = useState("overview");
@@ -106,8 +107,10 @@ export default function DataPulse({ user, onLogout }) {
   const [chatLoading, setChatLoading] = useState(false);
   const [history, setHistory] = useState([]);
   const [showHistory, setShowHistory] = useState(false);
+  const [historyLoading, setHistoryLoading] = useState(false);
   const [deleteLoading, setDeleteLoading] = useState(null);
   const fileRef = useRef();
+  const chatEndRef = useRef(null);
   const dragCounterRef = useRef(0);
   const stageTimersRef = useRef([]);
 
@@ -119,6 +122,11 @@ export default function DataPulse({ user, onLogout }) {
     return () => window.removeEventListener("resize", onResize);
   }, []);
 
+  useEffect(() => {
+    if (tab !== "chat") return;
+    chatEndRef.current?.scrollIntoView({ behavior: "smooth", block: "end" });
+  }, [chatMsgs, chatLoading, tab]);
+
   const clearStageTimers = () => {
     stageTimersRef.current.forEach((timerId) => clearTimeout(timerId));
     stageTimersRef.current = [];
@@ -129,6 +137,7 @@ export default function DataPulse({ user, onLogout }) {
     if (!file) return;
     setPhase("analyzing");
     setResult(null);
+    setAnalysisError("");
     setAgentLog([]);
     setTab("overview");
     setFileName(file.name);
@@ -155,8 +164,8 @@ export default function DataPulse({ user, onLogout }) {
     } catch (err) {
       clearStageTimers();
       log(`Error: ${err.message}`);
-      setPhase("upload");
-      alert(`Analysis failed: ${err.message}`);
+      setAnalysisError(err.message || "Analysis failed");
+      setPhase("analyzing");
     }
   }, []);
 
@@ -180,11 +189,14 @@ export default function DataPulse({ user, onLogout }) {
 
   // ── History ────────────────────────────────────────────────────────────────
   const loadHistory = async () => {
+    setHistoryLoading(true);
     try {
       const resp = await apiHistory();
       setHistory(resp.analyses || []);
     } catch (err) {
       console.error("History load failed:", err.message);
+    } finally {
+      setHistoryLoading(false);
     }
   };
 
@@ -309,6 +321,20 @@ export default function DataPulse({ user, onLogout }) {
           <div style={{ marginTop: "16px", display: "flex", gap: "6px" }}>
             {[0,1,2].map((i) => <div key={i} style={{ width: "7px", height: "7px", borderRadius: "50%", background: "#6366f1", animation: `pulse 1.2s ${i*0.2}s infinite` }} />)}
           </div>
+          {analysisError && (
+            <div style={{ marginTop: "18px", background: "rgba(239,68,68,0.1)", border: "1px solid rgba(239,68,68,0.35)", borderRadius: "8px", padding: "12px" }}>
+              <div style={{ color: "#fca5a5", fontSize: "0.82rem", marginBottom: "10px" }}>Analysis failed: {analysisError}</div>
+              <button
+                style={{ ...s.btn, fontSize: "0.72rem", padding: "7px 14px" }}
+                onClick={() => {
+                  setAnalysisError("");
+                  setPhase("upload");
+                }}
+              >
+                Try again
+              </button>
+            </div>
+          )}
         </div>
       </div>
     </div>
@@ -334,8 +360,19 @@ export default function DataPulse({ user, onLogout }) {
         </div>
         <div style={{ display: "flex", alignItems: "center", gap: "8px", flexWrap: isMobile ? "wrap" : "nowrap", width: isMobile ? "100%" : "auto" }}>
           <span style={{ fontSize: "0.75rem", color: "#10b981", background: "rgba(16,185,129,0.08)", border: "1px solid rgba(16,185,129,0.2)", padding: "4px 12px", borderRadius: "20px" }}>✓ Analysis Complete</span>
-          <button style={{ ...s.btn, fontSize: "0.72rem", padding: "7px 14px" }} onClick={toggleHistory}>History</button>
-          <button style={{ ...s.btn, fontSize: "0.72rem", padding: "7px 14px" }} onClick={() => { setResult(null); setPhase("upload"); }}>New File</button>
+          <button style={{ ...s.btn, fontSize: "0.72rem", padding: "7px 14px", opacity: historyLoading ? 0.7 : 1 }} onClick={toggleHistory} disabled={historyLoading}>
+            {historyLoading ? "Loading…" : "History"}
+          </button>
+          <button
+            style={{ ...s.btn, fontSize: "0.72rem", padding: "7px 14px" }}
+            onClick={() => {
+              if (!window.confirm("Clear current analysis and upload a new file?")) return;
+              setResult(null);
+              setPhase("upload");
+            }}
+          >
+            New File
+          </button>
           <button style={{ ...s.btn, fontSize: "0.72rem", padding: "7px 14px", background: "transparent", border: "1px solid rgba(99,102,241,0.2)", color: "#818cf8" }} onClick={onLogout}>Logout</button>
         </div>
       </div>
@@ -584,6 +621,11 @@ export default function DataPulse({ user, onLogout }) {
         {tab === "chat" && (
           <div style={s.card}>
             <div style={s.sectionTitle}>Chat with your data</div>
+            {!result && (
+              <div style={{ marginBottom: "12px", fontSize: "0.82rem", color: "#64748b" }}>
+                Analyze a file first to chat with dataset context.
+              </div>
+            )}
             <div style={{ height: "340px", overflowY: "auto", marginBottom: "14px", display: "flex", flexDirection: "column", gap: "10px" }}>
               {chatMsgs.length === 0 && (
                 <div style={{ textAlign: "center", padding: "40px", color: "#475569", fontSize: "0.85rem" }}>
@@ -607,6 +649,7 @@ export default function DataPulse({ user, onLogout }) {
                   {[0,1,2].map((i) => <div key={i} style={{ width: "5px", height: "5px", borderRadius: "50%", background: "#6366f1", animation: `pulse 0.9s ${i*0.15}s infinite` }} />)}
                 </div>
               )}
+              <div ref={chatEndRef} />
             </div>
             <div>
               <div style={{ display: "flex", gap: "8px" }}>
