@@ -8,11 +8,9 @@ Uses SQLAlchemy AsyncSession (PostgreSQL) + Redis cache.
 import hashlib
 import json
 import logging
-import math
 from datetime import datetime, timezone
 from typing import Optional
 
-import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
 from sqlalchemy import delete, select
@@ -20,6 +18,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from .core import cache as redis_cache
 from .core.constants import PIPELINE_VERSION
+from .core.utils import json_default, sanitize_for_json
 from .db import AnalysisHistory, AnalysisMetadata
 
 logger = logging.getLogger(__name__)
@@ -30,44 +29,12 @@ CACHE_TTL_DAYS = 3
 
 # ── Serialisation helpers ─────────────────────────────────────────────────────
 
-def _json_default(obj):
-    if isinstance(obj, np.ndarray):
-        return obj.tolist()
-    if isinstance(obj, (np.integer,)):
-        return int(obj)
-    if isinstance(obj, (np.floating,)):
-        return float(obj)
-    if isinstance(obj, (np.bool_,)):
-        return bool(obj)
-    if isinstance(obj, (pd.Timestamp, datetime)):
-        return obj.isoformat()
-    if isinstance(obj, set):
-        return list(obj)
-    return str(obj)
-
-
-def _sanitize_for_json(value):
-    if isinstance(value, dict):
-        return {str(k): _sanitize_for_json(v) for k, v in value.items()}
-    if isinstance(value, list):
-        return [_sanitize_for_json(v) for v in value]
-    if isinstance(value, tuple):
-        return [_sanitize_for_json(v) for v in value]
-    if isinstance(value, float):
-        return value if math.isfinite(value) else None
-    if isinstance(value, np.floating):
-        val = float(value)
-        return val if math.isfinite(val) else None
-    if isinstance(value, np.ndarray):
-        return _sanitize_for_json(value.tolist())
-    return value
-
 
 def _to_json(value) -> Optional[str]:
     if value is None:
         return None
-    cleaned = _sanitize_for_json(value)
-    return json.dumps(cleaned, default=_json_default, allow_nan=False)
+    cleaned = sanitize_for_json(value)
+    return json.dumps(cleaned, default=json_default, allow_nan=False)
 
 
 def _serialize_charts(charts: dict) -> dict:
@@ -79,9 +46,9 @@ def _serialize_charts(charts: dict) -> dict:
             if hasattr(fig, "to_plotly_json"):
                 fig_json = fig.to_plotly_json()
                 fig_json.pop("uid", None)
-                out[key] = _sanitize_for_json(fig_json)
+                out[key] = sanitize_for_json(fig_json)
             elif isinstance(fig, dict):
-                out[key] = _sanitize_for_json(fig)
+                out[key] = sanitize_for_json(fig)
         except Exception as exc:
             logger.warning("Failed to serialise chart '%s': %s", key, exc)
     return out
