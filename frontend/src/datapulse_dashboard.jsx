@@ -8,7 +8,7 @@
  * • ChartPanel simply maps over `result.charts` and passes data/layout to Plot.
  */
 
-import { useState, useRef, useCallback } from "react";
+import { useState, useRef, useCallback, useEffect } from "react";
 import createPlotlyComponent from "react-plotly.js/factory";
 import Plotly from "plotly.js-dist-min";
 import { apiAnalyze, apiChat, apiHistory, apiDeleteAnalysis } from "./api.js";
@@ -49,7 +49,12 @@ const PLOTLY_DARK_LAYOUT = {
   margin: { l: 50, r: 30, t: 50, b: 40 },
 };
 
-const PLOTLY_CONFIG = { responsive: true, displayModeBar: false };
+const PLOTLY_CONFIG = {
+  responsive: true,
+  displayModeBar: "hover",
+  displaylogo: false,
+  modeBarButtonsToRemove: ["lasso2d", "select2d", "toggleSpikelines"],
+};
 
 // ── Chart panel (Plotly) ──────────────────────────────────────────────────────
 function ChartPanel({ result }) {
@@ -61,7 +66,7 @@ function ChartPanel({ result }) {
   }
 
   return (
-    <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(480px,1fr))", gap: "20px" }}>
+    <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(280px,1fr))", gap: "20px" }}>
       {entries.map(([key, fig]) => (
         <div key={key} style={s.card}>
           <Plot
@@ -93,6 +98,8 @@ export default function DataPulse({ user, onLogout }) {
   const [result, setResult]   = useState(null);
   const [fileName, setFileName] = useState("");
   const [agentLog, setAgentLog] = useState([]);
+  const [isDragOver, setIsDragOver] = useState(false);
+  const [isMobile, setIsMobile] = useState(typeof window !== "undefined" ? window.innerWidth < 900 : false);
   const [tab, setTab]         = useState("overview");
   const [chatMsgs, setChatMsgs]   = useState([]);
   const [chatInput, setChatInput] = useState("");
@@ -101,8 +108,21 @@ export default function DataPulse({ user, onLogout }) {
   const [showHistory, setShowHistory] = useState(false);
   const [deleteLoading, setDeleteLoading] = useState(null);
   const fileRef = useRef();
+  const dragCounterRef = useRef(0);
+  const stageTimersRef = useRef([]);
 
   const log = (msg) => setAgentLog((p) => [...p, { time: new Date().toLocaleTimeString(), msg }]);
+
+  useEffect(() => {
+    const onResize = () => setIsMobile(window.innerWidth < 900);
+    window.addEventListener("resize", onResize);
+    return () => window.removeEventListener("resize", onResize);
+  }, []);
+
+  const clearStageTimers = () => {
+    stageTimersRef.current.forEach((timerId) => clearTimeout(timerId));
+    stageTimersRef.current = [];
+  };
 
   // ── File upload → API ──────────────────────────────────────────────────────
   const analyzeFile = useCallback(async (file) => {
@@ -115,13 +135,25 @@ export default function DataPulse({ user, onLogout }) {
     setChatMsgs([]);
 
     log("Uploading CSV to server…");
+    log("Architect running…");
+    clearStageTimers();
+    const stageMessages = [
+      "Architect complete → Statistician running…",
+      "Statistician complete → Visualizer running…",
+      "Visualizer complete → Insights running…",
+    ];
+    stageTimersRef.current = stageMessages.map((msg, idx) =>
+      setTimeout(() => log(msg), 500 + idx * 900)
+    );
+
     try {
-      log("Running multi-agent pipeline (architect → statistician → insights)…");
       const data = await apiAnalyze(file);
+      clearStageTimers();
       log(data.from_cache ? "Returned cached analysis." : "Pipeline complete.");
       setResult(data);
       setPhase("done");
     } catch (err) {
+      clearStageTimers();
       log(`Error: ${err.message}`);
       setPhase("upload");
       alert(`Analysis failed: ${err.message}`);
@@ -129,7 +161,22 @@ export default function DataPulse({ user, onLogout }) {
   }, []);
 
   const onFile = useCallback((file) => analyzeFile(file), [analyzeFile]);
-  const onDrop = useCallback((e) => { e.preventDefault(); onFile(e.dataTransfer.files[0]); }, [onFile]);
+  const onDrop = useCallback((e) => {
+    e.preventDefault();
+    dragCounterRef.current = 0;
+    setIsDragOver(false);
+    onFile(e.dataTransfer.files[0]);
+  }, [onFile]);
+  const onDragEnter = useCallback((e) => {
+    e.preventDefault();
+    dragCounterRef.current += 1;
+    setIsDragOver(true);
+  }, []);
+  const onDragLeave = useCallback((e) => {
+    e.preventDefault();
+    dragCounterRef.current = Math.max(0, dragCounterRef.current - 1);
+    if (dragCounterRef.current === 0) setIsDragOver(false);
+  }, []);
 
   // ── History ────────────────────────────────────────────────────────────────
   const loadHistory = async () => {
@@ -193,25 +240,47 @@ export default function DataPulse({ user, onLogout }) {
   const profile      = stats.dataset_profile || {};
   const excluded     = stats.excluded_columns || [];
   const coerced      = stats.coerced_columns || [];
+  const formatPercent = (value) => {
+    const n = Number.isFinite(value) ? Number(value) : 100;
+    return Number.isInteger(n) ? `${n}%` : `${n.toFixed(1)}%`;
+  };
 
   // ── Upload screen ──────────────────────────────────────────────────────────
   if (phase === "upload") return (
     <div style={s.app}>
-      <div style={s.topbar}>
+      <div style={{ ...s.topbar, flexWrap: isMobile ? "wrap" : "nowrap", gap: isMobile ? "10px" : 0 }}>
         <span style={s.brand}>◈ Data Pulse</span>
-        <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
+        <div style={{ display: "flex", alignItems: "center", gap: "10px", width: isMobile ? "100%" : "auto", justifyContent: isMobile ? "space-between" : "flex-end" }}>
           <span style={{ fontSize: "0.78rem", color: "#475569", fontFamily: "monospace" }}>{user?.email}</span>
           <button style={{ ...s.btn, fontSize: "0.72rem", padding: "7px 14px", background: "transparent", border: "1px solid rgba(99,102,241,0.2)", color: "#818cf8" }} onClick={onLogout}>Logout</button>
         </div>
       </div>
       <div style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center", padding: "40px" }}>
-        <div style={{ textAlign: "center", maxWidth: "480px", width: "100%" }} onDrop={onDrop} onDragOver={(e) => e.preventDefault()}>
+        <div
+          style={{ textAlign: "center", maxWidth: "480px", width: "100%" }}
+          onDrop={onDrop}
+          onDragOver={(e) => e.preventDefault()}
+          onDragEnter={onDragEnter}
+          onDragLeave={onDragLeave}
+        >
           <div style={{ fontSize: "2.8rem", marginBottom: "20px", color: "#6366f1" }}>◈</div>
           <h1 style={{ fontFamily: "'Syne',sans-serif", fontSize: "1.8rem", fontWeight: 800, color: "#f1f5f9", marginBottom: "10px" }}>AI Data Analyst</h1>
           <p style={{ color: "#64748b", fontSize: "0.9rem", marginBottom: "32px", lineHeight: 1.7 }}>Upload any CSV and get instant AI-powered insights, charts, correlations, and recommendations.</p>
-          <div onClick={() => fileRef.current.click()} style={{ border: "2px dashed rgba(99,102,241,0.3)", borderRadius: "12px", padding: "40px", cursor: "pointer", background: "rgba(99,102,241,0.03)" }}>
+          <div
+            onClick={() => fileRef.current.click()}
+            style={{
+              border: isDragOver ? "2px dashed rgba(99,102,241,0.85)" : "2px dashed rgba(99,102,241,0.3)",
+              borderRadius: "12px",
+              padding: "40px",
+              cursor: "pointer",
+              background: isDragOver ? "rgba(99,102,241,0.14)" : "rgba(99,102,241,0.03)",
+              transition: "all 0.18s ease",
+            }}
+          >
             <div style={{ fontSize: "2rem", marginBottom: "12px", color: "#475569" }}>↑</div>
-            <p style={{ color: "#94a3b8", fontSize: "0.88rem" }}>Click to upload or drag a CSV file here</p>
+            <p style={{ color: "#94a3b8", fontSize: "0.88rem" }}>
+              {isDragOver ? "Drop file to start analysis" : "Click to upload or drag a CSV file here"}
+            </p>
             <input ref={fileRef} type="file" accept=".csv" style={{ display: "none" }} onChange={(e) => onFile(e.target.files[0])} />
           </div>
           <div style={{ marginTop: "24px", display: "flex", justifyContent: "center", gap: "8px", flexWrap: "wrap" }}>
@@ -256,14 +325,14 @@ export default function DataPulse({ user, onLogout }) {
       `}</style>
 
       {/* Topbar */}
-      <div style={s.topbar}>
-        <div style={{ display: "flex", alignItems: "center", gap: "12px" }}>
+      <div style={{ ...s.topbar, flexWrap: isMobile ? "wrap" : "nowrap", gap: isMobile ? "10px" : 0 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: "12px", flexWrap: isMobile ? "wrap" : "nowrap" }}>
           <span style={s.brand}>◈ Data Pulse</span>
           <span style={{ fontFamily: "monospace", fontSize: "0.72rem", background: "rgba(99,102,241,0.12)", border: "1px solid rgba(99,102,241,0.22)", color: "#818cf8", padding: "2px 10px", borderRadius: "20px" }}>{fileName}</span>
           {profile.label && profile.label !== "unknown" && <span style={{ fontSize: "0.7rem", color: "#a78bfa", background: "rgba(167,139,250,0.08)", border: "1px solid rgba(167,139,250,0.2)", padding: "2px 8px", borderRadius: "12px" }}>{profile.label}</span>}
           {result?.from_cache && <span style={{ fontSize: "0.7rem", color: "#10b981", background: "rgba(16,185,129,0.08)", border: "1px solid rgba(16,185,129,0.2)", padding: "2px 8px", borderRadius: "12px" }}>CACHED</span>}
         </div>
-        <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+        <div style={{ display: "flex", alignItems: "center", gap: "8px", flexWrap: isMobile ? "wrap" : "nowrap", width: isMobile ? "100%" : "auto" }}>
           <span style={{ fontSize: "0.75rem", color: "#10b981", background: "rgba(16,185,129,0.08)", border: "1px solid rgba(16,185,129,0.2)", padding: "4px 12px", borderRadius: "20px" }}>✓ Analysis Complete</span>
           <button style={{ ...s.btn, fontSize: "0.72rem", padding: "7px 14px" }} onClick={toggleHistory}>History</button>
           <button style={{ ...s.btn, fontSize: "0.72rem", padding: "7px 14px" }} onClick={() => { setResult(null); setPhase("upload"); }}>New File</button>
@@ -294,7 +363,7 @@ export default function DataPulse({ user, onLogout }) {
       )}
 
       {/* Tab bar */}
-      <div style={{ background: "#0d1220", borderBottom: "1px solid rgba(99,102,241,0.12)", padding: "0 32px", display: "flex", gap: 0 }}>
+      <div style={{ background: "#0d1220", borderBottom: "1px solid rgba(99,102,241,0.12)", padding: "0 16px", display: "flex", gap: 0, overflowX: "auto" }}>
         {TABS.map((t) => <button key={t} style={s.tab(tab === t)} onClick={() => setTab(t)}>{t}</button>)}
       </div>
 
@@ -316,7 +385,7 @@ export default function DataPulse({ user, onLogout }) {
                 { label: "Numeric cols",     val: numericCols.length },
                 { label: "Categorical cols", val: catCols.length },
                 { label: "Missing values",   val: missingTotal },
-                { label: "Completeness",     val: `${completeness.toFixed(1)}%` },
+                { label: "Completeness",     val: formatPercent(completeness) },
                 { label: "Outlier cols",     val: outlierCols.length },
                 { label: "Correlations",     val: (stats.strong_correlations || []).length },
               ].map(({ label, val }) => (
@@ -430,6 +499,14 @@ export default function DataPulse({ user, onLogout }) {
         {/* STATISTICS */}
         {tab === "statistics" && (
           <div style={{ display: "flex", flexDirection: "column", gap: "20px" }}>
+            {numericCols.length === 0 && (
+              <div style={s.card}>
+                <div style={s.sectionTitle}>Numeric columns</div>
+                <div style={{ fontSize: "0.84rem", color: "#64748b" }}>
+                  This dataset has no numeric columns, so statistical aggregates are not available.
+                </div>
+              </div>
+            )}
             {numericCols.length > 0 && (
               <div style={s.card}>
                 <div style={s.sectionTitle}>Numeric columns</div>
@@ -470,14 +547,14 @@ export default function DataPulse({ user, onLogout }) {
 
         {/* QUALITY */}
         {tab === "quality" && (
-          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(340px,1fr))", gap: "20px" }}>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(280px,1fr))", gap: "20px" }}>
             <div style={s.card}>
               <div style={s.sectionTitle}>Data quality summary</div>
               {[
                 { label: "Total cells",    val: dq.total_cells || 0 },
                 { label: "Missing cells",  val: dq.missing_cells || 0 },
                 { label: "Duplicate rows", val: dq.duplicate_rows || 0 },
-                { label: "Completeness",   val: `${(dq.completeness || 100).toFixed(1)}%` },
+                { label: "Completeness",   val: formatPercent(dq.completeness || 100) },
               ].map(({ label, val }) => (
                 <div key={label} style={{ display: "flex", justifyContent: "space-between", marginBottom: "10px", fontSize: "0.82rem" }}>
                   <span style={{ color: "#94a3b8", fontFamily: "monospace" }}>{label}</span>
