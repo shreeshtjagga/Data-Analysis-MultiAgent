@@ -27,7 +27,6 @@ If anyone is unable to handle the  stuff chill , share the work
 ### Naga Balaji
 
 * backend/api.py
-* backend/app.py
 * .env.example
 * .github/workflows/python-checks.yml
 * backend/agents/summary.py // can be changed //
@@ -67,7 +66,6 @@ Data-Analysis-MultiAgent/
 │   ├── models/
 │   │   └── schemas.py
 │   │
-│   ├── app.py
 │   └── api.py
 │
 ├── data/

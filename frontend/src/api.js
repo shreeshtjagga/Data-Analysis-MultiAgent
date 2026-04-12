@@ -195,6 +195,3 @@ export async function apiDeleteAnalysis(analysisId) {
 
 // ── Health ────────────────────────────────────────────────────────────────────
 
-export async function apiHealth() {
-  return apiFetch("/health", { withAuth: false });
-}
