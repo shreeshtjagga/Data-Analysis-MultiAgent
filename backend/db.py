@@ -1,8 +1,4 @@
-"""
-db.py
-─────
-Database engine and session factory using SQLAlchemy async + PostgreSQL (Neon).
-"""
+
 
 import logging
 import os
@@ -12,7 +8,7 @@ from datetime import datetime
 
 from dotenv import load_dotenv
 
-# Load .env before any os.getenv() calls
+
 load_dotenv()
 
 from sqlalchemy import (
@@ -24,19 +20,19 @@ from sqlalchemy.orm import DeclarativeBase, relationship
 
 logger = logging.getLogger(__name__)
 
-# ── Engine ────────────────────────────────────────────────────────────────────
+
 
 DATABASE_URL = os.getenv(
     "DATABASE_URL",
     "postgresql+asyncpg://datapulse:datapulse_secret@localhost:5432/datapulse",
 )
 
-# Ensure URL uses postgresql+asyncpg:// driver prefix
+
 if DATABASE_URL.startswith("postgresql://") or DATABASE_URL.startswith("postgres://"):
     DATABASE_URL = DATABASE_URL.replace("postgres://", "postgresql+asyncpg://", 1)
     DATABASE_URL = DATABASE_URL.replace("postgresql://", "postgresql+asyncpg://", 1)
 
-# Build SSL connect_args for cloud-hosted databases (Neon, Supabase, etc.)
+
 _db_ssl = os.getenv("DB_SSL", "false").lower() == "true"
 _connect_args: dict = {}
 if _db_ssl:
@@ -49,7 +45,7 @@ engine = create_async_engine(
     DATABASE_URL,
     echo=os.getenv("APP_ENV", "production") == "development",
     pool_pre_ping=True,
-    pool_size=5,        # Neon free tier has limited connections
+    pool_size=5,
     max_overflow=10,
     connect_args=_connect_args,
 )
@@ -63,13 +59,11 @@ AsyncSessionLocal = async_sessionmaker(
 )
 
 
-# ── Base ──────────────────────────────────────────────────────────────────────
 
 class Base(DeclarativeBase):
     pass
 
 
-# ── Models ────────────────────────────────────────────────────────────────────
 
 class User(Base):
     __tablename__ = "users"
@@ -148,7 +142,6 @@ class AnalysisMetadata(Base):
     analysis = relationship("AnalysisHistory", back_populates="metadata_row")
 
 
-# ── Session helpers ───────────────────────────────────────────────────────────
 
 @asynccontextmanager
 async def get_session():
@@ -175,7 +168,6 @@ async def get_db() -> AsyncSession:
         await session.close()
 
 
-# ── Init ─────────────────────────────────────────────────────────────────────
 
 async def init_db() -> None:
     """Create all tables if they do not exist. Called once at application startup."""

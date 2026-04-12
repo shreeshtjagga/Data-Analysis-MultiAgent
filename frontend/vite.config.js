@@ -7,7 +7,6 @@ export default defineConfig({
     port: 5173,
     host: "0.0.0.0",
     proxy: {
-      // All /api/* requests are forwarded to the FastAPI backend
       "/api": {
         target: process.env.VITE_API_BASE_URL || "http://localhost:8000",
         changeOrigin: true,

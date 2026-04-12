@@ -1,12 +1,4 @@
-/**
- * datapulse_dashboard.jsx  (v3 — Plotly-native charts)
- * ─────────────────────────────────────────────────────
- * Changes vs v2
- * ─────────────
- * • Removed recharts entirely — charts are now Plotly JSON from the backend,
- *   rendered directly with react-plotly.js (single source of truth).
- * • ChartPanel simply maps over `result.charts` and passes data/layout to Plot.
- */
+
 
 import { useState, useRef, useCallback, useEffect, useMemo } from "react";
 import createPlotlyComponent from "react-plotly.js/factory";
@@ -16,10 +8,10 @@ import { apiAnalyze, apiChat, apiHistory, apiHistoryAnalysis, apiDeleteAnalysis 
 
 const Plot = createPlotlyComponent(Plotly);
 
-// ── Palette ───────────────────────────────────────────────────────────────────
+
 const PALETTE = ["#6366f1", "#10b981", "#f59e0b", "#06b6d4", "#ef4444", "#a78bfa", "#34d399", "#f472b6"];
 
-// ── Styles ────────────────────────────────────────────────────────────────────
+
 const s = {
   app: { minHeight: "100vh", background: "#060912", color: "#e2e8f0", fontFamily: "'Outfit', sans-serif", display: "flex", flexDirection: "column" },
   topbar: { background: "#0d1220", borderBottom: "1px solid rgba(99,102,241,0.15)", padding: "14px 28px", display: "flex", alignItems: "center", justifyContent: "space-between", position: "sticky", top: 0, zIndex: 20 },
@@ -37,7 +29,6 @@ const s = {
   pill: (active) => ({ display: "inline-flex", alignItems: "center", gap: "5px", fontSize: "0.7rem", fontFamily: "monospace", padding: "3px 10px", borderRadius: "20px", background: active ? "rgba(99,102,241,0.15)" : "rgba(99,102,241,0.06)", border: "1px solid rgba(99,102,241,0.2)", color: "#818cf8" }),
 };
 
-// ── Dark-themed Plotly layout defaults ────────────────────────────────────────
 const PLOTLY_DARK_LAYOUT = {
   paper_bgcolor: "rgba(0,0,0,0)",
   plot_bgcolor: "rgba(13,18,32,0.6)",
@@ -57,7 +48,7 @@ const PLOTLY_CONFIG = {
   modeBarButtonsToRemove: ["lasso2d", "select2d", "toggleSpikelines"],
 };
 
-// ── Chart panel (Plotly) ──────────────────────────────────────────────────────
+
 function ChartPanel({ result, viewportWidth }) {
   const charts = result?.charts || {};
   const entries = Object.entries(charts);
@@ -76,7 +67,6 @@ function ChartPanel({ result, viewportWidth }) {
             layout={{
               ...PLOTLY_DARK_LAYOUT,
               ...(fig.layout || {}),
-              // Force dark theme overrides regardless of backend layout
               paper_bgcolor: PLOTLY_DARK_LAYOUT.paper_bgcolor,
               plot_bgcolor: PLOTLY_DARK_LAYOUT.plot_bgcolor,
               font: { ...PLOTLY_DARK_LAYOUT.font, ...(fig.layout?.font || {}) },
@@ -92,9 +82,7 @@ function ChartPanel({ result, viewportWidth }) {
   );
 }
 
-// ── Main dashboard ────────────────────────────────────────────────────────────
 const PRIMARY_TABS = ["overview", "charts", "insights"];
-// Keep reference tabs ordered with chat last for faster analytical workflow.
 const SECONDARY_TABS = ["statistics", "quality", "chat"];
 const MAX_CHAT_MESSAGES = 40;
 
@@ -158,7 +146,7 @@ export default function DataPulse({ user, onLogout }) {
     stageTimersRef.current = [];
   };
 
-  // ── File upload → API ──────────────────────────────────────────────────────
+
   const analyzeFile = useCallback(async (file) => {
     if (!file) return;
     setPhase("analyzing");
@@ -228,7 +216,7 @@ export default function DataPulse({ user, onLogout }) {
     if (dragCounterRef.current === 0) setIsDragOver(false);
   }, []);
 
-  // ── History ────────────────────────────────────────────────────────────────
+
   const loadHistory = async () => {
     setHistoryLoading(true);
     setHistoryError("");
@@ -319,7 +307,7 @@ export default function DataPulse({ user, onLogout }) {
     ];
   }, [history, result, fileName]);
 
-  // ── Chat ───────────────────────────────────────────────────────────────────
+
   const sendChat = useCallback(async () => {
     const q = chatInput.trim();
     if (!q || chatLoading || !result) return;
@@ -336,7 +324,7 @@ export default function DataPulse({ user, onLogout }) {
     setChatLoading(false);
   }, [chatInput, chatLoading, result, chatContext]);
 
-  // ── Computed metrics ───────────────────────────────────────────────────────
+
   const stats = result?.stats_summary || {};
   const insights = result?.insights || {};
   const dq = stats.data_quality || {};
@@ -495,7 +483,7 @@ export default function DataPulse({ user, onLogout }) {
     doc.save(`${safeName}_report.pdf`);
   };
 
-  // ── Upload screen ──────────────────────────────────────────────────────────
+
   if (phase === "upload") return (
     <div style={s.app}>
       <div style={{ ...s.topbar, flexWrap: isMobile ? "wrap" : "nowrap", gap: isMobile ? "10px" : 0 }}>
@@ -557,7 +545,7 @@ export default function DataPulse({ user, onLogout }) {
     </div>
   );
 
-  // ── Analyzing screen ───────────────────────────────────────────────────────
+
   if (phase === "analyzing") return (
     <div style={s.app}>
       <div style={s.topbar}><span style={s.brand}>◈ Data Pulse</span></div>
@@ -592,7 +580,7 @@ export default function DataPulse({ user, onLogout }) {
     </div>
   );
 
-  // ── Dashboard ──────────────────────────────────────────────────────────────
+
   return (
     <div style={s.app}>
       <style>{`
@@ -602,7 +590,7 @@ export default function DataPulse({ user, onLogout }) {
         ::-webkit-scrollbar{width:4px} ::-webkit-scrollbar-thumb{background:#1e2d47;border-radius:4px}
       `}</style>
 
-      {/* Topbar */}
+
       <div style={{ ...s.topbar, flexWrap: isMobile ? "wrap" : "nowrap", gap: isMobile ? "10px" : 0 }}>
         <div style={{ display: "flex", alignItems: "center", gap: "12px", flexWrap: isMobile ? "wrap" : "nowrap" }}>
           <span style={s.brand}>◈ Data Pulse</span>
@@ -619,7 +607,6 @@ export default function DataPulse({ user, onLogout }) {
           <button
             style={{ ...s.btn, fontSize: "0.72rem", padding: "7px 14px" }}
             onClick={() => {
-              if (!window.confirm("Clear current analysis and upload a new file?")) return;
               setResult(null);
               setPhase("upload");
             }}
@@ -630,7 +617,7 @@ export default function DataPulse({ user, onLogout }) {
         </div>
       </div>
 
-      {/* History drawer */}
+
       {showHistory && (
         <div style={{ background: "#080f1c", borderBottom: "1px solid rgba(99,102,241,0.12)", padding: "16px 32px" }}>
           <div style={s.sectionTitle}>Analysis history</div>
@@ -677,10 +664,8 @@ export default function DataPulse({ user, onLogout }) {
         </div>
       )}
 
-      {/* Tab bar */}
       <div style={{ background: "#0d1220", borderBottom: "1px solid rgba(99,102,241,0.12)", padding: "6px 16px", display: "flex", gap: "14px", overflowX: "auto", alignItems: "center" }}>
         <div style={{ display: "flex", alignItems: "center", gap: "2px" }}>
-          <span style={{ fontSize: "0.65rem", color: "#64748b", letterSpacing: "0.08em", textTransform: "uppercase", marginRight: "6px" }}>Primary</span>
           {PRIMARY_TABS.map((t) => <button key={t} style={s.tab(tab === t)} onClick={() => setTab(t)}>{t}</button>)}
         </div>
         <div style={{ width: "1px", height: "22px", background: "rgba(99,102,241,0.2)" }} />
@@ -691,7 +676,7 @@ export default function DataPulse({ user, onLogout }) {
 
       <div style={s.content}>
 
-        {/* OVERVIEW */}
+
         {tab === "overview" && (
           <>
             {insights?.headline && (
@@ -819,7 +804,7 @@ export default function DataPulse({ user, onLogout }) {
           </div>
         )}
 
-        {/* STATISTICS */}
+
         {tab === "statistics" && (
           <div style={{ display: "flex", flexDirection: "column", gap: "20px" }}>
             {numericCols.length === 0 && (
@@ -907,7 +892,7 @@ export default function DataPulse({ user, onLogout }) {
           </div>
         )}
 
-        {/* QUALITY */}
+
         {tab === "quality" && (
           <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(280px,1fr))", gap: "20px" }}>
             <div style={s.card}>
@@ -942,7 +927,7 @@ export default function DataPulse({ user, onLogout }) {
           </div>
         )}
 
-        {/* CHAT */}
+
         {tab === "chat" && (
           <div style={s.card}>
             <div style={s.sectionTitle}>Chat with your data</div>

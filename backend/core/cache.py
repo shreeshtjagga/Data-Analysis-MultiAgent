@@ -1,8 +1,4 @@
-"""
-core/cache.py
-─────────────
-Redis client singleton and helper functions for the DataPulse cache layer.
-"""
+
 
 import json
 import logging
@@ -15,11 +11,12 @@ from .utils import json_default, sanitize_for_json
 
 logger = logging.getLogger(__name__)
 
-# ── TTL constants (seconds) ───────────────────────────────────────────────────
+
 CACHE_TTL_ANALYSIS: int = int(os.getenv("CACHE_TTL_ANALYSIS", str(3 * 24 * 3600)))  # 3 days
 CACHE_TTL_SESSION: int = int(os.getenv("CACHE_TTL_SESSION", str(24 * 3600)))         # 1 day
 
-# ── Redis client (module-level singleton) ─────────────────────────────────────
+
+
 _redis_client: Optional[aioredis.Redis] = None
 
 
@@ -35,7 +32,7 @@ def _get_client() -> aioredis.Redis:
             socket_connect_timeout=5,
             retry_on_timeout=True,
         )
-        logger.info("Redis client initialised (%s)", redis_url.split("@")[-1])  # hide password in logs
+        logger.info("Redis client initialised (%s)", redis_url.split("@")[-1])
     return _redis_client
 
 
@@ -47,7 +44,6 @@ async def close() -> None:
         logger.info("Redis connection closed")
 
 
-# ── Key builders ──────────────────────────────────────────────────────────────
 
 def analysis_key(user_id: int, file_hash: str) -> str:
     return f"analysis:{user_id}:{file_hash}"
@@ -57,7 +53,6 @@ def session_key(user_id: int) -> str:
     return f"session:{user_id}"
 
 
-# ── Core helpers ──────────────────────────────────────────────────────────────
 
 async def get(key: str) -> Optional[Any]:
     try:
@@ -127,10 +122,7 @@ async def ping() -> bool:
 
 
 async def increment_with_ttl(key: str, ttl_seconds: int) -> int:
-    """
-    Atomically increment a key and set its expiry on first use.
-    Returns the post-increment count.
-    """
+    """Atomically increment a key and set its expiry on first use."""
     try:
         client = _get_client()
         script = """

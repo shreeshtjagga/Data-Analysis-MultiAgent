@@ -1,9 +1,4 @@
-"""
-analysis_history.py
-────────────────────
-Async CRUD for analysis history.
-Uses SQLAlchemy AsyncSession (PostgreSQL) + Redis cache.
-"""
+
 
 import hashlib
 import json
@@ -27,7 +22,6 @@ MAX_CACHE_FILES_PER_USER = 5
 CACHE_TTL_DAYS = 3
 
 
-# ── Serialisation helpers ─────────────────────────────────────────────────────
 
 
 def _to_json(value) -> Optional[str]:
@@ -75,10 +69,9 @@ def compute_file_hash(file_bytes: bytes, file_name: Optional[str] = None) -> str
     return h.hexdigest()
 
 
-# ── Cache-policy enforcement ──────────────────────────────────────────────────
 
 async def _enforce_cache_policy(user_id: int, db: AsyncSession) -> None:
-    # 1. Prune by time (older than CACHE_TTL_DAYS)
+
     cutoff = datetime.now(tz=timezone.utc) - timedelta(days=CACHE_TTL_DAYS)
     time_result = await db.execute(
         delete(AnalysisHistory)
@@ -90,7 +83,7 @@ async def _enforce_cache_policy(user_id: int, db: AsyncSession) -> None:
     if time_deleted_ids:
         logger.info("Evicted %d expired analyses for user %d (older than %d days)", len(time_deleted_ids), user_id, CACHE_TTL_DAYS)
 
-    # 2. Prune by count (keep only MAX_CACHE_FILES_PER_USER)
+
     result = await db.execute(
         select(AnalysisHistory.id)
         .where(AnalysisHistory.user_id == user_id)
@@ -100,14 +93,13 @@ async def _enforce_cache_policy(user_id: int, db: AsyncSession) -> None:
     overflow_ids = all_ids[MAX_CACHE_FILES_PER_USER:]
 
     if overflow_ids:
-        # Delete parent rows first; CASCADE constraint removes metadata rows automatically
+
         await db.execute(
             delete(AnalysisHistory).where(AnalysisHistory.id.in_(overflow_ids))
         )
         logger.info("Evicted %d overflow analyses for user %d", len(overflow_ids), user_id)
 
 
-# ── Save ─────────────────────────────────────────────────────────────────────
 
 async def save_analysis(
     db: AsyncSession,
@@ -173,7 +165,7 @@ async def save_analysis(
             analysis_id = row.id
             message = "Analysis saved successfully"
 
-        # Upsert metadata
+
         meta_result = await db.execute(
             select(AnalysisMetadata).where(AnalysisMetadata.analysis_id == analysis_id)
         )
@@ -202,12 +194,12 @@ async def save_analysis(
         await _enforce_cache_policy(user_id, db)
         await db.commit()
 
-        # Cache only complete successful analyses.
+
         is_cacheable = bool(stats) and bool(insights) and not errors and not is_partial
         if is_cacheable:
             cache_key = redis_cache.analysis_key(user_id, file_hash)
             cacheable = {
-                "id": analysis_id,
+                "analysis_id": analysis_id,
                 "file_name": file_name,
                 "file_hash": file_hash,
                 "pipeline_version": PIPELINE_VERSION,
@@ -232,12 +224,11 @@ async def save_analysis(
         return {"success": False, "message": f"Failed to save analysis: {exc}"}
 
 
-# ── Fetch by hash ─────────────────────────────────────────────────────────────
 
 async def get_analysis_by_hash(
     db: AsyncSession, user_id: int, file_hash: str
 ) -> Optional[dict]:
-    # 1. Redis fast path
+
     cache_key = redis_cache.analysis_key(user_id, file_hash)
     cached = await redis_cache.get(cache_key)
     if cached is not None:
@@ -248,7 +239,7 @@ async def get_analysis_by_hash(
             logger.info("Cache HIT for user %d / hash %s", user_id, file_hash[:8])
             return cached
 
-    # 2. Database fallback
+
     result = await db.execute(
         select(AnalysisHistory).where(
             AnalysisHistory.user_id == user_id,
@@ -260,7 +251,7 @@ async def get_analysis_by_hash(
         return None
 
     analysis = {
-        "id": row.id,
+        "analysis_id": row.id,
         "file_name": row.file_name,
         "file_hash": file_hash,
         "pipeline_version": PIPELINE_VERSION,
@@ -276,14 +267,13 @@ async def get_analysis_by_hash(
         "from_cache": True,
     }
 
-    # Back-fill Redis from DB only for complete successful analyses.
+
     if analysis.get("stats_summary") and analysis.get("insights") and not analysis.get("errors"):
         await redis_cache.set(cache_key, analysis, ttl=redis_cache.CACHE_TTL_ANALYSIS)
     logger.info("Cache MISS — loaded from DB for user %d / hash %s", user_id, file_hash[:8])
     return analysis
 
 
-# ── History listing ───────────────────────────────────────────────────────────
 
 async def get_user_analysis_history(
     db: AsyncSession, user_id: int, limit: int = 20
@@ -296,14 +286,12 @@ async def get_user_analysis_history(
         .order_by(AnalysisMetadata.analyzed_at.desc())
         .limit(limit)
     )
-    rows = result.all()  # FIX: use .all() instead of .fetchall() for SQLAlchemy 2.0
+    rows = result.all()
 
     output = []
     for row in rows:
-        # FIX: Access tuple elements by index for reliable cross-version behaviour
-        meta = row[0]          # AnalysisMetadata ORM object
-        # _id = row[1]         # AnalysisHistory.id (unused)
-        file_hash = row[2]     # AnalysisHistory.file_hash
+        meta = row[0]
+        file_hash = row[2]
 
         output.append({
             "analysis_id": meta.analysis_id,
@@ -333,7 +321,6 @@ async def get_analysis_by_id(
     return await get_analysis_by_hash(db, user_id, file_hash)
 
 
-# ── Delete ────────────────────────────────────────────────────────────────────
 
 async def delete_analysis(
     db: AsyncSession, user_id: int, analysis_id: int
@@ -354,7 +341,7 @@ async def delete_analysis(
     await db.flush()
     await db.commit()
 
-    # Purge Redis entry
+
     cache_key = redis_cache.analysis_key(user_id, file_hash)
     await redis_cache.delete(cache_key)
 

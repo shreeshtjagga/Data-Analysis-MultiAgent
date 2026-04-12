@@ -1,15 +1,3 @@
-"""
-models/schemas.py
-─────────────────
-Pydantic v2 request / response schemas for the FastAPI layer.
-
-Changes vs original
-────────────────────
-• Added TokenResponse and TokenData for JWT auth flow.
-• All models updated to Pydantic v2 syntax (model_config replaces inner Config).
-• Stricter validators on email and password length.
-"""
-
 from datetime import datetime
 from typing import Any, List, Optional
 
@@ -18,13 +6,7 @@ from pydantic import BaseModel, ConfigDict, EmailStr, Field, field_validator
 from ..core.constants import APP_VERSION
 
 
-# ═══════════════════════════════════════════════════════════════════════════════
-# AUTH SCHEMAS
-# ═══════════════════════════════════════════════════════════════════════════════
-
 class UserRegister(BaseModel):
-    """Payload for POST /auth/register."""
-
     model_config = ConfigDict(
         json_schema_extra={
             "example": {"name": "John Doe", "email": "user@example.com", "password": "securepassword123"}
@@ -44,8 +26,6 @@ class UserRegister(BaseModel):
 
 
 class UserLogin(BaseModel):
-    """Payload for POST /auth/login."""
-
     model_config = ConfigDict(
         json_schema_extra={
             "example": {"email": "user@example.com", "password": "securepassword123"}
@@ -57,15 +37,11 @@ class UserLogin(BaseModel):
 
 
 class GoogleLoginRequest(BaseModel):
-    """Payload for POST /auth/google."""
-
     credential: str = Field(..., min_length=1)
     client_id: Optional[str] = None
 
 
 class UserResponse(BaseModel):
-    """Public user object — never includes password_hash."""
-
     model_config = ConfigDict(from_attributes=True)
 
     id: int
@@ -76,31 +52,15 @@ class UserResponse(BaseModel):
 
 
 class TokenResponse(BaseModel):
-    """
-    Response body for a successful login.
-
-    ``access_token`` is a signed JWT; store it in memory (not localStorage).
-    Send it as ``Authorization: Bearer <token>`` on every protected request.
-    """
-
     access_token: str
     token_type: str = "bearer"
     user: UserResponse
 
 
 class TokenData(BaseModel):
-    """
-    Decoded JWT payload — used internally by the FastAPI auth dependency.
-    Not exposed as an API response.
-    """
-
-    sub: str          # str(user_id)
+    sub: str
     email: str
 
-
-# ═══════════════════════════════════════════════════════════════════════════════
-# ANALYSIS HISTORY SCHEMAS
-# ═══════════════════════════════════════════════════════════════════════════════
 
 class AnalysisMetadata(BaseModel):
     model_config = ConfigDict(from_attributes=True)
@@ -113,8 +73,6 @@ class AnalysisMetadata(BaseModel):
 
 
 class AnalysisHistoryList(BaseModel):
-    """Lightweight record returned in the history list endpoint."""
-
     model_config = ConfigDict(from_attributes=True)
 
     analysis_id: int
@@ -144,19 +102,11 @@ class AnalysisStatsSummary(BaseModel):
 
 
 class ChatRequest(BaseModel):
-    """Payload for POST /chat."""
-
     question: str = Field(..., min_length=1, max_length=1200)
     context: dict[str, Any] = Field(default_factory=dict)
 
 
-# ═══════════════════════════════════════════════════════════════════════════════
-# GENERIC RESPONSE SCHEMAS
-# ═══════════════════════════════════════════════════════════════════════════════
-
 class AuthResponse(BaseModel):
-    """Generic auth operation response (registration, etc.)."""
-
     success: bool
     message: str
     user: Optional[UserResponse] = None

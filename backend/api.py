@@ -1,20 +1,4 @@
-"""
-api.py
-──────
-Main FastAPI application.
 
-Routes
-------
-  POST  /auth/register        — create account
-  POST  /auth/login           — get JWT
-  GET   /auth/me              — current user (protected)
-
-  POST  /analyze              — upload CSV, run pipeline, return result (protected)
-  GET   /history              — list past analyses (protected)
-  DELETE /history/{id}        — delete one analysis (protected)
-
-  GET   /health               — postgres + redis liveness check
-"""
 
 import io
 import csv
@@ -93,7 +77,7 @@ READ_CHUNK_BYTES = 1024 * 1024
 CHAT_RATE_LIMIT = int(os.getenv("CHAT_RATE_LIMIT", "10"))
 CHAT_RATE_WINDOW = int(os.getenv("CHAT_RATE_WINDOW_SECONDS", "60"))
 
-# CORS origins — resolved at module load time, before lifespan() runs
+
 _raw_origins = os.getenv("CORS_ORIGINS", "http://localhost:5173,http://localhost:3000")
 origins = [o.strip() for o in _raw_origins.split(",") if o.strip()]
 
@@ -206,13 +190,13 @@ def _read_csv_with_fallback(file_bytes: bytes) -> pd.DataFrame:
     raise HTTPException(status_code=422, detail=f"Could not parse file: {first_error}")
 
 
-# ── Lifespan ──────────────────────────────────────────────────────────────────
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     logger.info("Starting DataPulse API v2 (pipeline %s)", PIPELINE_VERSION)
 
-    # ── GROQ_API_KEY is required — refuse to start without it ─────────
+
     if not os.getenv("GROQ_API_KEY"):
         raise RuntimeError(
             "GROQ_API_KEY environment variable is not set. "
@@ -234,7 +218,7 @@ async def lifespan(app: FastAPI):
     logger.info("DataPulse API shutdown complete")
 
 
-# ── App ───────────────────────────────────────────────────────────────────────
+
 
 app = FastAPI(
     title="DataPulse API",
@@ -263,19 +247,12 @@ async def catch_all_exception_handler(request: Request, exc: Exception):
 
 
 
-# ── Auth dependency ───────────────────────────────────────────────────────────
-
 security = HTTPBearer()
 
 
 async def get_current_user_id(
     credentials: Annotated[HTTPAuthorizationCredentials, Depends(security)],
 ) -> int:
-    """
-    FastAPI dependency.
-    Validates the Bearer JWT and returns the integer user_id.
-    Raises 401 if the token is missing, expired, or malformed.
-    """
     token = credentials.credentials
     payload = verify_access_token(token)
     if payload is None:
@@ -287,7 +264,7 @@ async def get_current_user_id(
     return int(payload["sub"])
 
 
-# ── Health ────────────────────────────────────────────────────────────────────
+
 
 @app.get("/health", response_model=HealthResponse, tags=["system"])
 async def health_check(db: AsyncSession = Depends(get_db)):
@@ -308,7 +285,7 @@ async def health_check(db: AsyncSession = Depends(get_db)):
     )
 
 
-# ── Auth routes ───────────────────────────────────────────────────────────────
+
 
 @app.post("/auth/register", response_model=AuthResponse, status_code=status.HTTP_201_CREATED, tags=["auth"])
 async def register(body: UserRegister, db: AsyncSession = Depends(get_db)):
@@ -331,7 +308,7 @@ async def login(body: UserLogin, db: AsyncSession = Depends(get_db), response: R
     # create an HttpOnly refresh cookie and return the short-lived access token
     try:
         refresh_token = create_refresh_token(user_obj["id"], user_obj["email"])
-        # set cookie path to '/' so it is sent for backend /auth/* endpoints
+
         if response is not None:
             response.set_cookie(
                 key="datapulse_refresh",
@@ -343,7 +320,6 @@ async def login(body: UserLogin, db: AsyncSession = Depends(get_db), response: R
                 path="/",
             )
     except Exception:
-        # If refresh creation fails, continue without cookie (login still returns access token)
         logger.exception("Failed to create refresh token")
     return TokenResponse(
         access_token=result["access_token"],
@@ -387,7 +363,6 @@ async def login_with_google(body: GoogleLoginRequest, db: AsyncSession = Depends
         )
     
     user_obj = result["user"]
-    # set refresh cookie
     try:
         refresh_token = create_refresh_token(user_obj["id"], user_obj["email"])
         if response is not None:
@@ -418,9 +393,6 @@ async def login_with_google(body: GoogleLoginRequest, db: AsyncSession = Depends
 
 @app.post("/auth/refresh", response_model=TokenResponse, tags=["auth"])
 async def refresh_token(request: Request, response: Response, db: AsyncSession = Depends(get_db)):
-    """Exchange an HttpOnly refresh cookie for a new access token.
-    The refresh token is rotated on successful refresh.
-    """
     token = request.cookies.get("datapulse_refresh")
     if not token:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Missing refresh token")
@@ -461,7 +433,7 @@ async def refresh_token(request: Request, response: Response, db: AsyncSession =
 
 @app.post("/auth/logout", tags=["auth"])
 async def logout(response: Response):
-    # Clear refresh cookie
+
     response.delete_cookie("datapulse_refresh", path="/")
     return {"success": True, "message": "Logged out"}
 
@@ -483,7 +455,7 @@ async def me(
     )
 
 
-# ── Analysis routes ───────────────────────────────────────────────────────────
+
 
 @app.post("/analyze", tags=["analysis"])
 async def analyze(
@@ -491,13 +463,7 @@ async def analyze(
     user_id: int = Depends(get_current_user_id),
     db: AsyncSession = Depends(get_db),
 ):
-    """
-    Accept a CSV upload, run the full multi-agent pipeline,
-    persist the result, and return the JSON analysis.
 
-    On repeated uploads of the same file (same SHA-256 hash),
-    returns the cached result immediately without re-running the pipeline.
-    """
     filename = file.filename or ""
     parsed_ext = filename.lower().split('.')[-1] if '.' in filename else ""
     if parsed_ext not in ("csv", "xlsx", "xls"):
@@ -525,7 +491,7 @@ async def analyze(
 
     file_hash = compute_file_hash(file_bytes, filename)
 
-    # Cache hit — return immediately
+
     cached = await get_analysis_by_hash(db, user_id, file_hash)
     if (
         cached
@@ -534,17 +500,14 @@ async def analyze(
         and not (cached.get("errors") or [])
         and cached.get("pipeline_version") == PIPELINE_VERSION
     ):
-        logger.info("Returning cached analysis for user %d / %s", user_id, file.filename)
-        # Charts stored as plain dicts — safe for JSON serialisation
         cached["charts"] = {k: v for k, v in (cached.get("charts") or {}).items()}
         return {"from_cache": True, **cached}
     elif cached:
         logger.info("Cache not eligible for reuse for user %d / %s — re-running pipeline", user_id, file.filename)
 
-    # End the read transaction before expensive parsing and agent execution.
     await db.rollback()
 
-    # Run full pipeline
+
     try:
         if parsed_ext == "csv":
             df = _read_csv_with_fallback(file_bytes)
@@ -628,7 +591,7 @@ async def analyze(
             },
         )
 
-    # Persist and warm cache (fire-and-forget style — errors are logged, not raised)
+
     save_result = await save_analysis(
         db=db,
         user_id=user_id,
@@ -642,24 +605,23 @@ async def analyze(
     else:
         result["analysis_id"] = save_result.get("analysis_id")
 
-    # Serialise charts to plain dicts before returning
+
     result["charts"] = _serialize_charts(result.get("charts") or {})
     result["partial"] = False
 
-    # Make DataFrames JSON-safe
+
     for key in ("raw_df", "clean_df"):
         df_val = result.get(key)
         if hasattr(df_val, "to_json"):
-            # to_json converts NaNs to valid JSON nulls
             result[key] = json.loads(df_val.head(100).to_json(orient="records"))
 
-    # Sanitize the rest of the dictionary (like stats_summary) for NaN/Inf
+
     result = sanitize_floats(result)
 
     return {"from_cache": False, "pipeline_version": PIPELINE_VERSION, **result}
 
 
-# ── History routes ────────────────────────────────────────────────────────────
+
 
 @app.get("/history", response_model=AnalysisListResponse, tags=["history"])
 async def history(
@@ -707,9 +669,7 @@ async def chat_with_analysis(
     user_id: int = Depends(get_current_user_id),
 ):
     """Answer a user question about the current analysis context."""
-    
-    # Redis-backed counter shared across workers/deploys.
-    # Key: ratelimit:chat:{user_id} with TTL = CHAT_RATE_WINDOW seconds.
+
     try:
         key = f"ratelimit:chat:{user_id}"
         count = await redis_cache.increment_with_ttl(key, CHAT_RATE_WINDOW)
@@ -741,7 +701,7 @@ async def chat_with_analysis(
     insights = context.get("insights") or {}
     file_name = context.get("fileName") or "dataset"
 
-    # Truncate stats to stay within token limits on wide datasets (Fix 12)
+
     slim_stats = truncate_stats_for_llm(stats)
     profile = slim_stats.get("dataset_profile") or {}
     outlier_counts = slim_stats.get("outlier_counts") or {}
@@ -794,7 +754,7 @@ async def chat_with_analysis(
         except Exception as exc:
             logger.warning("Groq chat failed, using fallback response: %s", exc)
 
-    # Deterministic fallback when LLM provider fails.
+
     q_lower = question.lower()
     row_count = stats.get("row_count", "unknown")
     col_count = stats.get("column_count", "unknown")

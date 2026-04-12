@@ -47,9 +47,6 @@ echo        Make sure the backend is also running (start-backend.bat).
 echo        Press Ctrl+C to stop the dev server.
 echo.
 
-:: Open the browser immediately to save time
-start "" "http://localhost:5173"
-
 call npm run dev
 
 if errorlevel 1 (

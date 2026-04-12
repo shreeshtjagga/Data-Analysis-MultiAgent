@@ -1,11 +1,4 @@
-"""
-Statistician Agent
-──────────────────
-Calculates comprehensive statistics on the clean dataset.
-- Defensively coerces mixed-type columns before analysis (Fix 9).
-- Skips columns flagged as excluded by the architect (Fix 8).
-- Each column is isolated in its own try/except (Fix 5).
-"""
+
 
 import logging
 
@@ -47,13 +40,12 @@ def statistician_agent(state: AnalysisState) -> AnalysisState:
         # Work on a copy so coercion doesn't mutate shared state
         df = state.clean_df.copy()
 
-        # ── Excluded columns (set by architect) ──────────────────────────
+
         excluded_names: set[str] = set()
         for entry in (state.stats_summary or {}).get("excluded_columns", []):
             excluded_names.add(entry["column"])
 
-        # ── Defensive type coercion (Fix 9) ──────────────────────────────
-        # Try converting object columns that are secretly numeric.
+
         coerced_columns: list[dict] = []
         for col in df.select_dtypes(include=["object"]).columns:
             if col in excluded_names:
@@ -75,7 +67,7 @@ def statistician_agent(state: AnalysisState) -> AnalysisState:
 
         stats_summary: dict = {}
 
-        # Basic dataset information
+
         stats_summary["row_count"] = int(len(df))
         stats_summary["column_count"] = int(len(df.columns))
         stats_summary["columns"] = list(df.columns)
@@ -88,7 +80,7 @@ def statistician_agent(state: AnalysisState) -> AnalysisState:
         if coerced_columns:
             stats_summary["coerced_columns"] = coerced_columns
 
-        # Missing values
+
         missing_data = df.isna().sum()
         stats_summary["missing_values"] = {
             col: int(count) for col, count in missing_data.items() if count > 0
@@ -99,7 +91,7 @@ def statistician_agent(state: AnalysisState) -> AnalysisState:
             if count > 0
         }
 
-        # ── Numeric columns (per-column error isolation) ─────────────────
+
         numeric_cols = [
             c
             for c in df.select_dtypes(include=[np.number]).columns.tolist()
@@ -141,7 +133,7 @@ def statistician_agent(state: AnalysisState) -> AnalysisState:
         if numeric_errors:
             stats_summary["numeric_column_errors"] = numeric_errors
 
-        # ── Categorical columns (per-column error isolation) ─────────────
+
         categorical_cols = [
             c
             for c in df.select_dtypes(include=["object"]).columns.tolist()
@@ -185,7 +177,7 @@ def statistician_agent(state: AnalysisState) -> AnalysisState:
         if categorical_errors:
             stats_summary["categorical_column_errors"] = categorical_errors
 
-        # ── Outlier detection (per-column error isolation) ────────────────
+
         outliers_summary: dict = {}
         for col in numeric_cols:
             try:
@@ -213,7 +205,7 @@ def statistician_agent(state: AnalysisState) -> AnalysisState:
 
         stats_summary["outliers"] = outliers_summary
 
-        # ── Correlation analysis ─────────────────────────────────────────
+
         if len(numeric_cols) > 1:
             try:
                 correlation_matrix = df[numeric_cols].corr()
@@ -242,7 +234,7 @@ def statistician_agent(state: AnalysisState) -> AnalysisState:
         else:
             stats_summary["strong_correlations"] = []
 
-        # Data quality metrics
+
         stats_summary["data_quality"] = {
             "total_cells": int(len(df) * len(df.columns)),
             "missing_cells": int(missing_data.sum()),
@@ -256,7 +248,7 @@ def statistician_agent(state: AnalysisState) -> AnalysisState:
             ),
         }
 
-        # Preserve architect-set fields
+
         prev = state.stats_summary or {}
         for key in ("imputations", "excluded_columns", "dataset_profile"):
             if key in prev:

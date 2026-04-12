@@ -1,12 +1,3 @@
-"""
-Insights Agent (LLM-driven)
-────────────────────────────
-Reads the stats_summary + dataset_profile and makes one LLM call to produce
-specific, narrative findings referencing actual column names and real numbers.
-
-Falls back to lightweight rule-based logic if the LLM call fails.
-"""
-
 import json
 import logging
 import os
@@ -19,10 +10,7 @@ from ..core.utils import truncate_stats_for_llm
 logger = logging.getLogger(__name__)
 
 
-# ── LLM-powered insights ─────────────────────────────────────────────────────
-
 def _build_llm_prompt(stats: dict) -> str:
-    """Build a compact prompt from truncated stats."""
     payload_json = json.dumps(stats, ensure_ascii=True)
     return "\n".join([
         "You are a senior data analyst. Produce actionable insights for this dataset.",
@@ -42,7 +30,6 @@ def _build_llm_prompt(stats: dict) -> str:
 
 
 def _llm_insights(stats: dict) -> Optional[dict]:
-    """Call Groq LLM for narrative insights. Returns None on failure."""
     api_key = os.getenv("GROQ_API_KEY")
     if not api_key:
         return None
@@ -69,7 +56,6 @@ def _llm_insights(stats: dict) -> Optional[dict]:
             max_tokens=800,
         )
         raw = (completion.choices[0].message.content or "").strip()
-        # Strip markdown fences if present
         if raw.startswith("```"):
             raw = raw.split("\n", 1)[-1].rsplit("```", 1)[0].strip()
         result = json.loads(raw)
@@ -84,10 +70,7 @@ def _llm_insights(stats: dict) -> Optional[dict]:
         return None
 
 
-# ── Rule-based fallback ───────────────────────────────────────────────────────
-
 def _rule_based_insights(stats: dict) -> dict:
-    """Lightweight template-based insights when the LLM is unavailable."""
     numeric_cols = list(stats.get("numeric_columns", {}).keys())
     categorical_cols = list(stats.get("categorical_columns", {}).keys())
     outliers = stats.get("outliers", {})
@@ -147,10 +130,7 @@ def _rule_based_insights(stats: dict) -> dict:
     }
 
 
-# ── Computed fields (always derived from stats, not LLM) ─────────────────────
-
 def _computed_insights(stats: dict) -> dict:
-    """Fields that are pure data reformatting — no LLM needed."""
     outliers = stats.get("outliers", {})
     correlations = stats.get("strong_correlations", [])
     numeric = stats.get("numeric_columns", {})
@@ -185,13 +165,7 @@ def _computed_insights(stats: dict) -> dict:
     }
 
 
-# ── Agent entry point ─────────────────────────────────────────────────────────
-
 def insights_agent(state: AnalysisState) -> AnalysisState:
-    """
-    Insights Agent: produces findings, recommendations, and outlier summaries.
-    Uses LLM when available, falls back to rule-based logic.
-    """
     state.current_agent = "insights"
     logger.info("Insights agent started")
 
@@ -200,11 +174,8 @@ def insights_agent(state: AnalysisState) -> AnalysisState:
             raise ValueError("Missing stats_summary from statistician agent")
 
         stats = state.stats_summary
-
-        # Truncate stats before sending to LLM (Fix 12)
         slim_stats = truncate_stats_for_llm(stats)
 
-        # Try LLM first, fall back to rules
         llm_result = _llm_insights(slim_stats)
         if llm_result:
             insights = {
@@ -216,7 +187,6 @@ def insights_agent(state: AnalysisState) -> AnalysisState:
         else:
             insights = _rule_based_insights(stats)
 
-        # Always add computed fields from raw stats
         insights.update(_computed_insights(stats))
 
         state.insights = insights

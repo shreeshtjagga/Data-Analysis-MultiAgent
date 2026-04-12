@@ -118,7 +118,8 @@ def safe_describe(df: pd.DataFrame) -> dict:
     return summary
 
 
-# ── Compact keys to keep when slimming numeric stats for LLM prompts ─────────
+
+
 _SLIM_NUMERIC_KEYS = ("mean", "median", "std", "min", "max", "skewness", "count")
 
 

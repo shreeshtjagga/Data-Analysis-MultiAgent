@@ -1,13 +1,4 @@
-"""
-Architect Agent
-───────────────
-1. Cleans the raw DataFrame (dedup, impute, strip).
-2. Classifies columns — flags mostly-null, constant, and
-   high-cardinality ID columns so downstream agents skip them.
-3. Detects column types (numeric / categorical / datetime / boolean).
-4. Profiles the dataset with one LLM call — labels domain, purpose,
-   and a one-sentence description that travels through the pipeline.
-"""
+"""Architect Agent: cleans data, classifies columns, detects types, profiles the dataset."""
 
 import json
 import logging
@@ -21,19 +12,14 @@ from ..core.utils import clean_dataframe, detect_column_types
 
 logger = logging.getLogger(__name__)
 
-# ── Column exclusion thresholds ───────────────────────────────────────────────
-_NULL_THRESHOLD = 0.70  # >70 % missing → exclude
-_CARDINALITY_THRESHOLD = 0.90  # >90 % unique + ID-like name → exclude
+_NULL_THRESHOLD = 0.70
+_CARDINALITY_THRESHOLD = 0.90
 _ID_PATTERNS = frozenset(
     {"id", "uuid", "guid", "key", "index", "hash", "code", "_id", "pk"}
 )
 
 
 def _classify_columns(df: pd.DataFrame) -> dict:
-    """
-    Return {"excluded": [...], "kept": [...]} where each excluded entry
-    carries a human-readable *reason*.
-    """
     excluded: list[dict] = []
     kept: list[str] = []
 
@@ -65,10 +51,6 @@ def _classify_columns(df: pd.DataFrame) -> dict:
 
 
 def _profile_dataset(df: pd.DataFrame, column_types: dict) -> dict:
-    """
-    One LLM call to label the dataset (domain, purpose, description).
-    Returns a fallback dict if the call fails or no API key is available.
-    """
     fallback = {
         "label": "unknown",
         "description": "Profiling unavailable",
@@ -78,7 +60,6 @@ def _profile_dataset(df: pd.DataFrame, column_types: dict) -> dict:
     if not api_key:
         return fallback
 
-    # Build structured, escaped payload to reduce prompt-injection surface.
     columns_payload = []
     for col in list(df.columns)[:30]:
         dtype = column_types.get(col, str(df[col].dtype))
@@ -120,7 +101,6 @@ def _profile_dataset(df: pd.DataFrame, column_types: dict) -> dict:
             max_tokens=150,
         )
         raw = (completion.choices[0].message.content or "").strip()
-        # Strip markdown fences if the model adds them anyway
         if raw.startswith("```"):
             raw = raw.split("\n", 1)[-1].rsplit("```", 1)[0].strip()
         profile = json.loads(raw)
@@ -131,9 +111,6 @@ def _profile_dataset(df: pd.DataFrame, column_types: dict) -> dict:
     except Exception as exc:
         logger.warning("Dataset profiling failed (non-fatal): %s", exc)
         return fallback
-
-
-# ── Agent entry point ─────────────────────────────────────────────────────────
 
 
 def architect_agent(state: AnalysisState) -> AnalysisState:
@@ -149,7 +126,6 @@ def architect_agent(state: AnalysisState) -> AnalysisState:
             "Raw data received: %d rows, %d columns", len(raw_df), len(raw_df.columns)
         )
 
-        # 1. Clean data
         clean_df, impute_logs = clean_dataframe(raw_df.copy())
         state.clean_df = clean_df
 
@@ -160,7 +136,6 @@ def architect_agent(state: AnalysisState) -> AnalysisState:
             state.stats_summary["imputations"] = impute_logs
         logger.info("Data cleaned: %d rows remaining", len(clean_df))
 
-        # 2. Classify columns — flag noisy / uninformative ones
         classification = _classify_columns(clean_df)
         state.stats_summary["excluded_columns"] = classification["excluded"]
         if classification["excluded"]:
@@ -170,11 +145,9 @@ def architect_agent(state: AnalysisState) -> AnalysisState:
                 [e["column"] for e in classification["excluded"]],
             )
 
-        # 3. Detect column types
         state.column_types = detect_column_types(clean_df)
         logger.info("Column types detected: %s", state.column_types)
 
-        # 4. LLM dataset profiling
         profile = _profile_dataset(clean_df, state.column_types)
         state.stats_summary["dataset_profile"] = profile
 
