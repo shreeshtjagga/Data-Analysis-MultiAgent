@@ -156,11 +156,11 @@ export async function apiLogin(email, password) {
   });
 }
 
-export async function apiGoogleLogin(credential) {
+export async function apiGoogleLogin(credential, clientId = null) {
   return apiFetch("/auth/google", {
     method: "POST",
     withAuth: false,
-    body: JSON.stringify({ credential }),
+    body: JSON.stringify({ credential, client_id: clientId }),
   });
 }
 

@@ -201,7 +201,8 @@ function GoogleAuthComponent({ onLogin, setError, setLoading, setTab }) {
             setError("");
             setLoading(true);
             try {
-              const data = await apiGoogleLogin(credentialResponse.credential);
+              const clientId = import.meta.env.VITE_GOOGLE_CLIENT_ID || null;
+              const data = await apiGoogleLogin(credentialResponse.credential, clientId);
               onLogin(data.user, data.access_token);
             } catch (err) {
               setError(err.message || "Google Single Sign-On failed.");
