@@ -33,11 +33,11 @@ export function getToken() {
 }
 
 export function clearToken() {
+  if (!accessToken) return;   // already logged out — skip the logout request
   accessToken = null;
-  // Best-effort: ask backend to clear the refresh cookie (HttpOnly)
-  try {
-    fetch(`${BASE}/auth/logout`, { method: "POST", credentials: "include" });
-  } catch (_) {}
+  // Best-effort: ask backend to clear the HttpOnly refresh cookie.
+  // Fire-and-forget is intentional — we don't need to await this.
+  fetch(`${BASE}/auth/logout`, { method: "POST", credentials: "include" }).catch(() => {});
 }
 
 async function refreshAccessToken() {
@@ -112,7 +112,9 @@ async function apiFetch(path, options = {}) {
         try {
           const b = await retryResp.json();
           detail = b.detail || b.message || detail;
-        } catch (_) {}
+        } catch (_) {
+          detail = String(detail);
+        }
         throw new Error(detail);
       }
       if (options.raw) return retryResp;
@@ -128,8 +130,11 @@ async function apiFetch(path, options = {}) {
     let detail = `HTTP ${response.status}`;
     try {
       const body = await response.json();
-      detail = body.detail || body.message || detail;
-    } catch (_) {}
+      const rawDetail = body.detail || body.message || detail;
+      detail = typeof rawDetail === 'object' ? JSON.stringify(rawDetail, null, 2) : rawDetail;
+    } catch (_) {
+      detail = String(detail);
+    }
     throw new Error(detail);
   }
 
@@ -156,11 +161,11 @@ export async function apiLogin(email, password) {
   });
 }
 
-export async function apiGoogleLogin(credential) {
+export async function apiGoogleLogin(credential, clientId = null) {
   return apiFetch("/auth/google", {
     method: "POST",
     withAuth: false,
-    body: JSON.stringify({ credential }),
+    body: JSON.stringify({ credential, client_id: clientId }),
   });
 }
 
@@ -187,6 +192,10 @@ export async function apiChat(question, context = {}) {
 
 export async function apiHistory(limit = 20) {
   return apiFetch(`/history?limit=${limit}`);
+}
+
+export async function apiHistoryAnalysis(analysisId) {
+  return apiFetch(`/history/${analysisId}`);
 }
 
 export async function apiDeleteAnalysis(analysisId) {

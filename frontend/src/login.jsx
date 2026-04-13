@@ -1,173 +1,22 @@
 import { useState } from "react";
 import { GoogleLogin } from '@react-oauth/google';
 import { apiLogin, apiRegister, apiGoogleLogin } from "./api.js";
+import ParticleBackground from "./ParticleBackground.jsx";
+
+const GOOGLE_CLIENT_ID = import.meta.env.VITE_GOOGLE_CLIENT_ID;
 
 /**
- * Login.jsx — DataPulse auth page
- * Design: dark-navy + indigo accent (unchanged)
- * Changes: card wider (500px), inputs/fonts slightly larger, OAuth placeholder added
+ * Login.jsx — DataPulse auth page (Premium Dark SaaS System)
  */
-
-const s = {
-  page: {
-    minHeight: "100vh",
-    background: "#060912",
-    backgroundImage:
-      "radial-gradient(ellipse at 20% 15%, rgba(99,102,241,0.12) 0%, transparent 55%), radial-gradient(ellipse at 80% 85%, rgba(99,102,241,0.06) 0%, transparent 45%)",
-    display: "flex",
-    alignItems: "center",
-    justifyContent: "center",
-    fontFamily: "'Outfit', sans-serif",
-    padding: "24px",
-  },
-  card: {
-    width: "100%",
-    maxWidth: "500px",          // was 420px
-    background: "#0d1220",
-    border: "1px solid rgba(99,102,241,0.22)",
-    borderRadius: "16px",
-    padding: "56px 48px 50px",  // was 48px 36px 40px
-    boxShadow: "0 28px 70px rgba(0,0,0,0.55), 0 0 0 1px rgba(99,102,241,0.08)",
-  },
-  logo: {
-    textAlign: "center",
-    fontSize: "3rem",           // was 2.6rem
-    color: "#6366f1",
-    marginBottom: "16px",
-  },
-  title: {
-    fontFamily: "'Syne', sans-serif",
-    fontSize: "1.9rem",         // was 1.6rem
-    fontWeight: 800,
-    color: "#f1f5f9",
-    textAlign: "center",
-    marginBottom: "4px",
-    letterSpacing: "-0.02em",
-  },
-  subtitle: {
-    fontSize: "0.84rem",
-    color: "#475569",
-    textAlign: "center",
-    marginBottom: "34px",
-    letterSpacing: "0.06em",
-  },
-  tabRow: {
-    display: "flex",
-    borderBottom: "1px solid rgba(99,102,241,0.15)",
-    marginBottom: "30px",
-  },
-  tab: (active) => ({
-    flex: 1,
-    padding: "11px 0",
-    fontSize: "0.80rem",
-    fontWeight: active ? 700 : 500,
-    letterSpacing: "0.08em",
-    textTransform: "uppercase",
-    color: active ? "#6366f1" : "#475569",
-    background: "transparent",
-    border: "none",
-    borderBottom: active ? "2px solid #6366f1" : "2px solid transparent",
-    cursor: "pointer",
-    transition: "color 0.15s",
-  }),
-  label: {
-    display: "block",
-    fontSize: "0.74rem",
-    fontWeight: 600,
-    letterSpacing: "0.1em",
-    textTransform: "uppercase",
-    color: "#94a3b8",
-    marginBottom: "8px",
-  },
-  input: {
-    width: "100%",
-    background: "#121929",
-    border: "1px solid rgba(99,102,241,0.22)",
-    borderRadius: "9px",
-    color: "#e2e8f0",
-    padding: "13px 16px",
-    fontSize: "1rem",
-    fontFamily: "'Outfit', sans-serif",
-    outline: "none",
-    boxSizing: "border-box",
-    transition: "border-color 0.15s",
-  },
-  btn: {
-    width: "100%",
-    background: "linear-gradient(135deg,#6366f1,#4f46e5)",
-    color: "#fff",
-    border: "none",
-    borderRadius: "9px",
-    padding: "14px",            // was 12px
-    fontFamily: "'Syne', sans-serif",
-    fontWeight: 700,
-    fontSize: "0.88rem",
-    letterSpacing: "0.08em",
-    textTransform: "uppercase",
-    cursor: "pointer",
-    marginTop: "6px",
-    transition: "opacity 0.15s, transform 0.1s",
-  },
-  divider: {
-    display: "flex",
-    alignItems: "center",
-    gap: "12px",
-    margin: "22px 0",
-    color: "#334155",
-    fontSize: "0.78rem",
-    letterSpacing: "0.06em",
-  },
-  dividerLine: {
-    flex: 1,
-    height: "1px",
-    background: "rgba(99,102,241,0.12)",
-  },
-  oauthBtn: {
-    width: "100%",
-    background: "transparent",
-    color: "#475569",
-    border: "1px solid rgba(99,102,241,0.15)",
-    borderRadius: "9px",
-    padding: "13px 16px",
-    fontFamily: "'Outfit', sans-serif",
-    fontWeight: 500,
-    fontSize: "0.92rem",
-    cursor: "not-allowed",
-    display: "flex",
-    alignItems: "center",
-    justifyContent: "center",
-    gap: "10px",
-    opacity: 0.55,
-    position: "relative",
-  },
-  oauthBadge: {
-    fontSize: "0.65rem",
-    background: "rgba(99,102,241,0.15)",
-    color: "#6366f1",
-    padding: "2px 7px",
-    borderRadius: "4px",
-    letterSpacing: "0.06em",
-    textTransform: "uppercase",
-    fontWeight: 600,
-  },
-  alert: (type) => ({
-    padding: "11px 15px",
-    borderRadius: "8px",
-    fontSize: "0.84rem",
-    marginBottom: "20px",
-    background: type === "error" ? "rgba(239,68,68,0.1)" : "rgba(16,185,129,0.1)",
-    border: `1px solid ${type === "error" ? "rgba(239,68,68,0.3)" : "rgba(16,185,129,0.3)"}`,
-    color: type === "error" ? "#fca5a5" : "#6ee7b7",
-  }),
-};
 
 function PasswordInput({ id, placeholder, value, onChange, onKeyDown }) {
   const [show, setShow] = useState(false);
   return (
-    <div style={{ position: "relative", marginBottom: "20px" }}>
+    <div style={{ position: "relative" }}>
       <input
         id={id}
-        style={{ ...s.input, paddingRight: "55px", marginBottom: 0 }}
+        className="input-field"
+        style={{ width: "100%", paddingRight: "55px", fontFamily: "'Outfit', monospace", letterSpacing: show ? "normal" : "0.2em", backgroundColor: '#f1f5f9', color: '#0f172a' }}
         type={show ? "text" : "password"}
         placeholder={placeholder}
         value={value}
@@ -178,7 +27,21 @@ function PasswordInput({ id, placeholder, value, onChange, onKeyDown }) {
         type="button"
         tabIndex="-1"
         onClick={(e) => { e.preventDefault(); setShow(!show); }}
-        style={{ position: "absolute", right: "12px", top: "50%", transform: "translateY(-50%)", background: "none", border: "none", color: "#64748b", cursor: "pointer", fontSize: "0.75rem", fontWeight: 600, padding: "4px", textTransform: "uppercase", letterSpacing: "0.05em" }}
+        style={{
+          position: "absolute",
+          right: "12px",
+          top: "50%",
+          transform: "translateY(-50%)",
+          background: "none",
+          border: "none",
+          color: "var(--primary-500)",
+          cursor: "pointer",
+          fontSize: "11px",
+          fontWeight: 700,
+          textTransform: "uppercase",
+          letterSpacing: "0.05em",
+          padding: "4px"
+        }}
       >
         {show ? "Hide" : "Show"}
       </button>
@@ -186,38 +49,50 @@ function PasswordInput({ id, placeholder, value, onChange, onKeyDown }) {
   );
 }
 
-/** Function passing Google credentials to the backend */
 function GoogleAuthComponent({ onLogin, setError, setLoading, setTab }) {
+  if (!GOOGLE_CLIENT_ID) {
+    return null;
+  }
+
   return (
     <>
-      <div style={s.divider}>
-        <div style={s.dividerLine} />
-        <span>or</span>
-        <div style={s.dividerLine} />
+      <div style={{ display: 'flex', alignItems: 'center', gap: '16px', margin: '24px 0', color: 'var(--border-subtle)' }}>
+        <div style={{ flex: 1, height: '1px', backgroundColor: 'var(--border-subtle)' }} />
+        <span style={{ fontSize: '13px', color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>or</span>
+        <div style={{ flex: 1, height: '1px', backgroundColor: 'var(--border-subtle)' }} />
       </div>
-      <div style={{ display: "flex", justifyContent: "center", width: "100%", overflow: "hidden", borderRadius: "9px" }}>
-        <GoogleLogin
-          onSuccess={async (credentialResponse) => {
-            setError("");
-            setLoading(true);
-            try {
-              const data = await apiGoogleLogin(credentialResponse.credential);
-              onLogin(data.user, data.access_token);
-            } catch (err) {
-              setError(err.message || "Google Single Sign-On failed.");
-            } finally {
-              setLoading(false);
-            }
-          }}
-          onError={() => {
-            setError("Google initialization failed.");
-            setTab("login");
-          }}
-          theme="filled_black"
-          size="large"
-          width="100%"
-          text="continue_with"
-        />
+      <div style={{ marginBottom: '24px', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '16px' }}>
+        <span style={{ fontSize: '11px', fontWeight: 800, color: 'var(--text-muted)', letterSpacing: '0.2em', textTransform: 'uppercase' }}>Secure Authentication Protocols</span>
+        <div style={{ 
+          borderRadius: "9px", 
+          boxShadow: '0 0 35px rgba(99,102,241,0.6)',
+          border: '1px solid rgba(99,102,241,0.4)',
+          padding: '2px', 
+          backgroundColor: '#ffffff',
+          transition: 'transform 0.2s ease, box-shadow 0.2s ease'
+        }}>
+          <GoogleLogin
+            onSuccess={async (credentialResponse) => {
+              setError("");
+              setLoading(true);
+              try {
+                const data = await apiGoogleLogin(credentialResponse.credential, GOOGLE_CLIENT_ID);
+                onLogin(data.user, data.access_token);
+              } catch (err) {
+                setError(err.message || "Google Single Sign-On failed.");
+              } finally {
+                setLoading(false);
+              }
+            }}
+            onError={() => {
+              setError("Google initialization failed.");
+              setTab("login");
+            }}
+            size="large"
+            width="400"
+            text="continue_with"
+          />
+        </div>
       </div>
     </>
   );
@@ -244,31 +119,40 @@ function LoginForm({ onLogin }) {
   };
 
   return (
-    <>
-      {error && <div style={s.alert("error")}>{error}</div>}
-      <label style={s.label}>Email address</label>
-      <input
-        id="login-email"
-        style={{ ...s.input, marginBottom: "20px" }}
-        type="email"
-        placeholder="you@example.com"
-        value={email}
-        onChange={(e) => setEmail(e.target.value)}
-        onKeyDown={(e) => e.key === "Enter" && submit()}
-      />
-      <label style={s.label}>Password</label>
-      <PasswordInput
-        id="login-password"
-        placeholder="••••••••"
-        value={password}
-        onChange={(e) => setPassword(e.target.value)}
-        onKeyDown={(e) => e.key === "Enter" && submit()}
-      />
-      <button id="login-submit" style={{ ...s.btn, opacity: loading ? 0.65 : 1 }} onClick={submit} disabled={loading}>
-        {loading ? "Signing in…" : "Sign in"}
+    <div className="flex-col gap-16">
+      {error && <div style={{ padding: '12px', borderRadius: '8px', backgroundColor: 'rgba(239,68,68,0.1)', border: '1px solid rgba(239,68,68,0.3)', color: '#fca5a5', fontSize: '14px' }}>{error}</div>}
+      
+      <div className="flex-col gap-8">
+        <label style={{ fontSize: '13px', fontWeight: 600, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Email address</label>
+        <input
+          id="login-email"
+          className="input-field"
+          style={{ width: "100%", backgroundColor: '#f1f5f9', color: '#0f172a' }}
+          type="email"
+          placeholder="you@example.com"
+          value={email}
+          onChange={(e) => setEmail(e.target.value)}
+          onKeyDown={(e) => e.key === "Enter" && submit()}
+        />
+      </div>
+
+      <div className="flex-col gap-12">
+        <label style={{ fontSize: '13px', fontWeight: 600, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Password</label>
+        <PasswordInput
+          id="login-password"
+          placeholder="••••••••"
+          value={password}
+          onChange={(e) => setPassword(e.target.value)}
+          onKeyDown={(e) => e.key === "Enter" && submit()}
+        />
+      </div>
+
+      <button id="login-submit" className="btn-primary" style={{ width: "100%", marginTop: '24px' }} onClick={submit} disabled={loading}>
+        {loading ? "LOGGING IN…" : "LOGIN"}
       </button>
+      
       <GoogleAuthComponent onLogin={onLogin} setError={setError} setLoading={setLoading} setTab={() => {}} />
-    </>
+    </div>
   );
 }
 
@@ -289,8 +173,7 @@ function RegisterForm({ onLogin, setTab }) {
     setLoading(true);
     try {
       await apiRegister(email, password, name);
-      setSuccess("Account created! Logging you in...");
-      // Auto-login instantly
+      setSuccess("Account established! Logging you in...");
       const loginData = await apiLogin(email, password);
       onLogin(loginData.user, loginData.access_token);
     } catch (err) {
@@ -301,28 +184,36 @@ function RegisterForm({ onLogin, setTab }) {
   };
 
   return (
-    <>
-      {error   && <div style={s.alert("error")}>{error}</div>}
-      {success && <div style={s.alert("success")}>{success}</div>}
-      <label style={s.label}>Full Name</label>
-      <input id="reg-name" style={{ ...s.input, marginBottom: "20px" }} type="text" placeholder="John Doe" value={name} onChange={(e) => setName(e.target.value)} />
-      <label style={s.label}>Email address</label>
-      <input id="reg-email" style={{ ...s.input, marginBottom: "20px" }} type="email" placeholder="you@example.com" value={email} onChange={(e) => setEmail(e.target.value)} />
-      <label style={s.label}>Password</label>
-      <PasswordInput id="reg-password" placeholder="••••••••" value={password} onChange={(e) => setPassword(e.target.value)} />
-      <label style={s.label}>Confirm password</label>
-      <PasswordInput
-        id="reg-confirm"
-        placeholder="••••••••"
-        value={confirm}
-        onChange={(e) => setConfirm(e.target.value)}
-        onKeyDown={(e) => e.key === "Enter" && submit()}
-      />
-      <button id="reg-submit" style={{ ...s.btn, opacity: loading ? 0.65 : 1 }} onClick={submit} disabled={loading}>
-        {loading ? "Creating account…" : "Create account"}
+    <div className="flex-col gap-16">
+      {error && <div style={{ padding: '12px', borderRadius: '8px', backgroundColor: 'rgba(239,68,68,0.1)', border: '1px solid rgba(239,68,68,0.3)', color: '#fca5a5', fontSize: '14px' }}>{error}</div>}
+      {success && <div style={{ padding: '12px', borderRadius: '8px', backgroundColor: 'rgba(16,185,129,0.1)', border: '1px solid rgba(16,185,129,0.3)', color: '#6ee7b7', fontSize: '14px' }}>{success}</div>}
+      
+      <div className="flex-col gap-8">
+        <label style={{ fontSize: '13px', fontWeight: 600, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Username</label>
+        <input id="reg-name" className="input-field" style={{ width: "100%", backgroundColor: '#f1f5f9', color: '#0f172a' }} type="text" placeholder="johndoe123" value={name} onChange={(e) => setName(e.target.value)} />
+      </div>
+
+      <div className="flex-col gap-8">
+        <label style={{ fontSize: '13px', fontWeight: 600, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Email address</label>
+        <input id="reg-email" className="input-field" style={{ width: "100%", backgroundColor: '#f1f5f9', color: '#0f172a' }} type="email" placeholder="you@example.com" value={email} onChange={(e) => setEmail(e.target.value)} />
+      </div>
+
+      <div className="flex-col gap-8">
+        <label style={{ fontSize: '13px', fontWeight: 600, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Secure Password</label>
+        <PasswordInput id="reg-password" placeholder="••••••••" value={password} onChange={(e) => setPassword(e.target.value)} />
+      </div>
+
+      <div className="flex-col gap-8">
+        <label style={{ fontSize: '13px', fontWeight: 600, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Confirm Password</label>
+        <PasswordInput id="reg-confirm" placeholder="••••••••" value={confirm} onChange={(e) => setConfirm(e.target.value)} onKeyDown={(e) => e.key === "Enter" && submit()} />
+      </div>
+
+      <button id="reg-submit" className="btn-primary" style={{ width: "100%", marginTop: '16px' }} onClick={submit} disabled={loading}>
+        {loading ? "REGISTERING…" : "REGISTER"}
       </button>
+
       <GoogleAuthComponent onLogin={onLogin} setError={setError} setLoading={setLoading} setTab={setTab} />
-    </>
+    </div>
   );
 }
 
@@ -330,15 +221,43 @@ export default function Login({ onLogin }) {
   const [tab, setTab] = useState("login");
 
   return (
-    <div style={s.page}>
-      <div style={s.card}>
-        <div style={s.logo}>◈</div>
-        <div style={s.title}>Data Pulse</div>
-        <div style={s.subtitle}>AI-POWERED DATA ANALYSIS</div>
+    <div style={{ minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '24px', position: 'relative' }}>
+      <ParticleBackground />
+      <div className="animate-fade-in" style={{ width: '100%', maxWidth: '550px', position: 'relative', zIndex: 1, backgroundColor: 'transparent', boxShadow: 'none', border: 'none', padding: '0' }}>
+        
+        <div style={{ textAlign: 'center', marginBottom: '32px' }}>
+          <div style={{ color: 'var(--primary-500)', fontSize: '40px', marginBottom: '8px', textShadow: '0 0 20px rgba(99,102,241,0.7)' }}>◈</div>
+          <h2 style={{ fontFamily: "'Syne', sans-serif", fontSize: '28px', color: 'var(--text-main)', textShadow: '0 0 10px rgba(255,255,255,0.1)' }}>DATA PULSE</h2>
+          <p className="caption" style={{ textTransform: 'uppercase', letterSpacing: '0.1em', marginTop: '4px', color: 'var(--text-muted)' }}>Secure Analytics Portal</p>
+        </div>
 
-        <div style={s.tabRow}>
-          <button id="tab-signin"   style={s.tab(tab === "login")}    onClick={() => setTab("login")}>Sign in</button>
-          <button id="tab-register" style={s.tab(tab === "register")} onClick={() => setTab("register")}>Register</button>
+        <div style={{ display: 'flex', borderBottom: '1px solid var(--border-subtle)', marginBottom: '32px' }}>
+          <button 
+            style={{ 
+              flex: 1, padding: '12px 0', background: 'none', border: 'none', 
+              borderBottom: tab === 'login' ? '3px solid var(--primary-500)' : '2px solid transparent',
+              color: tab === 'login' ? 'var(--text-main)' : 'var(--text-muted)',
+              textShadow: tab === 'login' ? '0 0 10px rgba(99,102,241,0.5)' : 'none',
+              fontWeight: 700,
+              cursor: 'pointer', fontSize: '13px', textTransform: 'uppercase', letterSpacing: '0.08em'
+            }} 
+            onClick={() => setTab("login")}
+          >
+            Login
+          </button>
+          <button 
+            style={{ 
+              flex: 1, padding: '12px 0', background: 'none', border: 'none', 
+              borderBottom: tab === 'register' ? '3px solid var(--primary-500)' : '2px solid transparent',
+              color: tab === 'register' ? 'var(--text-main)' : 'var(--text-muted)',
+              textShadow: tab === 'register' ? '0 0 10px rgba(99,102,241,0.5)' : 'none',
+              fontWeight: 700,
+              cursor: 'pointer', fontSize: '13px', textTransform: 'uppercase', letterSpacing: '0.08em'
+            }} 
+            onClick={() => setTab("register")}
+          >
+            Register
+          </button>
         </div>
 
         {tab === "login"

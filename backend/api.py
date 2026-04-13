@@ -1,30 +1,17 @@
-"""
-api.py
-──────
-Main FastAPI application.
 
-Routes
-------
-  POST  /auth/register        — create account
-  POST  /auth/login           — get JWT
-  GET   /auth/me              — current user (protected)
-
-  POST  /analyze              — upload CSV, run pipeline, return result (protected)
-  GET   /history              — list past analyses (protected)
-  DELETE /history/{id}        — delete one analysis (protected)
-
-  GET   /health               — postgres + redis liveness check
-"""
 
 import io
+import csv
+import asyncio
 import logging
 import os
 import json
+import zipfile
 from contextlib import asynccontextmanager
 from typing import Annotated, Optional
 
 import pandas as pd
-from fastapi import Body, Depends, FastAPI, File, HTTPException, UploadFile, status, Request, Response
+from fastapi import Depends, FastAPI, File, HTTPException, UploadFile, status, Request, Response, Query
 from fastapi.responses import JSONResponse
 import traceback
 from fastapi.middleware.cors import CORSMiddleware
@@ -33,8 +20,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from .core import cache as redis_cache
 from .analysis_history import (
+    _serialize_charts,
     compute_file_hash,
     delete_analysis,
+    get_analysis_by_id,
     get_analysis_by_hash,
     get_user_analysis_history,
     save_analysis,
@@ -51,13 +40,17 @@ from .auth import (
     verify_refresh_token,
     REFRESH_EXPIRE_DAYS,
 )
-from .core.graph import run_pipeline, PIPELINE_VERSION
-from .core.utils import truncate_stats_for_llm
+from .core.constants import APP_VERSION, PIPELINE_VERSION
+from .core.graph import run_pipeline
+from .core.logging_config import configure_logging
+from .core.utils import sanitize_floats, truncate_stats_for_llm
 from .db import get_db, init_db
 from .models.schemas import (
     AnalysisListResponse,
     AuthResponse,
+    ChatRequest,
     DeleteResponse,
+    GoogleLoginRequest,
     HealthResponse,
     TokenResponse,
     UserLogin,
@@ -65,10 +58,19 @@ from .models.schemas import (
     UserResponse,
 )
 
+configure_logging()
 logger = logging.getLogger(__name__)
-logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(name)s] %(levelname)s %(message)s")
 
+APP_ENV = os.getenv("APP_ENV", "production")
+GOOGLE_CLIENT_ID = os.getenv("GOOGLE_CLIENT_ID", "").strip()
+FRONTEND_GOOGLE_CLIENT_ID = (
+    os.getenv("FRONTEND_GOOGLE_CLIENT_ID", "").strip()
+    or os.getenv("VITE_GOOGLE_CLIENT_ID", "").strip()
+)
 MAX_UPLOAD_BYTES = int(os.getenv("MAX_UPLOAD_BYTES", str(30 * 1024 * 1024)))
+MAX_ANALYZE_ROWS = int(os.getenv("MAX_ANALYZE_ROWS", "250000"))
+MAX_ANALYZE_COLUMNS = int(os.getenv("MAX_ANALYZE_COLUMNS", "300"))
+MAX_EXCEL_SHEETS = int(os.getenv("MAX_EXCEL_SHEETS", "5"))
 MAX_QUESTION_CHARS = int(os.getenv("CHAT_MAX_QUESTION_CHARS", "1200"))
 MAX_CONTEXT_BYTES = int(os.getenv("CHAT_MAX_CONTEXT_BYTES", str(128 * 1024)))
 READ_CHUNK_BYTES = 1024 * 1024
@@ -76,18 +78,138 @@ CHAT_RATE_LIMIT = int(os.getenv("CHAT_RATE_LIMIT", "10"))
 CHAT_RATE_WINDOW = int(os.getenv("CHAT_RATE_WINDOW_SECONDS", "60"))
 
 
-# ── Lifespan ──────────────────────────────────────────────────────────────────
+_raw_origins = os.getenv("CORS_ORIGINS", "http://localhost:5173,http://localhost:3000")
+origins = [o.strip() for o in _raw_origins.split(",") if o.strip()]
+
+
+def _looks_like_csv(file_bytes: bytes) -> bool:
+    sample = file_bytes[:16384]
+    if not sample:
+        return False
+
+    text: Optional[str] = None
+    for encoding in ("utf-8-sig", "utf-16", "utf-16-le", "utf-16-be", "latin-1"):
+        try:
+            text = sample.decode(encoding)
+            break
+        except UnicodeDecodeError:
+            continue
+
+    if text is None:
+        return False
+
+    lines = [line for line in text.splitlines() if line.strip()]
+    if len(lines) < 1:
+        return False
+
+    sniff_sample = "\n".join(lines[:10])
+    try:
+        csv.Sniffer().sniff(sniff_sample)
+        return True
+    except csv.Error:
+        return any(delim in lines[0] for delim in (",", ";", "\t", "|"))
+
+
+def _validate_upload_magic(parsed_ext: str, file_bytes: bytes) -> None:
+    if parsed_ext == "csv":
+        if not _looks_like_csv(file_bytes):
+            raise HTTPException(status_code=400, detail="Invalid CSV content")
+        return
+
+    if parsed_ext == "xlsx":
+        if not zipfile.is_zipfile(io.BytesIO(file_bytes)):
+            raise HTTPException(status_code=400, detail="Invalid XLSX file signature")
+        return
+
+    if parsed_ext == "xls":
+        if not file_bytes.startswith(b"\xD0\xCF\x11\xE0\xA1\xB1\x1A\xE1"):
+            raise HTTPException(status_code=400, detail="Invalid XLS file signature")
+        return
+
+    raise HTTPException(status_code=400, detail="Unsupported file type")
+
+
+def _detect_csv_delimiter(file_bytes: bytes) -> Optional[str]:
+    sample = file_bytes[:16384]
+    for encoding in ("utf-8-sig", "utf-8", "latin-1"):
+        try:
+            text = sample.decode(encoding)
+            break
+        except UnicodeDecodeError:
+            text = None
+    if not text:
+        return None
+
+    lines = [line for line in text.splitlines() if line.strip()]
+    if not lines:
+        return None
+
+    sniff_sample = "\n".join(lines[:20])
+    try:
+        dialect = csv.Sniffer().sniff(sniff_sample, delimiters=[",", ";", "\t", "|"])
+        return dialect.delimiter
+    except csv.Error:
+        return None
+
+
+def _read_csv_with_fallback(file_bytes: bytes) -> pd.DataFrame:
+    delimiter = _detect_csv_delimiter(file_bytes)
+
+    attempts = []
+    encodings = ["utf-8-sig", "utf-8", "utf-16", "latin-1"]
+    for encoding in encodings:
+        if delimiter:
+            attempts.append({"engine": "python", "sep": delimiter, "encoding": encoding})
+        attempts.append({"engine": "python", "sep": None, "encoding": encoding})
+    attempts.append({})
+
+    errors = []
+    for csv_kwargs in attempts:
+        try:
+            header_df = pd.read_csv(io.BytesIO(file_bytes), nrows=0, **csv_kwargs)
+            if header_df.shape[1] == 0:
+                errors.append("No columns detected in CSV header")
+                continue
+            if header_df.shape[1] > MAX_ANALYZE_COLUMNS:
+                raise HTTPException(
+                    status_code=413,
+                    detail=f"Dataset has {header_df.shape[1]} columns. Maximum allowed is {MAX_ANALYZE_COLUMNS}.",
+                )
+
+            return pd.read_csv(
+                io.BytesIO(file_bytes),
+                nrows=MAX_ANALYZE_ROWS + 1,
+                **csv_kwargs,
+            )
+        except HTTPException:
+            raise
+        except Exception as exc:
+            errors.append(str(exc))
+
+    first_error = errors[0] if errors else "Unknown CSV parse error"
+    raise HTTPException(status_code=422, detail=f"Could not parse file: {first_error}")
+
+
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     logger.info("Starting DataPulse API v2 (pipeline %s)", PIPELINE_VERSION)
 
-    # ── GROQ_API_KEY is required — refuse to start without it ─────────
+
     if not os.getenv("GROQ_API_KEY"):
         raise RuntimeError(
             "GROQ_API_KEY environment variable is not set. "
             "The application cannot start without it. "
             "Set it in your .env file or environment."
+        )
+
+    if APP_ENV == "production" and "*" in origins:
+        raise RuntimeError("CORS_ORIGINS cannot contain '*' in production")
+
+    if GOOGLE_CLIENT_ID and FRONTEND_GOOGLE_CLIENT_ID and GOOGLE_CLIENT_ID != FRONTEND_GOOGLE_CLIENT_ID:
+        raise RuntimeError(
+            "Google OAuth Client ID mismatch between backend and frontend configuration"
         )
 
     await init_db()
@@ -96,18 +218,14 @@ async def lifespan(app: FastAPI):
     logger.info("DataPulse API shutdown complete")
 
 
-# ── App ───────────────────────────────────────────────────────────────────────
+
 
 app = FastAPI(
     title="DataPulse API",
     description="Multi-agent CSV analysis API",
-    version="2.0.0",
+    version=APP_VERSION,
     lifespan=lifespan,
 )
-
-# CORS — allow the Vite dev server and any configured production origins
-_raw_origins = os.getenv("CORS_ORIGINS", "http://localhost:5173,http://localhost:3000")
-origins = [o.strip() for o in _raw_origins.split(",") if o.strip()]
 
 app.add_middleware(
     CORSMiddleware,
@@ -129,19 +247,12 @@ async def catch_all_exception_handler(request: Request, exc: Exception):
 
 
 
-# ── Auth dependency ───────────────────────────────────────────────────────────
-
 security = HTTPBearer()
 
 
 async def get_current_user_id(
     credentials: Annotated[HTTPAuthorizationCredentials, Depends(security)],
 ) -> int:
-    """
-    FastAPI dependency.
-    Validates the Bearer JWT and returns the integer user_id.
-    Raises 401 if the token is missing, expired, or malformed.
-    """
     token = credentials.credentials
     payload = verify_access_token(token)
     if payload is None:
@@ -153,7 +264,7 @@ async def get_current_user_id(
     return int(payload["sub"])
 
 
-# ── Health ────────────────────────────────────────────────────────────────────
+
 
 @app.get("/health", response_model=HealthResponse, tags=["system"])
 async def health_check(db: AsyncSession = Depends(get_db)):
@@ -174,7 +285,7 @@ async def health_check(db: AsyncSession = Depends(get_db)):
     )
 
 
-# ── Auth routes ───────────────────────────────────────────────────────────────
+
 
 @app.post("/auth/register", response_model=AuthResponse, status_code=status.HTTP_201_CREATED, tags=["auth"])
 async def register(body: UserRegister, db: AsyncSession = Depends(get_db)):
@@ -197,7 +308,7 @@ async def login(body: UserLogin, db: AsyncSession = Depends(get_db), response: R
     # create an HttpOnly refresh cookie and return the short-lived access token
     try:
         refresh_token = create_refresh_token(user_obj["id"], user_obj["email"])
-        # set cookie path to '/' so it is sent for backend /auth/* endpoints
+
         if response is not None:
             response.set_cookie(
                 key="datapulse_refresh",
@@ -209,7 +320,6 @@ async def login(body: UserLogin, db: AsyncSession = Depends(get_db), response: R
                 path="/",
             )
     except Exception:
-        # If refresh creation fails, continue without cookie (login still returns access token)
         logger.exception("Failed to create refresh token")
     return TokenResponse(
         access_token=result["access_token"],
@@ -224,15 +334,20 @@ async def login(body: UserLogin, db: AsyncSession = Depends(get_db), response: R
 
 
 @app.post("/auth/google", response_model=TokenResponse, tags=["auth"])
-async def login_with_google(request: Request, db: AsyncSession = Depends(get_db), response: Response = None):
-    body = await request.json()
-    credential = body.get("credential")
+async def login_with_google(body: GoogleLoginRequest, db: AsyncSession = Depends(get_db), response: Response = None):
+    credential = body.credential
     if not credential:
         raise HTTPException(status_code=400, detail="Missing Google credential")
+
+    frontend_client_id = (body.client_id or "").strip()
+    if frontend_client_id and GOOGLE_CLIENT_ID and frontend_client_id != GOOGLE_CLIENT_ID:
+        raise HTTPException(status_code=400, detail="Google client ID mismatch")
 
     idinfo = verify_google_token(credential)
     if not idinfo:
         raise HTTPException(status_code=401, detail="Invalid Google token")
+    if GOOGLE_CLIENT_ID and idinfo.get("aud") != GOOGLE_CLIENT_ID:
+        raise HTTPException(status_code=401, detail="Invalid Google token audience")
 
     email = idinfo.get("email")
     google_id = idinfo.get("sub")
@@ -248,7 +363,6 @@ async def login_with_google(request: Request, db: AsyncSession = Depends(get_db)
         )
     
     user_obj = result["user"]
-    # set refresh cookie
     try:
         refresh_token = create_refresh_token(user_obj["id"], user_obj["email"])
         if response is not None:
@@ -279,9 +393,6 @@ async def login_with_google(request: Request, db: AsyncSession = Depends(get_db)
 
 @app.post("/auth/refresh", response_model=TokenResponse, tags=["auth"])
 async def refresh_token(request: Request, response: Response, db: AsyncSession = Depends(get_db)):
-    """Exchange an HttpOnly refresh cookie for a new access token.
-    The refresh token is rotated on successful refresh.
-    """
     token = request.cookies.get("datapulse_refresh")
     if not token:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Missing refresh token")
@@ -322,7 +433,7 @@ async def refresh_token(request: Request, response: Response, db: AsyncSession =
 
 @app.post("/auth/logout", tags=["auth"])
 async def logout(response: Response):
-    # Clear refresh cookie
+
     response.delete_cookie("datapulse_refresh", path="/")
     return {"success": True, "message": "Logged out"}
 
@@ -344,7 +455,7 @@ async def me(
     )
 
 
-# ── Analysis routes ───────────────────────────────────────────────────────────
+
 
 @app.post("/analyze", tags=["analysis"])
 async def analyze(
@@ -352,13 +463,7 @@ async def analyze(
     user_id: int = Depends(get_current_user_id),
     db: AsyncSession = Depends(get_db),
 ):
-    """
-    Accept a CSV upload, run the full multi-agent pipeline,
-    persist the result, and return the JSON analysis.
 
-    On repeated uploads of the same file (same SHA-256 hash),
-    returns the cached result immediately without re-running the pipeline.
-    """
     filename = file.filename or ""
     parsed_ext = filename.lower().split('.')[-1] if '.' in filename else ""
     if parsed_ext not in ("csv", "xlsx", "xls"):
@@ -382,37 +487,111 @@ async def analyze(
     if len(file_bytes) == 0:
         raise HTTPException(status_code=400, detail="Uploaded file is empty")
 
+    _validate_upload_magic(parsed_ext, file_bytes)
+
     file_hash = compute_file_hash(file_bytes, filename)
 
-    # Cache hit — return immediately
+
     cached = await get_analysis_by_hash(db, user_id, file_hash)
     if (
         cached
         and cached.get("stats_summary")
         and cached.get("insights")
+        and not (cached.get("errors") or [])
         and cached.get("pipeline_version") == PIPELINE_VERSION
     ):
-        logger.info("Returning cached analysis for user %d / %s", user_id, file.filename)
-        # Charts stored as plain dicts — safe for JSON serialisation
         cached["charts"] = {k: v for k, v in (cached.get("charts") or {}).items()}
         return {"from_cache": True, **cached}
     elif cached:
-        logger.info("Cache STALE (version mismatch) for user %d / %s — re-running pipeline", user_id, file.filename)
+        logger.info("Cache not eligible for reuse for user %d / %s — re-running pipeline", user_id, file.filename)
 
-    # Run full pipeline
+    await db.rollback()
+
+
     try:
         if parsed_ext == "csv":
-            df = pd.read_csv(io.BytesIO(file_bytes))
+            df = _read_csv_with_fallback(file_bytes)
         else:
-            df = pd.read_excel(io.BytesIO(file_bytes), engine="openpyxl")
+            if parsed_ext == "xlsx":
+                from openpyxl import load_workbook
+
+                wb = load_workbook(io.BytesIO(file_bytes), read_only=True, data_only=True)
+                try:
+                    sheet_count = len(wb.sheetnames)
+                    if sheet_count > MAX_EXCEL_SHEETS:
+                        raise HTTPException(
+                            status_code=413,
+                            detail=f"Excel file has {sheet_count} sheets. Maximum allowed is {MAX_EXCEL_SHEETS}.",
+                        )
+
+                    active_sheet = wb[wb.sheetnames[0]]
+                    if (active_sheet.max_row or 0) > MAX_ANALYZE_ROWS:
+                        raise HTTPException(
+                            status_code=413,
+                            detail=f"Excel file has {active_sheet.max_row} rows. Maximum allowed is {MAX_ANALYZE_ROWS}.",
+                        )
+                    if (active_sheet.max_column or 0) > MAX_ANALYZE_COLUMNS:
+                        raise HTTPException(
+                            status_code=413,
+                            detail=f"Excel file has {active_sheet.max_column} columns. Maximum allowed is {MAX_ANALYZE_COLUMNS}.",
+                        )
+                finally:
+                    wb.close()
+
+                df = pd.read_excel(
+                    io.BytesIO(file_bytes),
+                    engine="openpyxl",
+                    sheet_name=0,
+                    nrows=MAX_ANALYZE_ROWS + 1,
+                )
+            else:
+                try:
+                    import xlrd  # noqa: F401
+                except Exception:
+                    raise HTTPException(
+                        status_code=422,
+                        detail="Legacy .xls upload requires the 'xlrd' package. Please upload CSV/XLSX or install xlrd on the backend.",
+                    )
+
+                df = pd.read_excel(
+                    io.BytesIO(file_bytes),
+                    engine="xlrd",
+                    sheet_name=0,
+                    nrows=MAX_ANALYZE_ROWS + 1,
+                )
     except Exception as exc:
+        if isinstance(exc, HTTPException):
+            raise exc
         raise HTTPException(status_code=422, detail=f"Could not parse file: {exc}")
 
-    import asyncio
+    row_count, column_count = df.shape
+    if row_count > MAX_ANALYZE_ROWS:
+        raise HTTPException(
+            status_code=413,
+            detail=f"Dataset has {row_count} rows. Maximum allowed is {MAX_ANALYZE_ROWS}.",
+        )
+    if column_count > MAX_ANALYZE_COLUMNS:
+        raise HTTPException(
+            status_code=413,
+            detail=f"Dataset has {column_count} columns. Maximum allowed is {MAX_ANALYZE_COLUMNS}.",
+        )
+
     state = await asyncio.to_thread(run_pipeline, df)
     result = state.model_dump()
 
-    # Persist and warm cache (fire-and-forget style — errors are logged, not raised)
+    if state.errors or state.partial:
+        logger.error("Pipeline failed for user %d / %s: %s", user_id, filename, state.errors)
+        raise HTTPException(
+            status_code=500,
+            detail={
+                "message": "Analysis pipeline failed",
+                "partial": True,
+                "errors": state.errors,
+                "completed_agents": state.completed_agents,
+            },
+        )
+
+
     save_result = await save_analysis(
         db=db,
         user_id=user_id,
@@ -423,43 +602,32 @@ async def analyze(
     )
     if not save_result["success"]:
         logger.warning("Failed to persist analysis: %s", save_result["message"])
+    else:
+        result["analysis_id"] = save_result.get("analysis_id")
 
-    # Serialise charts to plain dicts before returning
-    from .analysis_history import _serialize_charts
+
     result["charts"] = _serialize_charts(result.get("charts") or {})
+    result["partial"] = False
 
-    # Make DataFrames JSON-safe
-    import json
-    import math
-
-    def sanitize_floats(obj):
-        if isinstance(obj, float):
-            return None if math.isnan(obj) or math.isinf(obj) else obj
-        elif isinstance(obj, dict):
-            return {k: sanitize_floats(v) for k, v in obj.items()}
-        elif isinstance(obj, list):
-            return [sanitize_floats(x) for x in obj]
-        return obj
 
     for key in ("raw_df", "clean_df"):
         df_val = result.get(key)
         if hasattr(df_val, "to_json"):
-            # to_json converts NaNs to valid JSON nulls
             result[key] = json.loads(df_val.head(100).to_json(orient="records"))
 
-    # Sanitize the rest of the dictionary (like stats_summary) for NaN/Inf
+
     result = sanitize_floats(result)
 
     return {"from_cache": False, "pipeline_version": PIPELINE_VERSION, **result}
 
 
-# ── History routes ────────────────────────────────────────────────────────────
+
 
 @app.get("/history", response_model=AnalysisListResponse, tags=["history"])
 async def history(
     user_id: int = Depends(get_current_user_id),
     db: AsyncSession = Depends(get_db),
-    limit: int = 20,
+    limit: int = Query(default=20, ge=1, le=100),
 ):
     items = await get_user_analysis_history(db, user_id, limit=limit)
     return AnalysisListResponse(
@@ -468,6 +636,19 @@ async def history(
         total=len(items),
         analyses=items,
     )
+
+
+@app.get("/history/{analysis_id}", tags=["history"])
+async def history_item(
+    analysis_id: int,
+    user_id: int = Depends(get_current_user_id),
+    db: AsyncSession = Depends(get_db),
+):
+    item = await get_analysis_by_id(db, user_id, analysis_id)
+    if item is None:
+        raise HTTPException(status_code=404, detail="Analysis not found or access denied")
+    item["charts"] = {k: v for k, v in (item.get("charts") or {}).items()}
+    return item
 
 
 @app.delete("/history/{analysis_id}", response_model=DeleteResponse, tags=["history"])
@@ -484,27 +665,22 @@ async def remove_analysis(
 
 @app.post("/chat", tags=["analysis"])
 async def chat_with_analysis(
-    body: dict = Body(...),
+    body: ChatRequest,
     user_id: int = Depends(get_current_user_id),
 ):
     """Answer a user question about the current analysis context."""
-    
-    # Redis-backed counter shared across workers/deploys.
-    # Key: ratelimit:chat:{user_id} with TTL = CHAT_RATE_WINDOW seconds.
+
     try:
         key = f"ratelimit:chat:{user_id}"
         count = await redis_cache.increment_with_ttl(key, CHAT_RATE_WINDOW)
         if count > CHAT_RATE_LIMIT:
             raise HTTPException(status_code=429, detail=f"Too many chat requests. Please wait {CHAT_RATE_WINDOW} seconds.")
     except Exception as exc:
-        logger.error("Redis rate limiter failed for user %s: %s", user_id, exc)
-        raise HTTPException(
-            status_code=503,
-            detail="Rate limiter unavailable. Please retry shortly.",
-        )
+        # Graceful degradation: keep chat functional even if Redis is unavailable.
+        logger.warning("Redis rate limiter unavailable for user %s, continuing without rate limit: %s", user_id, exc)
 
-    question = (body.get("question") or "").strip()
-    context = body.get("context") or {}
+    question = body.question.strip()
+    context = body.context or {}
 
     if not question:
         raise HTTPException(status_code=400, detail="Question is required")
@@ -521,20 +697,37 @@ async def chat_with_analysis(
             detail=f"Context too large. Max size is {MAX_CONTEXT_BYTES // 1024} KB",
         )
 
-    stats = context.get("stats") or {}
+    stats = context.get("stats") or context.get("stats_summary") or {}
     insights = context.get("insights") or {}
     file_name = context.get("fileName") or "dataset"
 
-    # Truncate stats to stay within token limits on wide datasets (Fix 12)
+
     slim_stats = truncate_stats_for_llm(stats)
     profile = slim_stats.get("dataset_profile") or {}
+    outlier_counts = slim_stats.get("outlier_counts") or {}
+    if not outlier_counts:
+        outlier_counts = {
+            k: int((v or {}).get("count", 0))
+            for k, v in (stats.get("outliers") or {}).items()
+        }
+    top_outliers = sorted(outlier_counts.items(), key=lambda kv: kv[1], reverse=True)[:10]
+    correlations = context.get("correlations") or slim_stats.get("strong_correlations") or []
+    quality = context.get("dataQuality") or slim_stats.get("data_quality") or {}
+    outlier_summary = context.get("outlierSummary") or [
+        {"column": col, "count": count} for col, count in top_outliers
+    ]
 
     prompt = (
         "You are a data analyst assistant. "
         "Answer clearly in 2-4 short sentences based only on provided context. "
-        "If context is insufficient, say what is missing.\n\n"
+        "Never claim data is missing if it exists in context. "
+        "If context is insufficient, say exactly which field is missing.\n\n"
         f"File: {file_name}\n"
         f"Dataset: {profile.get('label', 'unknown')} ({profile.get('domain', 'general')})\n"
+        f"Data Quality: {quality}\n"
+        f"Outlier Counts: {outlier_counts}\n"
+        f"Outlier Summary: {outlier_summary}\n"
+        f"Correlations: {correlations}\n"
         f"Stats: {slim_stats}\n"
         f"Insights: {insights}\n"
         f"Question: {question}"
@@ -561,16 +754,36 @@ async def chat_with_analysis(
         except Exception as exc:
             logger.warning("Groq chat failed, using fallback response: %s", exc)
 
-    # Fallback when LLM provider fails.
+
+    q_lower = question.lower()
     row_count = stats.get("row_count", "unknown")
     col_count = stats.get("column_count", "unknown")
-    completeness = (stats.get("data_quality") or {}).get("completeness")
+    completeness = quality.get("completeness")
+    missing_cells = quality.get("missing_cells")
+    duplicate_rows = quality.get("duplicate_rows")
     findings = insights.get("findings") or []
+
+    if "outlier" in q_lower:
+        if top_outliers and top_outliers[0][1] > 0:
+            summary = ", ".join([f"{col}: {cnt}" for col, cnt in top_outliers[:5]])
+            return {"answer": f"Top outlier columns in {file_name} are {summary}."}
+        return {"answer": f"No outlier counts are present for {file_name}, or all detected counts are zero."}
+
+    if any(k in q_lower for k in ["quality", "missing", "duplicate", "completeness"]):
+        parts = [f"For {file_name}, data quality shows {missing_cells or 0} missing cells and {duplicate_rows or 0} duplicate rows."]
+        if completeness is not None:
+            parts.append(f"Completeness is {float(completeness):.2f}%.")
+        return {"answer": " ".join(parts)}
+
+    if "correlation" in q_lower:
+        if correlations:
+            top = correlations[0]
+            return {"answer": f"The strongest reported correlation is {top.get('col1')} and {top.get('col2')} with r={float(top.get('correlation', 0)):.3f}."}
+        return {"answer": "No strong correlations were provided in the current analysis context."}
 
     parts = [f"I analyzed {file_name} with {row_count} rows and {col_count} columns."]
     if completeness is not None:
         parts.append(f"Data completeness is {float(completeness):.2f}%.")
     if findings:
         parts.append(f"Key finding: {findings[0]}")
-    parts.append("AI response failed — this is a basic summary. Try again shortly.")
     return {"answer": " ".join(parts)}

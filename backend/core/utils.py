@@ -1,6 +1,9 @@
 import pandas as pd
 import numpy as np
 import logging
+import math
+from datetime import date, datetime
+from typing import Any
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
@@ -115,7 +118,8 @@ def safe_describe(df: pd.DataFrame) -> dict:
     return summary
 
 
-# ── Compact keys to keep when slimming numeric stats for LLM prompts ─────────
+
+
 _SLIM_NUMERIC_KEYS = ("mean", "median", "std", "min", "max", "skewness", "count")
 
 
@@ -176,3 +180,48 @@ def truncate_stats_for_llm(
     }
 
     return truncated
+
+
+def sanitize_floats(value):
+    """Recursively replace NaN/Inf float values with JSON-safe None."""
+    if isinstance(value, float):
+        return None if math.isnan(value) or math.isinf(value) else value
+    if isinstance(value, dict):
+        return {k: sanitize_floats(v) for k, v in value.items()}
+    if isinstance(value, list):
+        return [sanitize_floats(v) for v in value]
+    return value
+
+
+def json_default(obj: Any) -> Any:
+    if isinstance(obj, np.ndarray):
+        return obj.tolist()
+    if isinstance(obj, (np.integer,)):
+        return int(obj)
+    if isinstance(obj, (np.floating,)):
+        val = float(obj)
+        return val if math.isfinite(val) else None
+    if isinstance(obj, (np.bool_,)):
+        return bool(obj)
+    if isinstance(obj, (datetime, date, pd.Timestamp)):
+        return obj.isoformat()
+    if isinstance(obj, set):
+        return list(obj)
+    return str(obj)
+
+
+def sanitize_for_json(value: Any) -> Any:
+    if isinstance(value, dict):
+        return {str(k): sanitize_for_json(v) for k, v in value.items()}
+    if isinstance(value, list):
+        return [sanitize_for_json(v) for v in value]
+    if isinstance(value, tuple):
+        return [sanitize_for_json(v) for v in value]
+    if isinstance(value, float):
+        return value if math.isfinite(value) else None
+    if isinstance(value, (np.floating,)):
+        val = float(value)
+        return val if math.isfinite(val) else None
+    if isinstance(value, np.ndarray):
+        return sanitize_for_json(value.tolist())
+    return value

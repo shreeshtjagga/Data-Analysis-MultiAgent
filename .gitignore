@@ -20,6 +20,7 @@ lib64/
 # ─── Virtual environments ─────────────────────────────────────────────────────
 venv/
 .venv/
+.venv_bash/
 env/
 ENV/
 env.bak/
@@ -54,8 +55,6 @@ yarn-debug.log*
 yarn-error.log*
 pnpm-debug.log*
 .pnpm-store/
-package-lock.json
-frontend/package-lock.json
 
 # ─── IDE & Editor ─────────────────────────────────────────────────────────────
 .vscode/

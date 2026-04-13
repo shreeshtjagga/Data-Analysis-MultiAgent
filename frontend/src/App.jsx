@@ -3,6 +3,7 @@ import { Navigate, Route, Routes, useNavigate } from "react-router-dom";
 import { getToken, setToken, clearToken, apiMe } from "./api.js";
 import Login from "./login.jsx";
 import DataPulse from "./datapulse_dashboard.jsx";
+import ErrorBoundary from "./ErrorBoundary.jsx";
 
 /**
  * App.jsx
@@ -56,16 +57,18 @@ export default function App() {
       <div
         style={{
           minHeight: "100vh",
-          background: "#060912",
+          background: "var(--bg-deep)",
           display: "flex",
           alignItems: "center",
           justifyContent: "center",
-          color: "#475569",
-          fontFamily: "'Outfit', sans-serif",
-          fontSize: "0.88rem",
+          color: "var(--text-muted)",
+          fontFamily: "'Outfit', monospace",
+          fontSize: "14px",
+          letterSpacing: "0.1em",
+          textTransform: "uppercase"
         }}
       >
-        Loading…
+        Loading System
       </div>
     );
   }
@@ -84,7 +87,11 @@ export default function App() {
         path="/"
         element={
           authState.user
-            ? <DataPulse user={authState.user} onLogout={handleLogout} />
+            ? (
+              <ErrorBoundary>
+                <DataPulse user={authState.user} onLogout={handleLogout} />
+              </ErrorBoundary>
+            )
             : <Navigate to="/login" replace />
         }
       />

@@ -1,11 +1,4 @@
-"""
-Statistician Agent
-──────────────────
-Calculates comprehensive statistics on the clean dataset.
-- Defensively coerces mixed-type columns before analysis (Fix 9).
-- Skips columns flagged as excluded by the architect (Fix 8).
-- Each column is isolated in its own try/except (Fix 5).
-"""
+
 
 import logging
 
@@ -14,8 +7,26 @@ import pandas as pd
 from scipy import stats as scipy_stats
 
 from ..core.state import AnalysisState
+from ..core.errors import add_pipeline_error
 
 logger = logging.getLogger(__name__)
+
+_CSV_FORMULA_PREFIXES = ("=", "+", "-", "@")
+_MAX_CATEGORY_VALUE_CHARS = 200
+_MAX_STRONG_CORRELATIONS = 200
+
+
+def _sanitize_cell_for_output(value: object) -> str:
+    text = str(value).replace("\r", " ").replace("\n", " ").strip()
+    # Strip leading formula characters (single pass to avoid infinite loop)
+    max_strip = len(text)
+    stripped = 0
+    while stripped < max_strip and text.startswith(_CSV_FORMULA_PREFIXES):
+        text = text[1:].lstrip()
+        stripped += 1
+    if len(text) > _MAX_CATEGORY_VALUE_CHARS:
+        text = text[:_MAX_CATEGORY_VALUE_CHARS] + "..."
+    return text
 
 
 def statistician_agent(state: AnalysisState) -> AnalysisState:
@@ -29,13 +40,12 @@ def statistician_agent(state: AnalysisState) -> AnalysisState:
         # Work on a copy so coercion doesn't mutate shared state
         df = state.clean_df.copy()
 
-        # ── Excluded columns (set by architect) ──────────────────────────
+
         excluded_names: set[str] = set()
         for entry in (state.stats_summary or {}).get("excluded_columns", []):
             excluded_names.add(entry["column"])
 
-        # ── Defensive type coercion (Fix 9) ──────────────────────────────
-        # Try converting object columns that are secretly numeric.
+
         coerced_columns: list[dict] = []
         for col in df.select_dtypes(include=["object"]).columns:
             if col in excluded_names:
@@ -57,7 +67,7 @@ def statistician_agent(state: AnalysisState) -> AnalysisState:
 
         stats_summary: dict = {}
 
-        # Basic dataset information
+
         stats_summary["row_count"] = int(len(df))
         stats_summary["column_count"] = int(len(df.columns))
         stats_summary["columns"] = list(df.columns)
@@ -70,7 +80,7 @@ def statistician_agent(state: AnalysisState) -> AnalysisState:
         if coerced_columns:
             stats_summary["coerced_columns"] = coerced_columns
 
-        # Missing values
+
         missing_data = df.isna().sum()
         stats_summary["missing_values"] = {
             col: int(count) for col, count in missing_data.items() if count > 0
@@ -81,7 +91,7 @@ def statistician_agent(state: AnalysisState) -> AnalysisState:
             if count > 0
         }
 
-        # ── Numeric columns (per-column error isolation) ─────────────────
+
         numeric_cols = [
             c
             for c in df.select_dtypes(include=[np.number]).columns.tolist()
@@ -123,7 +133,7 @@ def statistician_agent(state: AnalysisState) -> AnalysisState:
         if numeric_errors:
             stats_summary["numeric_column_errors"] = numeric_errors
 
-        # ── Categorical columns (per-column error isolation) ─────────────
+
         categorical_cols = [
             c
             for c in df.select_dtypes(include=["object"]).columns.tolist()
@@ -135,22 +145,27 @@ def statistician_agent(state: AnalysisState) -> AnalysisState:
         for col in categorical_cols:
             try:
                 value_counts = df[col].value_counts()
+                top_5_values: dict[str, int] = {}
+                for raw_value, count in value_counts.head(5).items():
+                    safe_key = _sanitize_cell_for_output(raw_value)
+                    top_5_values[safe_key] = top_5_values.get(safe_key, 0) + int(count)
+
                 categorical_stats[col] = {
                     "unique_values": int(df[col].nunique()),
                     "most_common": (
-                        str(value_counts.index[0]) if len(value_counts) > 0 else None
+                        _sanitize_cell_for_output(value_counts.index[0]) if len(value_counts) > 0 else None
                     ),
                     "most_common_count": (
                         int(value_counts.iloc[0]) if len(value_counts) > 0 else 0
                     ),
                     "least_common": (
-                        str(value_counts.index[-1]) if len(value_counts) > 0 else None
+                        _sanitize_cell_for_output(value_counts.index[-1]) if len(value_counts) > 0 else None
                     ),
                     "least_common_count": (
                         int(value_counts.iloc[-1]) if len(value_counts) > 0 else 0
                     ),
                     "diversity_ratio": float(df[col].nunique() / len(df)),
-                    "top_5_values": value_counts.head(5).to_dict(),
+                    "top_5_values": top_5_values,
                 }
             except Exception as col_err:
                 logger.warning(
@@ -162,7 +177,7 @@ def statistician_agent(state: AnalysisState) -> AnalysisState:
         if categorical_errors:
             stats_summary["categorical_column_errors"] = categorical_errors
 
-        # ── Outlier detection (per-column error isolation) ────────────────
+
         outliers_summary: dict = {}
         for col in numeric_cols:
             try:
@@ -182,7 +197,6 @@ def statistician_agent(state: AnalysisState) -> AnalysisState:
                         "percentage": float((len(outliers) / len(df)) * 100),
                         "lower_bound": float(lower_bound),
                         "upper_bound": float(upper_bound),
-                        "outlier_indices": outliers.index.tolist()[:10],
                     }
             except Exception as col_err:
                 logger.warning(
@@ -191,7 +205,7 @@ def statistician_agent(state: AnalysisState) -> AnalysisState:
 
         stats_summary["outliers"] = outliers_summary
 
-        # ── Correlation analysis ─────────────────────────────────────────
+
         if len(numeric_cols) > 1:
             try:
                 correlation_matrix = df[numeric_cols].corr()
@@ -208,17 +222,19 @@ def statistician_agent(state: AnalysisState) -> AnalysisState:
                                 }
                             )
 
-                stats_summary["correlation_matrix"] = correlation_matrix.to_dict()
+                strong_correlations = sorted(
+                    strong_correlations,
+                    key=lambda item: abs(item["correlation"]),
+                    reverse=True,
+                )[:_MAX_STRONG_CORRELATIONS]
                 stats_summary["strong_correlations"] = strong_correlations
             except Exception as corr_err:
                 logger.warning("Correlation analysis failed: %s", corr_err)
-                stats_summary["correlation_matrix"] = {}
                 stats_summary["strong_correlations"] = []
         else:
-            stats_summary["correlation_matrix"] = {}
             stats_summary["strong_correlations"] = []
 
-        # Data quality metrics
+
         stats_summary["data_quality"] = {
             "total_cells": int(len(df) * len(df.columns)),
             "missing_cells": int(missing_data.sum()),
@@ -232,7 +248,7 @@ def statistician_agent(state: AnalysisState) -> AnalysisState:
             ),
         }
 
-        # Preserve architect-set fields
+
         prev = state.stats_summary or {}
         for key in ("imputations", "excluded_columns", "dataset_profile"):
             if key in prev:
@@ -244,11 +260,16 @@ def statistician_agent(state: AnalysisState) -> AnalysisState:
             len(numeric_stats),
             len(categorical_stats),
         )
+        state.completed_agents.append("statistician")
 
     except Exception as e:
-        error_msg = f"Statistician error: {e}"
-        logger.error(error_msg)
-        state.errors.append(error_msg)
+        logger.error("Statistician error: %s", e)
+        add_pipeline_error(
+            state.errors,
+            code="STATISTICIAN_FAILED",
+            message=str(e),
+            agent="statistician",
+            error_type="agent",
+        )
 
-    state.completed_agents.append("statistician")
     return state

@@ -1,11 +1,4 @@
-"""
-auth.py
-───────
-Authentication helpers:
-  • bcrypt password hashing / verification
-  • JWT access-token creation and verification via python-jose
-  • Async CRUD functions for user registration and login
-"""
+
 
 import logging
 import os
@@ -15,6 +8,8 @@ from typing import Optional
 from dotenv import load_dotenv
 load_dotenv()
 
+from google.oauth2 import id_token
+from google.auth.transport import requests as google_requests
 from jose import JWTError, jwt
 from passlib.context import CryptContext
 from sqlalchemy.exc import IntegrityError
@@ -25,7 +20,7 @@ from .db import User
 
 logger = logging.getLogger(__name__)
 
-# ── Config ────────────────────────────────────────────────────────────────────
+
 
 JWT_SECRET = os.getenv("JWT_SECRET", "change_this_secret_in_production")
 JWT_ALGORITHM = os.getenv("JWT_ALGORITHM", "HS256")
@@ -35,11 +30,11 @@ APP_ENV = os.getenv("APP_ENV", "production")
 if APP_ENV == "production" and JWT_SECRET == "change_this_secret_in_production":
     raise RuntimeError("CRITICAL: Default JWT_SECRET is being used in production!")
 
-# bcrypt context
+
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
 
-# ── Password helpers ──────────────────────────────────────────────────────────
+
 
 def hash_password(plain: str) -> str:
     return pwd_context.hash(plain)
@@ -53,7 +48,6 @@ def verify_password(plain: str, hashed: str) -> bool:
         return False
 
 
-# ── JWT helpers ───────────────────────────────────────────────────────────────
 
 def create_access_token(user_id: int, email: str) -> str:
     expire = datetime.now(tz=timezone.utc) + timedelta(minutes=JWT_EXPIRE_MINUTES)
@@ -79,7 +73,6 @@ def verify_access_token(token: str) -> Optional[dict]:
         return None
 
 
-# ── Refresh token helpers (HttpOnly cookie) ─────────────────────────────────
 REFRESH_SECRET = os.getenv("REFRESH_SECRET", JWT_SECRET)
 REFRESH_EXPIRE_DAYS = int(os.getenv("REFRESH_EXPIRE_DAYS", "7"))
 
@@ -99,7 +92,7 @@ def create_refresh_token(user_id: int, email: str) -> str:
 def verify_refresh_token(token: str) -> Optional[dict]:
     try:
         payload = jwt.decode(token, REFRESH_SECRET, algorithms=[JWT_ALGORITHM])
-        # ensure token type is refresh
+        # Ensure token type is refresh
         if payload.get("typ") != "refresh":
             return None
         user_id: str = payload.get("sub")
@@ -112,7 +105,6 @@ def verify_refresh_token(token: str) -> Optional[dict]:
         return None
 
 
-# ── User CRUD ─────────────────────────────────────────────────────────────────
 
 async def register_user(db: AsyncSession, email: str, password: str, name: Optional[str] = None) -> dict:
     if not email or not password:
@@ -130,6 +122,7 @@ async def register_user(db: AsyncSession, email: str, password: str, name: Optio
     try:
         await db.flush()
         await db.refresh(user)
+        await db.commit()
     except IntegrityError:
         await db.rollback()
         return {"success": False, "message": "Email already registered. Please log in instead."}
@@ -158,8 +151,6 @@ async def login_user(db: AsyncSession, email: str, password: str) -> dict:
     token = create_access_token(user.id, user.email)
     logger.info("User logged in: %s (id=%d)", email, user.id)
 
-    # FIX: Return datetime objects directly (not .isoformat() strings)
-    # Pydantic UserResponse expects datetime, not str
     return {
         "success": True,
         "message": "Login successful!",
@@ -183,10 +174,9 @@ async def get_user_by_email(db: AsyncSession, email: str) -> Optional[User]:
     result = await db.execute(select(User).where(User.email == email))
     return result.scalar_one_or_none()
 
-from google.oauth2 import id_token
-from google.auth.transport import requests as google_requests
 
 GOOGLE_CLIENT_ID = os.getenv("GOOGLE_CLIENT_ID")
+
 
 def verify_google_token(token: str) -> Optional[dict]:
     if not GOOGLE_CLIENT_ID:
@@ -214,6 +204,7 @@ async def login_google_user(db: AsyncSession, email: str, google_id: str, name: 
         try:
             await db.flush()
             await db.refresh(user)
+            await db.commit()
             logger.info("Google User registered: %s (id=%d)", email, user.id)
         except IntegrityError:
             await db.rollback()
