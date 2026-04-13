@@ -132,7 +132,7 @@ export default function ParticleBackground({ noExclude = false }) {
       window.removeEventListener('resize', resize);
       cancelAnimationFrame(animationFrameId);
     };
-  }, []);
+  }, [noExclude]);
 
   return (
     <canvas 

@@ -74,14 +74,14 @@ export default function DataPulse({ user, onLogout }) {
   const [chatInput, setChatInput] = useState("");
   const [chatLoading, setChatLoading] = useState(false);
   const [history, setHistory] = useState([]);
-  const [historyError, setHistoryError] = useState("");
+  const [_historyError, setHistoryError] = useState("");
   const [showHistory, setShowHistory] = useState(false);
   const [historyLoading, setHistoryLoading] = useState(false);
   const [deleteLoading, setDeleteLoading] = useState(null);
   const [historySelectLoading, setHistorySelectLoading] = useState(null);
-  const [statsSortKey, setStatsSortKey] = useState("outliers");
-  const [statsSortDirection, setStatsSortDirection] = useState("desc");
-  const [statsFilter, setStatsFilter] = useState("");
+  const [statsSortKey, _setStatsSortKey] = useState("outliers");
+  const [statsSortDirection, _setStatsSortDirection] = useState("desc");
+  const [statsFilter, _setStatsFilter] = useState("");
   const fileRef = useRef();
   const chatEndRef = useRef(null);
   const dragCounterRef = useRef(0);
@@ -295,13 +295,15 @@ export default function DataPulse({ user, onLogout }) {
   const insights = result?.insights || {};
   const dq = stats.data_quality || {};
   const numericCols = Object.keys(stats.numeric_columns || {});
-  const catCols = Object.keys(stats.categorical_columns || {});
+  const _catCols = Object.keys(stats.categorical_columns || {});
   const outlierCols = Object.keys(stats.outliers || {});
   
   const formatPercent = (value) => {
     const n = Number.isFinite(value) ? Number(value) : 100;
     return Number.isInteger(n) ? `${n}%` : `${n.toFixed(1)}%`;
   };
+
+  const f = (n) => (typeof n === 'number' && isFinite(n) ? n.toFixed(2) : "0.00");
 
   const keyMetrics = [
     { label: "Total Rows", val: (stats.row_count || 0).toLocaleString() },
@@ -312,14 +314,25 @@ export default function DataPulse({ user, onLogout }) {
   const sortedNumericRows = numericCols
     .map((col) => {
       const st = stats.numeric_columns?.[col];
-      return st ? { column: col, count: Number(st.count || 0), mean: Number(st.mean || 0), std: Number(st.std || 0), min: Number(st.min || 0), max: Number(st.max || 0), skewness: Number(st.skewness || 0), outliers: Number(stats.outliers?.[col]?.count || 0) } : null;
+      return st ? { 
+        column: col, 
+        count: Number(st.count || 0), 
+        mean: st.mean, 
+        std: st.std, 
+        min: st.min, 
+        max: st.max, 
+        skewness: st.skewness, 
+        outliers: Number(stats.outliers?.[col]?.count || 0) 
+      } : null;
     })
     .filter(Boolean)
-    .filter((row) => row.column.toLowerCase().includes(statsFilter.trim().toLowerCase()))
+    .filter((row) => (row.column || "").toLowerCase().includes(statsFilter.trim().toLowerCase()))
     .sort((a, b) => {
       const dir = statsSortDirection === "asc" ? 1 : -1;
-      if (statsSortKey === "column") return a.column.localeCompare(b.column) * dir;
-      return (Number(a[statsSortKey]) - Number(b[statsSortKey])) * dir;
+      if (statsSortKey === "column") return (a.column || "").localeCompare(b.column || "") * dir;
+      const valA = Number(a[statsSortKey] ?? 0);
+      const valB = Number(b[statsSortKey] ?? 0);
+      return (valA - valB) * dir;
     });
 
   return (
@@ -574,10 +587,10 @@ export default function DataPulse({ user, onLogout }) {
                              <tr key={r.column} style={{ borderBottom: idx === sortedNumericRows.length - 1 ? 'none' : '1px solid var(--border-subtle)' }}>
                                <td style={{ padding: '16px 12px', color: '#818cf8', fontWeight: 500, fontFamily: "'Outfit', monospace" }}>{r.column}</td>
                                <td style={{ padding: '16px 12px', color: 'var(--text-muted)' }}>{r.count}</td>
-                               <td style={{ padding: '16px 12px', color: 'var(--text-main)' }}>{r.mean.toFixed(2)}</td>
-                               <td style={{ padding: '16px 12px', color: 'var(--text-muted)' }}>{r.std.toFixed(2)}</td>
-                               <td style={{ padding: '16px 12px', color: 'var(--text-muted)' }}>{r.min.toFixed(2)}</td>
-                               <td style={{ padding: '16px 12px', color: 'var(--text-muted)' }}>{r.max.toFixed(2)}</td>
+                               <td style={{ padding: '16px 12px', color: 'var(--text-main)' }}>{f(r.mean)}</td>
+                               <td style={{ padding: '16px 12px', color: 'var(--text-muted)' }}>{f(r.std)}</td>
+                               <td style={{ padding: '16px 12px', color: 'var(--text-muted)' }}>{f(r.min)}</td>
+                               <td style={{ padding: '16px 12px', color: 'var(--text-muted)' }}>{f(r.max)}</td>
                                <td style={{ padding: '16px 12px', color: r.outliers > 0 ? 'var(--error)' : 'var(--success)' }}>{r.outliers}</td>
                              </tr>
                           ))}

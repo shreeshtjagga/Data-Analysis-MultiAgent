@@ -112,7 +112,9 @@ async function apiFetch(path, options = {}) {
         try {
           const b = await retryResp.json();
           detail = b.detail || b.message || detail;
-        } catch (_) {}
+        } catch (_) {
+          detail = String(detail);
+        }
         throw new Error(detail);
       }
       if (options.raw) return retryResp;
@@ -128,8 +130,11 @@ async function apiFetch(path, options = {}) {
     let detail = `HTTP ${response.status}`;
     try {
       const body = await response.json();
-      detail = body.detail || body.message || detail;
-    } catch (_) {}
+      const rawDetail = body.detail || body.message || detail;
+      detail = typeof rawDetail === 'object' ? JSON.stringify(rawDetail, null, 2) : rawDetail;
+    } catch (_) {
+      detail = String(detail);
+    }
     throw new Error(detail);
   }
 
