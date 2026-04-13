@@ -150,8 +150,8 @@ export default function DataPulse({ user, onLogout }) {
       clearStageTimers();
       log(`Core Failure: ${err.message}`);
       setAnalysisError(err.message || "Analysis failed");
-      setPhase("upload"); // Revert to upload state so user can retry
     }
+
   }, []);
 
   const onFile = useCallback((file) => analyzeFile(file), [analyzeFile]);
@@ -347,35 +347,78 @@ export default function DataPulse({ user, onLogout }) {
         </div>
       </div>
 
-      <div className="container" style={{ flex: 1, display: 'flex', flexDirection: 'column', position: 'relative', zIndex: 1, paddingBottom: '64px' }}>
-        {/* HERO SECTION REMOVED */}
-        <div className="mb-32" style={{ visibility: 'hidden', height: '12px' }}></div>
-
-
+      <div className="container" style={{ flex: 1, display: 'flex', flexDirection: 'column', position: 'relative', zIndex: 1, paddingBottom: '32px', minHeight: 'calc(100vh - 80px)' }}>
         {/* MAIN SECTION */}
         {phase === "upload" ? (
-          <div className="animate-fade-in" style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', textAlign: 'center', gap: '32px' }}>
-             <div style={{ maxWidth: '600px', marginBottom: '12px' }}>
-                <h1 style={{ fontSize: '48px', marginBottom: '16px', letterSpacing: '-0.04em' }}>Unleash your data's <span style={{ color: 'var(--primary-500)', textShadow: '0 0 20px rgba(99,102,241,0.4)' }}>Potential</span></h1>
-                <p style={{ fontSize: '18px', color: 'var(--text-muted)', lineHeight: 1.6 }}>Upload your CSV or Excel files to begin a deep neural analysis. Our agents will architect, analyze, and visualize your insights in real-time.</p>
+          <div className="animate-fade-in" style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', textAlign: 'center', gap: '48px', padding: '40px 0' }}>
+             
+             {/* Animated Welcome Section */}
+             <div style={{ animation: 'slideUp 0.8s cubic-bezier(0.2, 0.8, 0.2, 1)' }}>
+                <div style={{ display: 'inline-flex', alignItems: 'center', gap: '12px', padding: '6px 16px', background: 'rgba(99,102,241,0.1)', borderRadius: '100px', border: '1px solid rgba(99,102,241,0.2)', marginBottom: '24px', color: 'var(--primary-500)', fontSize: '13px', fontWeight: 600, letterSpacing: '0.1em', textTransform: 'uppercase' }}>
+                   <span style={{ width: '6px', height: '6px', background: 'var(--primary-500)', borderRadius: '50%', boxShadow: '0 0 10px var(--primary-500)' }} />
+                   Neural Uplink Established
+                </div>
+                <h1 style={{ fontSize: '56px', marginBottom: '16px', letterSpacing: '-0.05em', lineHeight: 1 }}>
+                   Welcome, <span style={{ color: 'var(--primary-500)', textShadow: '0 0 20px rgba(99,102,241,0.4)' }}>{user?.name || user?.email?.split('@')[0] || "Analyst"}</span>
+                </h1>
+                <p style={{ fontSize: '18px', color: 'var(--text-muted)', maxWidth: '600px', margin: '0 auto', lineHeight: 1.6 }}>Ready to architect your data? Connect an array to initialize multi-agent analysis.</p>
              </div>
 
-             <div
-              className={`upload-box ${isDragOver ? 'drag-over' : ''}`}
-              onDrop={onDrop}
-              onDragOver={(e) => e.preventDefault()}
-              onDragEnter={onDragEnter}
-              onDragLeave={onDragLeave}
-              onClick={() => fileRef.current.click()}
-              style={{ width: '100%', maxWidth: '500px', padding: '64px', borderColor: isDragOver ? 'var(--primary-500)' : 'var(--border-subtle)', background: 'rgba(13, 18, 32, 0.4)', backdropFilter: 'blur(8px)' }}
-            >
-              <div style={{ fontSize: '48px', color: 'var(--primary-500)', marginBottom: '20px', textShadow: '0 0 20px rgba(99,102,241,0.6)' }}>↑</div>
-              <strong style={{ color: 'var(--text-main)', marginBottom: '8px', fontSize: '24px', fontFamily: 'Syne, sans-serif' }}>Select Data Array</strong>
-              <p className="caption" style={{ color: 'var(--text-muted)', fontSize: '15px' }}>Drag (.csv, .xlsx) anywhere to initialize</p>
-              <input ref={fileRef} type="file" accept=".csv,.xlsx,.xls" style={{ display: "none" }} onChange={(e) => onFile(e.target.files[0])} />
-            </div>
+             {/* Upload Box with Scanner Effect */}
+             <div style={{ position: 'relative', width: '100%', maxWidth: '540px' }}>
+                <div
+                  className={`upload-box ${isDragOver ? 'drag-over' : ''}`}
+                  onDrop={onDrop}
+                  onDragOver={(e) => e.preventDefault()}
+                  onDragEnter={onDragEnter}
+                  onDragLeave={onDragLeave}
+                  onClick={() => fileRef.current.click()}
+                  style={{ 
+                    padding: '80px 48px', 
+                    borderColor: isDragOver ? 'var(--primary-500)' : 'var(--border-subtle)', 
+                    background: 'rgba(13, 18, 32, 0.4)', 
+                    backdropFilter: 'blur(12px)',
+                    position: 'relative',
+                    overflow: 'hidden'
+                  }}
+                >
+                  {/* Subtle Scanner Line Animation */}
+                  <div style={{ position: 'absolute', top: 0, left: 0, right: 0, height: '2px', background: 'linear-gradient(90deg, transparent, var(--primary-500), transparent)', opacity: 0.3, animation: 'scannerSweep 3s infinite linear' }} />
+                  
+                  <div style={{ fontSize: '56px', color: 'var(--primary-500)', marginBottom: '24px', textShadow: '0 0 25px rgba(99,102,241,0.6)', transform: isDragOver ? 'scale(1.1)' : 'scale(1)', transition: 'transform 0.3s ease' }}>↑</div>
+                  <strong style={{ color: 'var(--text-main)', marginBottom: '8px', fontSize: '24px', fontFamily: 'Syne, sans-serif' }}>Select Data Array</strong>
+                  <p className="caption" style={{ color: 'var(--text-muted)', fontSize: '15px' }}>Drag (.csv, .xlsx) anywhere to initialize</p>
+                  <input ref={fileRef} type="file" accept=".csv,.xlsx,.xls" style={{ display: "none" }} onChange={(e) => onFile(e.target.files[0])} />
+                </div>
+             </div>
+
+             {/* Feature Matrix Cards */}
+             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '20px', width: '100%', maxWidth: '900px', marginTop: '16px' }}>
+                {[
+                  { title: "Neural Logic", desc: "Multi-agent orchestration.", icon: "◈" },
+                  { title: "Deep Viz", desc: "Automated vector sets.", icon: "⬢" },
+                  { title: "Secure Vault", desc: "End-to-end encryption.", icon: "⊛" }
+                ].map((feat, i) => (
+                  <div key={feat.title} className="card" style={{ padding: '24px', textAlign: 'center', background: 'rgba(13, 18, 32, 0.25)', animation: `slideUp 0.8s cubic-bezier(0.2, 0.8, 0.2, 1) ${0.2 + i * 0.1}s both` }}>
+                    <div style={{ color: 'var(--primary-500)', fontSize: '20px', marginBottom: '12px' }}>{feat.icon}</div>
+                    <strong style={{ display: 'block', fontSize: '14px', color: 'var(--text-main)', marginBottom: '4px', textTransform: 'uppercase', letterSpacing: '1px' }}>{feat.title}</strong>
+                    <span style={{ fontSize: '12px', color: 'var(--text-muted)' }}>{feat.desc}</span>
+                  </div>
+                ))}
+             </div>
+
+             {/* System Pulse Footer */}
+             <div style={{ position: 'absolute', bottom: '24px', width: '100%', display: 'flex', justifyContent: 'center', gap: '32px', opacity: 0.5 }}>
+                <div style={{ fontSize: '11px', textTransform: 'uppercase', letterSpacing: '2px', display: 'flex', alignItems: 'center', gap: '8px' }}>
+                   <span style={{ width: '4px', height: '4px', background: 'var(--success)', borderRadius: '50%', animation: 'pulse 1.5s infinite' }} />
+                   Neural Nodes: 124 Active
+                </div>
+                <div style={{ fontSize: '11px', textTransform: 'uppercase', letterSpacing: '2px' }}>Encryption: SHA-2048</div>
+                <div style={{ fontSize: '11px', textTransform: 'uppercase', letterSpacing: '2px' }}>Latency: 14ms</div>
+             </div>
           </div>
         ) : (
+
           <div className="grid-12" style={{ alignItems: 'start' }}>
             
             {/* LEFT 3 (Chat & Status) */}
