@@ -3,6 +3,7 @@ import { Navigate, Route, Routes, useNavigate } from "react-router-dom";
 import { getToken, setToken, clearToken, apiMe } from "./api.js";
 import Login from "./login.jsx";
 import DataPulse from "./datapulse_dashboard.jsx";
+import ErrorBoundary from "./ErrorBoundary.jsx";
 
 /**
  * App.jsx
@@ -86,7 +87,11 @@ export default function App() {
         path="/"
         element={
           authState.user
-            ? <DataPulse user={authState.user} onLogout={handleLogout} />
+            ? (
+              <ErrorBoundary>
+                <DataPulse user={authState.user} onLogout={handleLogout} />
+              </ErrorBoundary>
+            )
             : <Navigate to="/login" replace />
         }
       />
