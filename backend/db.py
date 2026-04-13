@@ -5,6 +5,7 @@ import os
 import ssl
 from contextlib import asynccontextmanager
 from datetime import datetime
+from urllib.parse import urlparse, urlunparse
 
 from dotenv import load_dotenv
 
@@ -21,6 +22,41 @@ from sqlalchemy.orm import DeclarativeBase, relationship
 logger = logging.getLogger(__name__)
 
 
+def _running_in_container() -> bool:
+    return (
+        os.getenv("RUNNING_IN_DOCKER", "false").lower() == "true"
+        or os.path.exists("/.dockerenv")
+    )
+
+
+def _rewrite_local_dev_db_host(database_url: str) -> str:
+    """Map Docker-compose DB hostname to localhost for non-container dev runs."""
+    app_env = os.getenv("APP_ENV", "production")
+    if app_env != "development" or _running_in_container():
+        return database_url
+
+    parsed = urlparse(database_url)
+    if parsed.hostname != "db":
+        return database_url
+
+    netloc = parsed.netloc
+    if "@" in netloc:
+        auth, host_port = netloc.rsplit("@", 1)
+        if host_port.startswith("db:"):
+            netloc = f"{auth}@localhost:{host_port.split(':', 1)[1]}"
+        elif host_port == "db":
+            netloc = f"{auth}@localhost"
+    else:
+        if netloc.startswith("db:"):
+            netloc = f"localhost:{netloc.split(':', 1)[1]}"
+        elif netloc == "db":
+            netloc = "localhost"
+
+    rewritten = urlunparse(parsed._replace(netloc=netloc))
+    logger.warning("DATABASE_URL host 'db' detected in local dev; using localhost instead")
+    return rewritten
+
+
 
 DATABASE_URL = os.getenv(
     "DATABASE_URL",
@@ -31,6 +67,8 @@ DATABASE_URL = os.getenv(
 if DATABASE_URL.startswith("postgresql://") or DATABASE_URL.startswith("postgres://"):
     DATABASE_URL = DATABASE_URL.replace("postgres://", "postgresql+asyncpg://", 1)
     DATABASE_URL = DATABASE_URL.replace("postgresql://", "postgresql+asyncpg://", 1)
+
+DATABASE_URL = _rewrite_local_dev_db_host(DATABASE_URL)
 
 
 _db_ssl = os.getenv("DB_SSL", "false").lower() == "true"
