@@ -347,7 +347,7 @@ export default function DataPulse({ user, onLogout }) {
         </div>
       </div>
 
-      <div className="container" style={{ flex: 1, display: 'flex', flexDirection: 'column', position: 'relative', zIndex: 1, paddingBottom: '32px', minHeight: 'calc(100vh - 80px)' }}>
+      <div className="container" style={{ flex: 1, display: 'flex', flexDirection: 'column', position: 'relative', zIndex: 1, paddingBottom: '32px', minHeight: 'calc(100vh - 80px)', width: '100%' }}>
         {/* MAIN SECTION */}
         {phase === "upload" ? (
           <div className="animate-fade-in" style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', textAlign: 'center', gap: '48px', padding: '40px 0' }}>
@@ -358,10 +358,13 @@ export default function DataPulse({ user, onLogout }) {
                    <span style={{ width: '6px', height: '6px', background: 'var(--primary-500)', borderRadius: '50%', boxShadow: '0 0 10px var(--primary-500)' }} />
                    Neural Uplink Established
                 </div>
-                <h1 style={{ fontSize: '56px', marginBottom: '16px', letterSpacing: '-0.05em', lineHeight: 1 }}>
-                   Welcome, <span style={{ color: 'var(--primary-500)', textShadow: '0 0 20px rgba(99,102,241,0.4)' }}>{user?.name || user?.email?.split('@')[0] || "Analyst"}</span>
+                <h1 style={{ fontSize: '42px', marginBottom: '4px', letterSpacing: '-0.05em', lineHeight: 1, opacity: 0.9 }}>
+                   Welcome
                 </h1>
-                <p style={{ fontSize: '18px', color: 'var(--text-muted)', maxWidth: '600px', margin: '0 auto', lineHeight: 1.6 }}>Ready to architect your data? Connect an array to initialize multi-agent analysis.</p>
+                <h2 style={{ fontSize: '52px', color: 'var(--primary-500)', textShadow: '0 0 30px rgba(99,102,241,0.4)', marginBottom: '16px', marginTop: '0' }}>
+                   {user?.name || user?.email?.split('@')[0] || "Analyst"}
+                </h2>
+                <p style={{ fontSize: '18px', color: 'var(--text-muted)', maxWidth: '600px', margin: '0 auto', lineHeight: 1.6 }}>Ready to architect your data? Connect a datasheet to initialize multi-agent analysis.</p>
              </div>
 
              {/* Upload Box with Scanner Effect */}
@@ -386,7 +389,7 @@ export default function DataPulse({ user, onLogout }) {
                   <div style={{ position: 'absolute', top: 0, left: 0, right: 0, height: '2px', background: 'linear-gradient(90deg, transparent, var(--primary-500), transparent)', opacity: 0.3, animation: 'scannerSweep 3s infinite linear' }} />
                   
                   <div style={{ fontSize: '56px', color: 'var(--primary-500)', marginBottom: '24px', textShadow: '0 0 25px rgba(99,102,241,0.6)', transform: isDragOver ? 'scale(1.1)' : 'scale(1)', transition: 'transform 0.3s ease' }}>↑</div>
-                  <strong style={{ color: 'var(--text-main)', marginBottom: '8px', fontSize: '24px', fontFamily: 'Syne, sans-serif' }}>Select Data Array</strong>
+                  <strong style={{ color: 'var(--text-main)', marginBottom: '8px', fontSize: '24px', fontFamily: 'Syne, sans-serif' }}>Select Data Engine</strong>
                   <p className="caption" style={{ color: 'var(--text-muted)', fontSize: '15px' }}>Drag (.csv, .xlsx) anywhere to initialize</p>
                   <input ref={fileRef} type="file" accept=".csv,.xlsx,.xls" style={{ display: "none" }} onChange={(e) => onFile(e.target.files[0])} />
                 </div>
@@ -418,8 +421,7 @@ export default function DataPulse({ user, onLogout }) {
              </div>
           </div>
         ) : (
-
-          <div className="grid-12" style={{ alignItems: 'start' }}>
+          <div className="grid-12 animate-fade-in" style={{ alignItems: 'start', width: '100%', flex: 1 }}>
             
             {/* LEFT 3 (Chat & Status) */}
             <div className="col-3 flex-col gap-24">
@@ -455,7 +457,24 @@ export default function DataPulse({ user, onLogout }) {
                      {chatMsgs.length === 0 ? (
                        <div style={{ margin: 'auto', textAlign: 'center', fontSize: '13px', color: 'var(--text-muted)' }}>Establish a query connection with your data.</div>
                      ) : chatMsgs.map((m, i) => (
-                       <div key={i} style={{ alignSelf: m.role === 'user' ? 'flex-end' : 'flex-start', background: m.role === 'user' ? 'rgba(99,102,241,0.15)' : 'var(--bg-card)', color: m.role === 'user' ? '#818cf8' : 'var(--text-main)', padding: '10px 16px', borderRadius: '8px', fontSize: '13px', maxWidth: '85%', border: m.role === 'user' ? '1px solid rgba(99,102,241,0.3)' : '1px solid var(--border-subtle)', boxShadow: m.role === 'user' ? '0 0 10px rgba(99,102,241,0.1)' : 'none' }}>
+                       <div 
+                        key={i} 
+                        style={{ 
+                          alignSelf: m.role === 'user' ? 'flex-end' : 'flex-start', 
+                          background: m.role === 'user' 
+                            ? 'linear-gradient(135deg, #6366f1 0%, #4f46e5 100%)' 
+                            : 'rgba(30, 41, 59, 0.5)', 
+                          color: m.role === 'user' ? '#FFFFFF' : 'var(--text-main)', 
+                          padding: '12px 18px', 
+                          borderRadius: m.role === 'user' ? '18px 18px 4px 18px' : '18px 18px 18px 4px', 
+                          fontSize: '13px', 
+                          maxWidth: '85%', 
+                          border: m.role === 'user' ? '1px solid rgba(255,255,255,0.1)' : '1px solid rgba(99,102,241,0.2)', 
+                          boxShadow: m.role === 'user' ? '0 4px 15px rgba(99,102,241,0.3)' : '0 4px 15px rgba(0,0,0,0.2)',
+                          lineHeight: 1.5,
+                          marginBottom: '4px'
+                        }}
+                       >
                          {m.text}
                        </div>
                      ))}
@@ -486,12 +505,12 @@ export default function DataPulse({ user, onLogout }) {
                     <p style={{ fontSize: '14px', color: 'var(--primary-500)', fontFamily: "'Outfit', monospace" }}>{agentLog[agentLog.length - 1]?.msg || "Extracting signatures..."}</p>
                 </div>
               ) : !result ? (
-                 <div className="card animate-fade-in" style={{ minHeight: '500px', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                   <p style={{ color: 'var(--text-muted)' }}>No analysis data retrieved. Please retry upload.</p>
+                 <div className="card animate-fade-in" style={{ minHeight: '500px', display: 'flex', alignItems: 'center', justifyContent: 'center', width: '100%' }}>
+                   <p style={{ color: 'var(--text-muted)' }}>Synchronizing data array... Standby.</p>
                  </div>
               ) : (
 
-              <div className="card flex-col gap-24 animate-fade-in">
+              <div className="panel-flat flex-col gap-24 animate-fade-in">
                 <div style={{ display: 'flex', borderBottom: '1px solid var(--border-subtle)', gap: '16px', paddingBottom: '12px' }}>
                   {PRIMARY_TABS.map(t => <button key={t} onClick={() => setTab(t)} style={{ background: 'none', border: 'none', color: tab === t ? 'var(--text-main)' : 'var(--text-muted)', fontWeight: tab === t ? 600 : 500, fontSize: '14px', cursor: 'pointer', borderBottom: tab === t ? '2px solid var(--primary-500)' : 'none', paddingBottom: '12px', marginBottom: '-13px', textTransform: 'capitalize', letterSpacing: '0.05em' }}>{t}</button>)}
                   <div style={{ width: '24px' }} />

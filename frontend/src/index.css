@@ -162,6 +162,7 @@ p, body { font-size: 15px; font-weight: 400; color: var(--text-muted); }
   border-color: var(--primary-500);
   box-shadow: 0 0 0 2px rgba(99,102,241,0.2), var(--shadow-glow);
   background-color: #ffffff !important;
+  color: #0d1220 !important;
 }
 
 /* Card */
@@ -187,6 +188,17 @@ p, body { font-size: 15px; font-weight: 400; color: var(--text-muted); }
   border-color: var(--primary-500);
   transform: translateY(-4px);
   box-shadow: var(--shadow-glow), 0 25px 60px rgba(0,0,0,0.7);
+}
+
+/* Static Panel (No Hover) */
+.panel-flat {
+  padding: 28px;
+  border-radius: 14px;
+  background-color: var(--bg-card);
+  border: 1px solid var(--border-subtle);
+  box-shadow: var(--shadow-card);
+  position: relative;
+  overflow: hidden;
 }
 
 /* Special Components */
