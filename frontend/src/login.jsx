@@ -55,19 +55,15 @@ function GoogleAuthComponent({ onLogin, setError, setLoading, setTab }) {
         <span style={{ fontSize: '13px', color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>or</span>
         <div style={{ flex: 1, height: '1px', backgroundColor: 'var(--border-subtle)' }} />
       </div>
-      <div style={{ 
-        display: "flex", 
-        justifyContent: "center", 
-        width: "100%", 
-        marginTop: '20px',
-        marginBottom: '10px'
-      }}>
+      <div style={{ marginBottom: '24px', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '16px' }}>
+        <span style={{ fontSize: '11px', fontWeight: 800, color: 'var(--text-muted)', letterSpacing: '0.2em', textTransform: 'uppercase' }}>Secure Authentication Protocols</span>
         <div style={{ 
           borderRadius: "9px", 
-          boxShadow: '0 0 25px rgba(99,102,241,0.5)',
-          border: '1px solid rgba(99,102,241,0.3)',
+          boxShadow: '0 0 35px rgba(99,102,241,0.6)',
+          border: '1px solid rgba(99,102,241,0.4)',
           padding: '2px', 
-          backgroundColor: '#ffffff'
+          backgroundColor: '#ffffff',
+          transition: 'transform 0.2s ease, box-shadow 0.2s ease'
         }}>
           <GoogleLogin
             onSuccess={async (credentialResponse) => {

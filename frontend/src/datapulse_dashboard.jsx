@@ -20,7 +20,7 @@ const PLOTLY_DARK_LAYOUT = {
   margin: { l: 40, r: 20, t: 40, b: 30 },
 };
 
-const PLOTLY_CONFIG = { responsive: true, displayModeBar: "hover", displaylogo: false, modeBarButtonsToRemove: ["lasso2d", "select2d", "toggleSpikelines"] };
+const PLOTLY_CONFIG = { responsive: true, displayModeBar: false, displaylogo: false, modeBarButtonsToRemove: ["lasso2d", "select2d", "toggleSpikelines"] };
 
 function ChartPanel({ result }) {
   const charts = result?.charts || {};
@@ -39,13 +39,17 @@ function ChartPanel({ result }) {
             layout={{
               ...PLOTLY_DARK_LAYOUT,
               ...(fig.layout || {}),
-              paper_bgcolor: PLOTLY_DARK_LAYOUT.paper_bgcolor,
-              plot_bgcolor: PLOTLY_DARK_LAYOUT.plot_bgcolor,
-              font: { ...PLOTLY_DARK_LAYOUT.font, ...(fig.layout?.font || {}) },
-              height: 380,
+              title: { 
+                ...(fig.layout?.title || {}), 
+                font: { color: "#FFFFFF", size: 16, weight: 'bold' } 
+              },
+              paper_bgcolor: "rgba(0,0,0,0)",
+              plot_bgcolor: "rgba(0,0,0,0)",
+              font: { color: "#FFFFFF", family: "'Inter', sans-serif" },
+              height: 300,
             }}
             config={PLOTLY_CONFIG}
-            style={{ width: "100%", height: "380px" }}
+            style={{ width: "100%", height: "300px" }}
             useResizeHandler
           />
         </div>
@@ -146,6 +150,7 @@ export default function DataPulse({ user, onLogout }) {
       clearStageTimers();
       log(`Core Failure: ${err.message}`);
       setAnalysisError(err.message || "Analysis failed");
+      setPhase("upload"); // Revert to upload state so user can retry
     }
   }, []);
 
@@ -319,7 +324,8 @@ export default function DataPulse({ user, onLogout }) {
 
   return (
     <div style={{ minHeight: '100vh', display: 'flex', flexDirection: 'column', position: 'relative' }}>
-      <ParticleBackground noExclude />
+      <ParticleBackground noExclude={phase === "done"} />
+
 
 
       {/* NAVBAR */}
@@ -346,89 +352,102 @@ export default function DataPulse({ user, onLogout }) {
         <div className="mb-32" style={{ visibility: 'hidden', height: '12px' }}></div>
 
 
-        {/* MAIN SECTION (12-column grid) */}
-        <div className="grid-12" style={{ alignItems: 'start' }}>
-          
-          {/* LEFT 3 (Upload & Chat) */}
-          <div className="col-3 flex-col gap-24">
-            
-            {/* Upload Box */}
-            <div
+        {/* MAIN SECTION */}
+        {phase === "upload" ? (
+          <div className="animate-fade-in" style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', textAlign: 'center', gap: '32px' }}>
+             <div style={{ maxWidth: '600px', marginBottom: '12px' }}>
+                <h1 style={{ fontSize: '48px', marginBottom: '16px', letterSpacing: '-0.04em' }}>Unleash your data's <span style={{ color: 'var(--primary-500)', textShadow: '0 0 20px rgba(99,102,241,0.4)' }}>Potential</span></h1>
+                <p style={{ fontSize: '18px', color: 'var(--text-muted)', lineHeight: 1.6 }}>Upload your CSV or Excel files to begin a deep neural analysis. Our agents will architect, analyze, and visualize your insights in real-time.</p>
+             </div>
+
+             <div
               className={`upload-box ${isDragOver ? 'drag-over' : ''}`}
               onDrop={onDrop}
               onDragOver={(e) => e.preventDefault()}
               onDragEnter={onDragEnter}
               onDragLeave={onDragLeave}
               onClick={() => fileRef.current.click()}
-              style={{ borderColor: isDragOver ? 'var(--primary-500)' : 'var(--border-subtle)' }}
+              style={{ width: '100%', maxWidth: '500px', padding: '64px', borderColor: isDragOver ? 'var(--primary-500)' : 'var(--border-subtle)', background: 'rgba(13, 18, 32, 0.4)', backdropFilter: 'blur(8px)' }}
             >
-              <div style={{ fontSize: '32px', color: 'var(--primary-500)', marginBottom: '16px', textShadow: '0 0 15px rgba(99,102,241,0.5)' }}>↑</div>
-              <strong style={{ color: 'var(--text-main)', marginBottom: '8px', fontSize: '18px' }}>Select File</strong>
-              <p className="caption" style={{ color: 'var(--text-muted)' }}>Drag (.csv, .xlsx) anywhere to begin</p>
+              <div style={{ fontSize: '48px', color: 'var(--primary-500)', marginBottom: '20px', textShadow: '0 0 20px rgba(99,102,241,0.6)' }}>↑</div>
+              <strong style={{ color: 'var(--text-main)', marginBottom: '8px', fontSize: '24px', fontFamily: 'Syne, sans-serif' }}>Select Data Array</strong>
+              <p className="caption" style={{ color: 'var(--text-muted)', fontSize: '15px' }}>Drag (.csv, .xlsx) anywhere to initialize</p>
               <input ref={fileRef} type="file" accept=".csv,.xlsx,.xls" style={{ display: "none" }} onChange={(e) => onFile(e.target.files[0])} />
             </div>
-
-            {/* Status / File Info */}
-            {fileName && (
-              <div className="card" style={{ padding: '20px' }}>
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
-                    <div style={{ padding: '8px', background: 'rgba(99,102,241,0.1)', borderRadius: '8px', fontSize: '14px', border: '1px solid rgba(99,102,241,0.2)', color: 'var(--primary-500)' }}>📄</div>
-                    <strong style={{ fontSize: '14px', color: 'var(--text-main)' }}>{fileName}</strong>
-                  </div>
-                  {phase === "done" && <span className="data-pill success">Verified ⬢</span>}
-                </div>
-                
-                {phase === "analyzing" && (
-                  <div className="flex-col gap-8">
-                    <div className="progress-container">
-                      <div className="progress-bar animate-pulse" style={{ width: result ? '100%' : '65%', background: analysisError ? 'var(--error)' : 'var(--primary-500)' }} />
-                    </div>
-                    <div style={{ fontSize: '12px', color: 'var(--primary-500)', fontFamily: "'Outfit', monospace", textTransform: 'uppercase' }}>
-                      {analysisError ? <span className="text-error">{analysisError}</span> : agentLog[agentLog.length - 1]?.msg || "Orchestrating..."}
-                    </div>
-                  </div>
-                )}
-              </div>
-            )}
-
-            {/* Chat Box (only if done) */}
-            {phase === "done" && result && (
-              <div className="card flex-col gap-16" style={{ padding: '20px' }}>
-                <strong style={{ fontSize: '14px', color: 'var(--text-main)', fontFamily: 'Syne, sans-serif' }}>Analyst Advisor</strong>
-                <div style={{ height: "240px", overflowY: "auto", display: "flex", flexDirection: "column", gap: "12px", background: 'var(--bg-input)', padding: '16px', borderRadius: '12px', border: '1px solid var(--border-subtle)' }}>
-                   {chatMsgs.length === 0 ? (
-                     <div style={{ margin: 'auto', textAlign: 'center', fontSize: '13px', color: 'var(--text-muted)' }}>Establish a query connection with your data.</div>
-                   ) : chatMsgs.map((m, i) => (
-                     <div key={i} style={{ alignSelf: m.role === 'user' ? 'flex-end' : 'flex-start', background: m.role === 'user' ? 'rgba(99,102,241,0.15)' : 'var(--bg-card)', color: m.role === 'user' ? '#818cf8' : 'var(--text-main)', padding: '10px 16px', borderRadius: '8px', fontSize: '13px', maxWidth: '85%', border: m.role === 'user' ? '1px solid rgba(99,102,241,0.3)' : '1px solid var(--border-subtle)', boxShadow: m.role === 'user' ? '0 0 10px rgba(99,102,241,0.1)' : 'none' }}>
-                       {m.text}
-                     </div>
-                   ))}
-                   {chatLoading && <div style={{ fontSize: '13px', color: 'var(--primary-500)', fontFamily: "'Outfit', monospace" }}>Synthesizing...</div>}
-                   <div ref={chatEndRef} />
-                </div>
-                <div style={{ display: 'flex', gap: '12px' }}>
-                  <input className="input-field" value={chatInput} onChange={e => setChatInput(e.target.value)} onKeyDown={e => e.key === 'Enter' && sendChat()} style={{ flex: 1, fontSize: '14px' }} placeholder="Query data..." />
-                  <button className="btn-primary" onClick={sendChat} disabled={chatLoading} style={{ width: '44px', padding: 0 }}>»</button>
-                </div>
-              </div>
-            )}
-
           </div>
+        ) : (
+          <div className="grid-12" style={{ alignItems: 'start' }}>
+            
+            {/* LEFT 3 (Chat & Status) */}
+            <div className="col-3 flex-col gap-24">
+               {/* File Info */}
+               {fileName && (
+                <div className="card" style={{ padding: '20px' }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+                      <div style={{ padding: '8px', background: 'rgba(99,102,241,0.1)', borderRadius: '8px', fontSize: '14px', border: '1px solid rgba(99,102,241,0.2)', color: 'var(--primary-500)' }}>📄</div>
+                      <strong style={{ fontSize: '14px', color: 'var(--text-main)' }}>{fileName}</strong>
+                    </div>
+                    {phase === "done" && <span className="data-pill success">Verified ⬢</span>}
+                  </div>
+                  
+                  {phase === "analyzing" && (
+                    <div className="flex-col gap-8">
+                      <div className="progress-container">
+                        <div className="progress-bar animate-pulse" style={{ width: result ? '100%' : '65%', background: analysisError ? 'var(--error)' : 'var(--primary-500)' }} />
+                      </div>
+                      <div style={{ fontSize: '12px', color: 'var(--primary-500)', fontFamily: "'Outfit', monospace", textTransform: 'uppercase' }}>
+                        {analysisError ? <span className="text-error">{analysisError}</span> : agentLog[agentLog.length - 1]?.msg || "Orchestrating..."}
+                      </div>
+                    </div>
+                  )}
+                </div>
+              )}
 
-          {/* RIGHT 9 (Results Card) */}
-          <div className="col-9">
-            {phase === "upload" || phase === "analyzing" ? (
-              <div style={{ minHeight: '440px' }} className="animate-fade-in">
-                 {phase === "upload" ? null : (
-                   <>
+              {/* Chat Box (only if done) */}
+              {phase === "done" && result && (
+                <div className="card flex-col gap-16" style={{ padding: '20px' }}>
+                  <strong style={{ fontSize: '14px', color: 'var(--text-main)', fontFamily: 'Syne, sans-serif' }}>Analyst Advisor</strong>
+                  <div style={{ height: "300px", overflowY: "auto", display: "flex", flexDirection: "column", gap: "12px", background: 'var(--bg-input)', padding: '16px', borderRadius: '12px', border: '1px solid var(--border-subtle)' }}>
+                     {chatMsgs.length === 0 ? (
+                       <div style={{ margin: 'auto', textAlign: 'center', fontSize: '13px', color: 'var(--text-muted)' }}>Establish a query connection with your data.</div>
+                     ) : chatMsgs.map((m, i) => (
+                       <div key={i} style={{ alignSelf: m.role === 'user' ? 'flex-end' : 'flex-start', background: m.role === 'user' ? 'rgba(99,102,241,0.15)' : 'var(--bg-card)', color: m.role === 'user' ? '#818cf8' : 'var(--text-main)', padding: '10px 16px', borderRadius: '8px', fontSize: '13px', maxWidth: '85%', border: m.role === 'user' ? '1px solid rgba(99,102,241,0.3)' : '1px solid var(--border-subtle)', boxShadow: m.role === 'user' ? '0 0 10px rgba(99,102,241,0.1)' : 'none' }}>
+                         {m.text}
+                       </div>
+                     ))}
+                     {chatLoading && <div style={{ fontSize: '13px', color: 'var(--primary-500)', fontFamily: "'Outfit', monospace" }}>Synthesizing...</div>}
+                     <div ref={chatEndRef} />
+                  </div>
+                  <div style={{ display: 'flex', gap: '12px' }}>
+                    <input className="input-field" value={chatInput} onChange={e => setChatInput(e.target.value)} onKeyDown={e => e.key === 'Enter' && sendChat()} style={{ flex: 1, fontSize: '14px' }} placeholder="Query data..." />
+                    <button className="btn-primary" onClick={sendChat} disabled={chatLoading} style={{ width: '44px', padding: 0 }}>»</button>
+                  </div>
+                </div>
+              )}
+            </div>
+
+            {/* RIGHT (Results / Loading) */}
+            <div className="col-9">
+              {analysisError ? (
+                <div className="card flex-col align-center justify-center animate-fade-in" style={{ minHeight: '500px', textAlign: 'center', border: '1px solid rgba(239,68,68,0.2)' }}>
+                  <div style={{ fontSize: '48px', color: 'var(--error)', marginBottom: '16px' }}>⚠</div>
+                  <h3 style={{ color: 'var(--text-main)', marginBottom: '8px' }}>Analysis Protocol Interrupted</h3>
+                  <p style={{ color: 'var(--error)', fontSize: '14px', maxWidth: '400px', marginBottom: '24px' }}>{analysisError}</p>
+                  <button className="btn-primary" onClick={() => { setPhase("upload"); setAnalysisError(""); }}>Reconnect Array</button>
+                </div>
+              ) : phase === "analyzing" ? (
+                <div style={{ minHeight: '500px', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center' }} className="animate-fade-in">
                     <div style={{ fontSize: '40px', color: 'var(--primary-500)', marginBottom: '24px', animation: 'spin 4s linear infinite', textShadow: '0 0 20px rgba(99,102,241,0.8)' }}>⊛</div>
                     <strong style={{ fontSize: '18px', color: 'var(--text-main)', marginBottom: '8px', fontFamily: "'Syne', sans-serif" }}>Processing Array...</strong>
                     <p style={{ fontSize: '14px', color: 'var(--primary-500)', fontFamily: "'Outfit', monospace" }}>{agentLog[agentLog.length - 1]?.msg || "Extracting signatures..."}</p>
-                   </>
-                 )}
-              </div>
-            ) : (
+                </div>
+              ) : !result ? (
+                 <div className="card animate-fade-in" style={{ minHeight: '500px', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                   <p style={{ color: 'var(--text-muted)' }}>No analysis data retrieved. Please retry upload.</p>
+                 </div>
+              ) : (
+
               <div className="card flex-col gap-24 animate-fade-in">
                 <div style={{ display: 'flex', borderBottom: '1px solid var(--border-subtle)', gap: '16px', paddingBottom: '12px' }}>
                   {PRIMARY_TABS.map(t => <button key={t} onClick={() => setTab(t)} style={{ background: 'none', border: 'none', color: tab === t ? 'var(--text-main)' : 'var(--text-muted)', fontWeight: tab === t ? 600 : 500, fontSize: '14px', cursor: 'pointer', borderBottom: tab === t ? '2px solid var(--primary-500)' : 'none', paddingBottom: '12px', marginBottom: '-13px', textTransform: 'capitalize', letterSpacing: '0.05em' }}>{t}</button>)}
@@ -526,7 +545,8 @@ export default function DataPulse({ user, onLogout }) {
             )}
           </div>
 
-        </div>
+          </div>
+        )}
       </div>
       
       {/* HISTORY SIDEBAR OVERLAY */}
