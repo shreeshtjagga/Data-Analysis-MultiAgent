@@ -11,10 +11,10 @@ const PALETTE = ["#6366f1", "#10b981", "#f59e0b", "#06b6d4", "#ef4444", "#a855f7
 const PLOTLY_DARK_LAYOUT = {
   paper_bgcolor: "rgba(0,0,0,0)",
   plot_bgcolor: "rgba(0,0,0,0)",
-  font: { color: "#94A3B8", family: "'Inter', sans-serif", size: 12 },
-  title: { font: { color: "#F1F5F9", size: 14 } },
-  xaxis: { gridcolor: "rgba(99,102,241,0.1)", zerolinecolor: "rgba(99,102,241,0.2)" },
-  yaxis: { gridcolor: "rgba(99,102,241,0.1)", zerolinecolor: "rgba(99,102,241,0.2)" },
+  font: { color: "#FFFFFF", family: "'Inter', sans-serif", size: 12 },
+  title: { font: { color: "#FFFFFF", size: 14 } },
+  xaxis: { gridcolor: "rgba(99,102,241,0.1)", zerolinecolor: "rgba(99,102,241,0.2)", tickfont: { color: "#FFFFFF" } },
+  yaxis: { gridcolor: "rgba(99,102,241,0.1)", zerolinecolor: "rgba(99,102,241,0.2)", tickfont: { color: "#FFFFFF" } },
   colorway: PALETTE,
   autosize: true,
   margin: { l: 40, r: 20, t: 40, b: 30 },
@@ -31,9 +31,9 @@ function ChartPanel({ result }) {
   }
 
   return (
-    <div style={{ display: "flex", flexDirection: "column", gap: "24px" }}>
+    <div style={{ display: "flex", flexDirection: "column", gap: "32px", paddingBottom: "40px" }}>
       {entries.map(([key, fig]) => (
-        <div key={key} className="card" style={{ padding: '16px' }}>
+        <div key={key} className="card" style={{ padding: '24px', backgroundColor: 'rgba(13, 18, 32, 0.7)', backdropFilter: 'blur(8px)' }}>
           <Plot
             data={fig.data || []}
             layout={{
@@ -55,7 +55,7 @@ function ChartPanel({ result }) {
 }
 
 const PRIMARY_TABS = ["overview", "charts", "insights"];
-const SECONDARY_TABS = ["statistics", "quality", "chat"];
+const SECONDARY_TABS = ["statistics", "quality"];
 const MAX_CHAT_MESSAGES = 40;
 
 export default function DataPulse({ user, onLogout }) {
@@ -82,6 +82,10 @@ export default function DataPulse({ user, onLogout }) {
   const chatEndRef = useRef(null);
   const dragCounterRef = useRef(0);
   const stageTimersRef = useRef([]);
+
+  useEffect(() => {
+    loadHistory();
+  }, []);
 
   const log = (msg) => setAgentLog((p) => [...p, { time: new Date().toLocaleTimeString(), msg }]);
 
@@ -163,10 +167,93 @@ export default function DataPulse({ user, onLogout }) {
     if (dragCounterRef.current === 0) setIsDragOver(false);
   }, []);
 
-  const loadHistory = async () => { /* no-op for visual changes */ };
-  const toggleHistory = async () => { /* no-op for visual changes */ };
-  const deleteItem = async (id) => { /* no-op */ };
-  const loadHistoryItem = async (item) => { /* no-op */ };
+  const loadHistory = async () => {
+    setHistoryLoading(true);
+    try {
+      const data = await apiHistory();
+      setHistory(data);
+    } catch (err) {
+      setHistoryError(err.message);
+    } finally {
+      setHistoryLoading(false);
+    }
+  };
+
+  const toggleHistory = async () => {
+    if (!showHistory) await loadHistory();
+    setShowHistory(!showHistory);
+  };
+
+  const deleteItem = async (id) => {
+    setDeleteLoading(id);
+    try {
+      await apiDeleteAnalysis(id);
+      setHistory(p => p.filter(x => x.analysis_id !== id));
+    } catch (err) {
+      alert("Failed to delete record");
+    } finally {
+      setDeleteLoading(null);
+    }
+  };
+
+  const loadHistoryItem = async (item) => {
+    setHistorySelectLoading(item.analysis_id);
+    try {
+      const data = await apiHistoryAnalysis(item.analysis_id);
+      setResult(data);
+      setFileName(item.file_name);
+      setPhase("done");
+      setShowHistory(false);
+      setTab("overview");
+    } catch (err) {
+      alert("Failed to restore session");
+    } finally {
+      setHistorySelectLoading(null);
+    }
+  };
+
+  const exportPDF = () => {
+    if (!result) return;
+    const doc = new jsPDF();
+    doc.setFont("helvetica", "bold");
+    doc.setFontSize(22);
+    doc.setTextColor(99, 102, 241);
+    doc.text("DATA PULSE — Analysis Report", 20, 25);
+    
+    doc.setFontSize(11);
+    doc.setTextColor(148, 163, 184);
+    doc.setFont("helvetica", "normal");
+    doc.text(`Origin: ${fileName}`, 20, 35);
+    doc.text(`Generated: ${new Date().toLocaleString()}`, 20, 42);
+
+    let y = 60;
+    if (insights?.headline) {
+      doc.setFont("helvetica", "bold");
+      doc.setTextColor(15, 23, 42); // Dark for body readability
+      doc.text("EXECUTIVE SUMMARY", 20, y);
+      y += 10;
+      doc.setFont("helvetica", "normal");
+      const headTxt = String(insights.headline);
+      const lines = doc.splitTextToSize(headTxt, 170);
+      doc.text(lines, 20, y);
+      y += lines.length * 7 + 15;
+    }
+
+    if (insights?.findings) {
+      doc.setFont("helvetica", "bold");
+      doc.text("DETECTED VECTORS (FINDINGS)", 20, y);
+      y += 10;
+      doc.setFont("helvetica", "normal");
+      insights.findings.forEach(f => {
+        const lines = doc.splitTextToSize(`• ${f}`, 170);
+        if (y > 270) { doc.addPage(); y = 20; }
+        doc.text(lines, 20, y);
+        y += lines.length * 7 + 5;
+      });
+    }
+
+    doc.save(`DataPulse_Report_${new Date().getTime()}.pdf`);
+  };
 
   const chatContext = useMemo(() => {
     if (!result) return null;
@@ -232,7 +319,8 @@ export default function DataPulse({ user, onLogout }) {
 
   return (
     <div style={{ minHeight: '100vh', display: 'flex', flexDirection: 'column', position: 'relative' }}>
-      <ParticleBackground />
+      <ParticleBackground noExclude />
+
 
       {/* NAVBAR */}
       <div style={{ background: 'rgba(13, 18, 32, 0.65)', backdropFilter: 'blur(12px)', padding: '16px 48px', borderBottom: '1px solid var(--border-subtle)', display: 'flex', justifyContent: 'space-between', alignItems: 'center', position: 'sticky', top: 0, zIndex: 100 }}>
@@ -240,22 +328,29 @@ export default function DataPulse({ user, onLogout }) {
           <div style={{ color: 'var(--primary-500)', fontSize: '24px', textShadow: '0 0 10px rgba(99,102,241,0.4)' }}>◈</div>
           <strong style={{ fontSize: '18px', color: 'var(--text-main)', fontFamily: "'Syne', sans-serif" }}>DATA PULSE</strong>
         </div>
-        <div style={{ display: 'flex', alignItems: 'center', gap: '24px' }}>
-          <span style={{ fontSize: '13px', color: 'var(--text-muted)' }}>{user?.email}</span>
-          <button onClick={onLogout} style={{ background: 'none', border: 'none', color: 'var(--primary-500)', cursor: 'pointer', fontWeight: 600, fontSize: '13px', textTransform: 'uppercase', letterSpacing: '0.1em' }}>Logout</button>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '32px' }}>
+          <div style={{ display: 'flex', gap: '16px' }}>
+            <button onClick={toggleHistory} style={{ background: 'none', border: 'none', color: 'var(--text-main)', cursor: 'pointer', fontWeight: 600, fontSize: '13px', textTransform: 'uppercase', letterSpacing: '0.1em', opacity: 0.8 }}>History</button>
+            {result && <button onClick={exportPDF} style={{ background: 'none', border: 'none', color: 'var(--text-main)', cursor: 'pointer', fontWeight: 600, fontSize: '13px', textTransform: 'uppercase', letterSpacing: '0.1em', opacity: 0.8 }}>Download</button>}
+          </div>
+          <div style={{ width: '1px', height: '20px', background: 'var(--border-subtle)' }} />
+          <div style={{ display: 'flex', alignItems: 'center', gap: '20px' }}>
+            <span style={{ fontSize: '13px', color: 'var(--text-muted)', opacity: 0.7 }}>{user?.email}</span>
+            <button onClick={onLogout} style={{ background: 'none', border: 'none', color: 'var(--primary-500)', cursor: 'pointer', fontWeight: 700, fontSize: '13px', textTransform: 'uppercase', letterSpacing: '0.1em' }}>Logout</button>
+          </div>
         </div>
       </div>
 
-      <div className="container" style={{ flex: 1, display: 'flex', flexDirection: 'column', position: 'relative', zIndex: 1 }}>
+      <div className="container" style={{ flex: 1, display: 'flex', flexDirection: 'column', position: 'relative', zIndex: 1, paddingBottom: '64px' }}>
         {/* HERO SECTION REMOVED */}
-        <div className="mb-32" style={{ visibility: 'hidden', height: '20px' }}></div>
+        <div className="mb-32" style={{ visibility: 'hidden', height: '12px' }}></div>
 
 
         {/* MAIN SECTION (12-column grid) */}
         <div className="grid-12" style={{ alignItems: 'start' }}>
           
-          {/* LEFT 5 (Upload & Chat) */}
-          <div className="col-5 flex-col gap-24">
+          {/* LEFT 3 (Upload & Chat) */}
+          <div className="col-3 flex-col gap-24">
             
             {/* Upload Box */}
             <div
@@ -300,7 +395,7 @@ export default function DataPulse({ user, onLogout }) {
             {/* Chat Box (only if done) */}
             {phase === "done" && result && (
               <div className="card flex-col gap-16" style={{ padding: '20px' }}>
-                <strong style={{ fontSize: '14px', color: 'var(--text-main)', fontFamily: 'Syne, sans-serif' }}>Neural Chat Uplink</strong>
+                <strong style={{ fontSize: '14px', color: 'var(--text-main)', fontFamily: 'Syne, sans-serif' }}>Analyst Advisor</strong>
                 <div style={{ height: "240px", overflowY: "auto", display: "flex", flexDirection: "column", gap: "12px", background: 'var(--bg-input)', padding: '16px', borderRadius: '12px', border: '1px solid var(--border-subtle)' }}>
                    {chatMsgs.length === 0 ? (
                      <div style={{ margin: 'auto', textAlign: 'center', fontSize: '13px', color: 'var(--text-muted)' }}>Establish a query connection with your data.</div>
@@ -313,7 +408,7 @@ export default function DataPulse({ user, onLogout }) {
                    <div ref={chatEndRef} />
                 </div>
                 <div style={{ display: 'flex', gap: '12px' }}>
-                  <input className="input-field" value={chatInput} onChange={e => setChatInput(e.target.value)} onKeyDown={e => e.key === 'Enter' && sendChat()} style={{ flex: 1, fontSize: '14px' }} placeholder="Inject query..." />
+                  <input className="input-field" value={chatInput} onChange={e => setChatInput(e.target.value)} onKeyDown={e => e.key === 'Enter' && sendChat()} style={{ flex: 1, fontSize: '14px' }} placeholder="Query data..." />
                   <button className="btn-primary" onClick={sendChat} disabled={chatLoading} style={{ width: '44px', padding: 0 }}>»</button>
                 </div>
               </div>
@@ -321,8 +416,8 @@ export default function DataPulse({ user, onLogout }) {
 
           </div>
 
-          {/* RIGHT 7 (Results Card) */}
-          <div className="col-7">
+          {/* RIGHT 9 (Results Card) */}
+          <div className="col-9">
             {phase === "upload" || phase === "analyzing" ? (
               <div style={{ minHeight: '440px' }} className="animate-fade-in">
                  {phase === "upload" ? null : (
@@ -337,7 +432,7 @@ export default function DataPulse({ user, onLogout }) {
               <div className="card flex-col gap-24 animate-fade-in">
                 <div style={{ display: 'flex', borderBottom: '1px solid var(--border-subtle)', gap: '16px', paddingBottom: '12px' }}>
                   {PRIMARY_TABS.map(t => <button key={t} onClick={() => setTab(t)} style={{ background: 'none', border: 'none', color: tab === t ? 'var(--text-main)' : 'var(--text-muted)', fontWeight: tab === t ? 600 : 500, fontSize: '14px', cursor: 'pointer', borderBottom: tab === t ? '2px solid var(--primary-500)' : 'none', paddingBottom: '12px', marginBottom: '-13px', textTransform: 'capitalize', letterSpacing: '0.05em' }}>{t}</button>)}
-                  <div style={{ width: '1px', background: 'var(--border-subtle)', height: '20px' }} />
+                  <div style={{ width: '24px' }} />
                   {SECONDARY_TABS.map(t => <button key={t} onClick={() => setTab(t)} style={{ background: 'none', border: 'none', color: tab === t ? 'var(--text-main)' : 'var(--text-muted)', fontWeight: tab === t ? 600 : 500, fontSize: '14px', cursor: 'pointer', borderBottom: tab === t ? '2px solid var(--primary-500)' : 'none', paddingBottom: '12px', marginBottom: '-13px', textTransform: 'capitalize', letterSpacing: '0.05em' }}>{t}</button>)}
                 </div>
                 
@@ -433,6 +528,41 @@ export default function DataPulse({ user, onLogout }) {
 
         </div>
       </div>
+      
+      {/* HISTORY SIDEBAR OVERLAY */}
+    {showHistory && (
+      <div style={{ position: 'fixed', inset: 0, zIndex: 1000, display: 'flex', justifyContent: 'flex-end' }}>
+        <div style={{ position: 'absolute', inset: 0, background: 'rgba(0,0,0,0.5)', backdropFilter: 'blur(6px)' }} onClick={() => setShowHistory(false)} />
+        <div className="animate-fade-in" style={{ width: '400px', background: 'var(--bg-card)', borderLeft: '1px solid var(--border-subtle)', position: 'relative', zIndex: 1, padding: '32px', display: 'flex', flexDirection: 'column', gap: '24px', boxShadow: '-20px 0 50px rgba(0,0,0,0.5)' }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+             <h2 style={{ fontSize: '20px' }}>Analysis Vault</h2>
+             <button onClick={() => setShowHistory(false)} style={{ background: 'none', border: 'none', color: 'var(--text-muted)', cursor: 'pointer', fontSize: '20px' }}>✕</button>
+          </div>
+          
+          <div style={{ flex: 1, overflowY: 'auto' }} className="flex-col gap-12">
+            {historyLoading ? <div style={{ color: 'var(--primary-500)' }}>Syncing history...</div> : (
+              history.length === 0 ? <div style={{ color: 'var(--text-muted)' }}>No recorded sessions found.</div> : (
+                history.map(item => (
+                  <div key={item.analysis_id} className="card" style={{ padding: '16px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', cursor: 'pointer', border: historySelectLoading === item.analysis_id ? '1px solid var(--primary-500)' : '1px solid var(--border-subtle)' }} onClick={() => loadHistoryItem(item)}>
+                    <div className="flex-col gap-4">
+                      <strong style={{ fontSize: '14px', color: 'var(--text-main)', display: 'block' }}>{item.file_name}</strong>
+                      <span className="caption">{new Date(item.analyzed_at).toLocaleDateString()} • {item.row_count} rows</span>
+                    </div>
+                    <button 
+                      onClick={(e) => { e.stopPropagation(); deleteItem(item.analysis_id); }} 
+                      disabled={deleteLoading === item.analysis_id}
+                      style={{ background: 'none', border: 'none', color: 'var(--text-muted)', cursor: 'pointer', padding: '8px' }}
+                    >
+                      {deleteLoading === item.analysis_id ? "..." : "🗑"}
+                    </button>
+                  </div>
+                ))
+              )
+            )}
+          </div>
+        </div>
+      </div>
+    )}
     </div>
   );
 }

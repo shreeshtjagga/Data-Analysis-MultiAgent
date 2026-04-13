@@ -64,9 +64,9 @@ function GoogleAuthComponent({ onLogin, setError, setLoading, setTab }) {
       }}>
         <div style={{ 
           borderRadius: "9px", 
-          boxShadow: '0 0 20px rgba(99,102,241,0.4)',
-          border: '1px solid rgba(99,102,241,0.2)',
-          padding: '2px', // Slight padding so the button feels 'nested'
+          boxShadow: '0 0 25px rgba(99,102,241,0.5)',
+          border: '1px solid rgba(99,102,241,0.3)',
+          padding: '2px', 
           backgroundColor: '#ffffff'
         }}>
           <GoogleLogin
@@ -135,7 +135,7 @@ function LoginForm({ onLogin }) {
         />
       </div>
 
-      <div className="flex-col gap-8">
+      <div className="flex-col gap-12">
         <label style={{ fontSize: '13px', fontWeight: 600, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Password</label>
         <PasswordInput
           id="login-password"
@@ -146,7 +146,7 @@ function LoginForm({ onLogin }) {
         />
       </div>
 
-      <button id="login-submit" className="btn-primary" style={{ width: "100%", marginTop: '16px' }} onClick={submit} disabled={loading}>
+      <button id="login-submit" className="btn-primary" style={{ width: "100%", marginTop: '24px' }} onClick={submit} disabled={loading}>
         {loading ? "LOGGING IN…" : "LOGIN"}
       </button>
       
@@ -225,8 +225,8 @@ export default function Login({ onLogin }) {
       <div className="animate-fade-in" style={{ width: '100%', maxWidth: '550px', position: 'relative', zIndex: 1, backgroundColor: 'transparent', boxShadow: 'none', border: 'none', padding: '0' }}>
         
         <div style={{ textAlign: 'center', marginBottom: '32px' }}>
-          <div style={{ color: 'var(--primary-500)', fontSize: '40px', marginBottom: '8px', textShadow: '0 0 15px rgba(99,102,241,0.5)' }}>◈</div>
-          <h2 style={{ fontFamily: "'Syne', sans-serif", fontSize: '28px', color: 'var(--text-main)' }}>DATA PULSE</h2>
+          <div style={{ color: 'var(--primary-500)', fontSize: '40px', marginBottom: '8px', textShadow: '0 0 20px rgba(99,102,241,0.7)' }}>◈</div>
+          <h2 style={{ fontFamily: "'Syne', sans-serif", fontSize: '28px', color: 'var(--text-main)', textShadow: '0 0 10px rgba(255,255,255,0.1)' }}>DATA PULSE</h2>
           <p className="caption" style={{ textTransform: 'uppercase', letterSpacing: '0.1em', marginTop: '4px', color: 'var(--text-muted)' }}>Secure Analytics Portal</p>
         </div>
 

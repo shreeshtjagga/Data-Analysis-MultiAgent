@@ -1,6 +1,6 @@
 import { useEffect, useRef } from 'react';
 
-export default function ParticleBackground() {
+export default function ParticleBackground({ noExclude = false }) {
   const canvasRef = useRef(null);
 
   useEffect(() => {
@@ -21,8 +21,9 @@ export default function ParticleBackground() {
     window.addEventListener('resize', resize);
     resize();
 
-    // Exclusion zone logic (the login panel is roughly 550px wide)
+    // Exclusion zone logic
     const getExcludeZone = () => {
+      if (noExclude) return { xMin: -1, xMax: -1, yMin: -1, yMax: -1 };
       const centerX = canvas.width / 2;
       const centerY = canvas.height / 2;
       const padX = 300; // 600px total width
@@ -137,12 +138,13 @@ export default function ParticleBackground() {
     <canvas 
       ref={canvasRef} 
       style={{
-        position: 'absolute',
+        position: 'fixed',
         top: 0,
         left: 0,
         width: '100%',
         height: '100%',
         zIndex: 0,
+        pointerEvents: 'none',
         background: 'linear-gradient(135deg, #060912 0%, #0d1220 100%)' 
       }} 
     />
