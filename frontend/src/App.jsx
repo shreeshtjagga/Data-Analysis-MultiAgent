@@ -56,16 +56,18 @@ export default function App() {
       <div
         style={{
           minHeight: "100vh",
-          background: "#060912",
+          background: "var(--bg-deep)",
           display: "flex",
           alignItems: "center",
           justifyContent: "center",
-          color: "#475569",
-          fontFamily: "'Outfit', sans-serif",
-          fontSize: "0.88rem",
+          color: "var(--text-muted)",
+          fontFamily: "'Outfit', monospace",
+          fontSize: "14px",
+          letterSpacing: "0.1em",
+          textTransform: "uppercase"
         }}
       >
-        Loading…
+        Loading System
       </div>
     );
   }
