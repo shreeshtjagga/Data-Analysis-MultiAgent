@@ -132,6 +132,7 @@ export default function DataPulse({ user, onLogout }) {
       setResult(data);
       if (data?.analysis_id) {
         setHistory((prev) => {
+          const prevItems = Array.isArray(prev) ? prev : [];
           const next = [
             {
               analysis_id: data.analysis_id,
@@ -140,7 +141,7 @@ export default function DataPulse({ user, onLogout }) {
               column_count: data?.stats_summary?.column_count || 0,
               analyzed_at: new Date().toISOString(),
             },
-            ...prev.filter((x) => x.analysis_id !== data.analysis_id),
+            ...prevItems.filter((x) => x.analysis_id !== data.analysis_id),
           ];
           return next.slice(0, 20);
         });
@@ -176,7 +177,12 @@ export default function DataPulse({ user, onLogout }) {
     setHistoryLoading(true);
     try {
       const data = await apiHistory();
-      setHistory(data);
+      const items = Array.isArray(data)
+        ? data
+        : Array.isArray(data?.analyses)
+          ? data.analyses
+          : [];
+      setHistory(items);
     } catch (err) {
       setHistoryError(err.message);
     } finally {
@@ -623,8 +629,8 @@ export default function DataPulse({ user, onLogout }) {
           
           <div style={{ flex: 1, overflowY: 'auto' }} className="flex-col gap-12">
             {historyLoading ? <div style={{ color: 'var(--primary-500)' }}>Syncing history...</div> : (
-              history.length === 0 ? <div style={{ color: 'var(--text-muted)' }}>No recorded sessions found.</div> : (
-                history.map(item => (
+              (Array.isArray(history) ? history.length : 0) === 0 ? <div style={{ color: 'var(--text-muted)' }}>No recorded sessions found.</div> : (
+                (Array.isArray(history) ? history : []).map(item => (
                   <div key={item.analysis_id} className="card" style={{ padding: '16px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', cursor: 'pointer', border: historySelectLoading === item.analysis_id ? '1px solid var(--primary-500)' : '1px solid var(--border-subtle)' }} onClick={() => loadHistoryItem(item)}>
                     <div className="flex-col gap-4">
                       <strong style={{ fontSize: '14px', color: 'var(--text-main)', display: 'block' }}>{item.file_name}</strong>
