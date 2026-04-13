@@ -10,12 +10,16 @@ if (!GOOGLE_CLIENT_ID) {
   console.error("Missing VITE_GOOGLE_CLIENT_ID environment variable. Google OAuth will fail.");
 }
 
+const appTree = (
+  <BrowserRouter>
+    <App />
+  </BrowserRouter>
+);
+
 ReactDOM.createRoot(document.getElementById('root')).render(
   <React.StrictMode>
-    <GoogleOAuthProvider clientId={GOOGLE_CLIENT_ID}>
-      <BrowserRouter>
-        <App />
-      </BrowserRouter>
-    </GoogleOAuthProvider>
+    {GOOGLE_CLIENT_ID
+      ? <GoogleOAuthProvider clientId={GOOGLE_CLIENT_ID}>{appTree}</GoogleOAuthProvider>
+      : appTree}
   </React.StrictMode>,
 )

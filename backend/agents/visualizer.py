@@ -175,12 +175,27 @@ def _try_scatter(
         return None
     score = abs_r * 50 + min(len(df) / 20, 20) + comp * 30
     color_arg = cat_cols[0] if cat_cols else None
-    fig = px.scatter(
-        df, x=x_col, y=y_col, color=color_arg,
-        title=f"{x_col} vs {y_col}   (r = {r:.2f})",
-        trendline="ols" if len(df) > 5 else None,
-        opacity=0.70, color_discrete_sequence=COLOR_PALETTE,
-    )
+    trendline_arg = "ols" if len(df) > 5 else None
+    try:
+        fig = px.scatter(
+            df, x=x_col, y=y_col, color=color_arg,
+            title=f"{x_col} vs {y_col}   (r = {r:.2f})",
+            trendline=trendline_arg,
+            opacity=0.70, color_discrete_sequence=COLOR_PALETTE,
+        )
+    except ModuleNotFoundError as exc:
+        if trendline_arg and "statsmodels" in str(exc):
+            logger.warning(
+                "statsmodels not installed; rendering scatter without OLS trendline"
+            )
+            fig = px.scatter(
+                df, x=x_col, y=y_col, color=color_arg,
+                title=f"{x_col} vs {y_col}   (r = {r:.2f})",
+                trendline=None,
+                opacity=0.70, color_discrete_sequence=COLOR_PALETTE,
+            )
+        else:
+            raise
     return ScoredChart("scatter", _style(fig), round(score, 1),
                        f"x={x_col}, y={y_col}, r={r:.2f}, comp={comp:.0%}")
 

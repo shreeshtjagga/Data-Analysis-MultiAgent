@@ -3,6 +3,8 @@ import { GoogleLogin } from '@react-oauth/google';
 import { apiLogin, apiRegister, apiGoogleLogin } from "./api.js";
 import ParticleBackground from "./ParticleBackground.jsx";
 
+const GOOGLE_CLIENT_ID = import.meta.env.VITE_GOOGLE_CLIENT_ID;
+
 /**
  * Login.jsx — DataPulse auth page (Premium Dark SaaS System)
  */
@@ -48,6 +50,10 @@ function PasswordInput({ id, placeholder, value, onChange, onKeyDown }) {
 }
 
 function GoogleAuthComponent({ onLogin, setError, setLoading, setTab }) {
+  if (!GOOGLE_CLIENT_ID) {
+    return null;
+  }
+
   return (
     <>
       <div style={{ display: 'flex', alignItems: 'center', gap: '16px', margin: '24px 0', color: 'var(--border-subtle)' }}>
@@ -70,8 +76,7 @@ function GoogleAuthComponent({ onLogin, setError, setLoading, setTab }) {
               setError("");
               setLoading(true);
               try {
-                const clientId = import.meta.env.VITE_GOOGLE_CLIENT_ID || null;
-                const data = await apiGoogleLogin(credentialResponse.credential, clientId);
+                const data = await apiGoogleLogin(credentialResponse.credential, GOOGLE_CLIENT_ID);
                 onLogin(data.user, data.access_token);
               } catch (err) {
                 setError(err.message || "Google Single Sign-On failed.");

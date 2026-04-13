@@ -5,6 +5,7 @@
 pandas>=2.0.0
 numpy>=1.26.0
 scipy>=1.13.0
+statsmodels>=0.14.2
 openpyxl>=3.1.2
 xlrd>=2.0.1
 
