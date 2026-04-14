@@ -16,7 +16,7 @@ export default function ParticleBackground({ noExclude = false }) {
 
     const resize = () => {
       canvas.width = window.innerWidth;
-      canvas.height = Math.max(window.innerHeight, document.documentElement.scrollHeight);
+      canvas.height = window.innerHeight;
     };
     window.addEventListener('resize', resize);
     window.addEventListener('scroll', resize);

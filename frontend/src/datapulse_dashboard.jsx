@@ -105,7 +105,7 @@ export default function DataPulse({ user, onLogout }) {
   const [statsSortDirection, setStatsSortDirection] = useState("desc");
   const [statsFilter, setStatsFilter] = useState("");
   const fileRef = useRef();
-  const chatEndRef = useRef(null);
+  const chatContainerRef = useRef(null);
   const dragCounterRef = useRef(0);
   const stageTimersRef = useRef([]);
 
@@ -130,7 +130,14 @@ export default function DataPulse({ user, onLogout }) {
   }, [tab, result]);
 
   useEffect(() => {
-    chatEndRef.current?.scrollIntoView({ behavior: "smooth", block: "end" });
+    if (chatContainerRef.current) {
+        // Use requestAnimationFrame instead of setTimeout to guarantee browser paint cycle has completed
+        requestAnimationFrame(() => {
+            if (chatContainerRef.current) {
+                chatContainerRef.current.scrollTop = chatContainerRef.current.scrollHeight;
+            }
+        });
+    }
   }, [chatMsgs, chatLoading]);
 
   useEffect(() => {
@@ -161,8 +168,8 @@ export default function DataPulse({ user, onLogout }) {
     setChatMsgs([]);
 
     setAgentLog([
-      { time: new Date().toLocaleTimeString(), msg: "Uploading data to secure server…" },
-      { time: new Date().toLocaleTimeString(), msg: "Architect initializing models…" },
+      "Uploading data to secure server…",
+      "Architect initializing models…",
     ]);
     clearStageTimers();
     const stageMessages = [
@@ -323,7 +330,7 @@ export default function DataPulse({ user, onLogout }) {
   const chatInsights = useMemo(() => result?.insights || {}, [result?.insights]);
 
   const chatContext = useMemo(() => {
-    if (!result) return null;
+    if (!chatStats) return null;
     const outlierSummary = Object.entries(chatStats?.outliers || {})
       .map(([column, info]) => ({ column, count: Number(info?.count || 0), percentage: Number(info?.percentage || 0) }))
       .sort((a, b) => b.count - a.count).slice(0, 10);
@@ -335,7 +342,7 @@ export default function DataPulse({ user, onLogout }) {
       dataQuality: chatStats?.data_quality || {},
       correlations: chatStats?.strong_correlations?.slice(0, 5),
     };
-  }, [chatStats, chatInsights, fileName, result]);
+  }, [chatStats, chatInsights, fileName]);
 
   const sendChat = useCallback(async () => {
     const q = chatInput.trim();
@@ -401,36 +408,37 @@ export default function DataPulse({ user, onLogout }) {
     { label: "Completeness", val: formatPercent(dq.completeness || 100) },
   ];
 
-  const sortedNumericRows = useMemo(() => numericCols
-    .map((col) => {
-      const st = stats.numeric_columns?.[col];
-      return st ? {
-        column: col,
-        count: Number(st.count || 0),
-        mean: st.mean,
-        std: st.std,
-        min: st.min,
-        max: st.max,
-        skewness: st.skewness,
-        outliers: Number(stats.outliers?.[col]?.count || 0)
-      } : null;
-    })
-    .filter(Boolean)
-    .filter((row) => (row.column || "").toLowerCase().includes(statsFilter.trim().toLowerCase()))
-    .sort((a, b) => {
-      const dir = statsSortDirection === "asc" ? 1 : -1;
-      if (statsSortKey === "column") return (a.column || "").localeCompare(b.column || "") * dir;
-      const valA = Number(a[statsSortKey] ?? 0);
-      const valB = Number(b[statsSortKey] ?? 0);
-      return (valA - valB) * dir;
-    }),
-  [numericCols, stats, statsFilter, statsSortKey, statsSortDirection]);
+  const sortedNumericRows = useMemo(() => {
+    return Object.keys(stats.numeric_columns || {})
+      .map((col) => {
+        const st = stats.numeric_columns?.[col];
+        return st ? {
+          column: col,
+          count: Number(st.count || 0),
+          mean: st.mean,
+          std: st.std,
+          min: st.min,
+          max: st.max,
+          skewness: st.skewness,
+          outliers: Number(stats.outliers?.[col]?.count || 0)
+        } : null;
+      })
+      .filter(Boolean)
+      .filter((row) => (row.column || "").toLowerCase().includes(statsFilter.trim().toLowerCase()))
+      .sort((a, b) => {
+        const dir = statsSortDirection === "asc" ? 1 : -1;
+        if (statsSortKey === "column") return (a.column || "").localeCompare(b.column || "") * dir;
+        const valA = Number(a[statsSortKey] ?? 0);
+        const valB = Number(b[statsSortKey] ?? 0);
+        return (valA - valB) * dir;
+      });
+  }, [stats, statsFilter, statsSortKey, statsSortDirection]);
   return (
     <div style={{ minHeight: '100vh', display: 'flex', flexDirection: 'column', position: 'relative' }}>
       <ParticleBackground noExclude={phase === "done"} />
 
       {/* NAVBAR */}
-      <div style={{ background: 'rgba(13, 18, 32, 0.65)', backdropFilter: 'blur(12px)', padding: '16px 48px', borderBottom: '1px solid var(--border-subtle)', display: 'flex', justifyContent: 'space-between', alignItems: 'center', position: 'sticky', top: 0, zIndex: 100 }}>
+      <div style={{ background: 'rgba(6, 9, 18, 0.90)', backdropFilter: 'blur(12px)', WebkitBackdropFilter: 'blur(12px)', padding: '16px 48px', borderBottom: '1px solid var(--border-subtle)', display: 'flex', justifyContent: 'space-between', alignItems: 'center', position: 'sticky', top: 0, zIndex: 100 }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
           <div style={{ color: 'var(--primary-500)', fontSize: '24px', textShadow: '0 0 10px rgba(99,102,241,0.4)' }}>◈</div>
           <strong style={{ fontSize: '18px', color: 'var(--text-main)', fontFamily: "'Syne', sans-serif" }}>DATA PULSE</strong>
@@ -586,7 +594,7 @@ export default function DataPulse({ user, onLogout }) {
               {phase === "done" && result && (
                 <div className="card flex-col gap-16" style={{ padding: '20px' }}>
                   <strong style={{ fontSize: '14px', color: 'var(--text-main)', fontFamily: 'Syne, sans-serif' }}>Analyst Advisor</strong>
-                  <div style={{ minHeight: '200px', maxHeight: '380px', flex: 1, overflowY: "auto", display: "flex", flexDirection: "column", gap: "12px", background: 'var(--bg-input)', padding: '16px', borderRadius: '12px', border: '1px solid var(--border-subtle)' }}>
+                  <div ref={chatContainerRef} style={{ minHeight: '200px', maxHeight: '380px', flex: 1, overflowY: "auto", display: "flex", flexDirection: "column", gap: "12px", background: 'var(--bg-input)', padding: '16px', borderRadius: '12px', border: '1px solid var(--border-subtle)' }}>
                      {chatMsgs.length === 0 ? (
                        <div style={{ margin: 'auto', textAlign: 'center', fontSize: '13px', color: 'var(--text-muted)' }}>Establish a query connection with your data.</div>
                      ) : chatMsgs.map((m, i) => (
@@ -617,7 +625,6 @@ export default function DataPulse({ user, onLogout }) {
                           Showing last {MAX_CHAT_MESSAGES} messages
                         </div>
                       )}
-                   <div ref={chatEndRef} />
                   </div>
                   <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
                     <div style={{ display: 'flex', gap: '12px' }}>
@@ -714,13 +721,73 @@ export default function DataPulse({ user, onLogout }) {
                 )}
 
                 {tab === "statistics" && (
-                  <div style={{ overflowX: 'auto', border: '1px solid var(--border-subtle)', borderRadius: '12px' }}>
-                     <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '14px', textAlign: 'left', background: 'var(--bg-input)' }}>
+                  <div className="flex-col gap-12">
+                    {/* Filter + sort controls */}
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+                      <input
+                        className="input-field"
+                        value={statsFilter}
+                        onChange={e => setStatsFilter(e.target.value)}
+                        placeholder="Filter columns…"
+                        style={{ flex: 1, fontSize: '13px', padding: '8px 14px' }}
+                      />
+                      {statsFilter && (
+                        <button
+                          onClick={() => setStatsFilter("")}
+                          style={{ background: 'none', border: 'none', color: 'var(--text-muted)', cursor: 'pointer', fontSize: '16px', lineHeight: 1 }}
+                          title="Clear filter"
+                        >✕</button>
+                      )}
+                      <span style={{ fontSize: '12px', color: 'var(--text-muted)', whiteSpace: 'nowrap' }}>
+                        {sortedNumericRows.length} col{sortedNumericRows.length !== 1 ? 's' : ''}
+                      </span>
+                    </div>
+
+                    {/* Table */}
+                    <div style={{ overflowX: 'auto', border: '1px solid var(--border-subtle)', borderRadius: '12px' }}>
+                      <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '14px', textAlign: 'left', background: 'var(--bg-input)' }}>
                         <thead style={{ background: 'rgba(99,102,241,0.05)', borderBottom: '1px solid var(--border-subtle)' }}>
                           <tr>
-                            {['Column', 'Count', 'Mean', 'Std', 'Min', 'Max', 'Outliers'].map(h => (
-                               <th key={h} style={{ padding: '16px 12px', color: 'var(--text-muted)', fontWeight: 600, textTransform: 'uppercase', fontSize: '12px', letterSpacing: '0.05em' }}>{h}</th>
-                            ))}
+                            {[
+                              { label: 'Column',   key: 'column'   },
+                              { label: 'Count',    key: 'count'    },
+                              { label: 'Mean',     key: 'mean'     },
+                              { label: 'Std',      key: 'std'      },
+                              { label: 'Min',      key: 'min'      },
+                              { label: 'Max',      key: 'max'      },
+                              { label: 'Outliers', key: 'outliers' },
+                            ].map(({ label, key }) => {
+                              const active = statsSortKey === key;
+                              return (
+                                <th
+                                  key={key}
+                                  onClick={() => {
+                                    if (active) {
+                                      setStatsSortDirection(d => d === 'asc' ? 'desc' : 'asc');
+                                    } else {
+                                      setStatsSortKey(key);
+                                      setStatsSortDirection('desc');
+                                    }
+                                  }}
+                                  style={{
+                                    padding: '14px 12px',
+                                    color: active ? 'var(--primary-500)' : 'var(--text-muted)',
+                                    fontWeight: 600,
+                                    textTransform: 'uppercase',
+                                    fontSize: '12px',
+                                    letterSpacing: '0.05em',
+                                    cursor: 'pointer',
+                                    userSelect: 'none',
+                                    whiteSpace: 'nowrap',
+                                  }}
+                                >
+                                  {label}
+                                  <span style={{ marginLeft: '4px', opacity: active ? 1 : 0.3 }}>
+                                    {active ? (statsSortDirection === 'asc' ? '↑' : '↓') : '↕'}
+                                  </span>
+                                </th>
+                              );
+                            })}
                           </tr>
                         </thead>
                         <tbody>
@@ -732,18 +799,19 @@ export default function DataPulse({ user, onLogout }) {
                             </tr>
                           )}
                           {sortedNumericRows.map((r, idx) => (
-                             <tr key={r.column} style={{ borderBottom: idx === sortedNumericRows.length - 1 ? 'none' : '1px solid var(--border-subtle)' }}>
-                               <td style={{ padding: '16px 12px', color: '#818cf8', fontWeight: 500, fontFamily: "'Outfit', monospace" }}>{r.column}</td>
-                               <td style={{ padding: '16px 12px', color: 'var(--text-muted)' }}>{r.count}</td>
-                               <td style={{ padding: '16px 12px', color: 'var(--text-main)' }}>{f(r.mean)}</td>
-                               <td style={{ padding: '16px 12px', color: 'var(--text-muted)' }}>{f(r.std)}</td>
-                               <td style={{ padding: '16px 12px', color: 'var(--text-muted)' }}>{f(r.min)}</td>
-                               <td style={{ padding: '16px 12px', color: 'var(--text-muted)' }}>{f(r.max)}</td>
-                               <td style={{ padding: '16px 12px', color: r.outliers > 0 ? 'var(--error)' : 'var(--success)' }}>{r.outliers}</td>
-                             </tr>
+                            <tr key={r.column} style={{ borderBottom: idx === sortedNumericRows.length - 1 ? 'none' : '1px solid var(--border-subtle)' }}>
+                              <td style={{ padding: '16px 12px', color: '#818cf8', fontWeight: 500, fontFamily: "'Outfit', monospace" }}>{r.column}</td>
+                              <td style={{ padding: '16px 12px', color: 'var(--text-muted)' }}>{r.count}</td>
+                              <td style={{ padding: '16px 12px', color: 'var(--text-main)' }}>{f(r.mean)}</td>
+                              <td style={{ padding: '16px 12px', color: 'var(--text-muted)' }}>{f(r.std)}</td>
+                              <td style={{ padding: '16px 12px', color: 'var(--text-muted)' }}>{f(r.min)}</td>
+                              <td style={{ padding: '16px 12px', color: 'var(--text-muted)' }}>{f(r.max)}</td>
+                              <td style={{ padding: '16px 12px', color: r.outliers > 0 ? 'var(--error)' : 'var(--success)' }}>{r.outliers}</td>
+                            </tr>
                           ))}
                         </tbody>
-                     </table>
+                      </table>
+                    </div>
                   </div>
                 )}
                 

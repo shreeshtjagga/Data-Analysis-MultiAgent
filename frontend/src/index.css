@@ -79,10 +79,10 @@ p, body { font-size: 15px; font-weight: 400; color: var(--text-muted); }
   gap: 24px;
 }
 
-.col-3 { grid-column: span 3; }
-.col-5 { grid-column: span 5; }
-.col-7 { grid-column: span 7; }
-.col-9 { grid-column: span 9; }
+.col-3 { grid-column: span 3; min-width: 0; }
+.col-5 { grid-column: span 5; min-width: 0; }
+.col-7 { grid-column: span 7; min-width: 0; }
+.col-9 { grid-column: span 9; min-width: 0; }
 
 /* Spacing Adjustments */
 .gap-8 { gap: 8px; }
