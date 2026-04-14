@@ -19,7 +19,7 @@ const PLOTLY_DARK_LAYOUT = {
 
 const PLOTLY_CONFIG = { responsive: true, displayModeBar: false, displaylogo: false, modeBarButtonsToRemove: ["lasso2d", "select2d", "toggleSpikelines"] };
 
-function ChartPanel({ result, PlotComponent, visibleChartCount }) {
+function ChartPanel({ result, PlotComponent }) {
   if (!PlotComponent) {
     return (
       <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
@@ -32,7 +32,6 @@ function ChartPanel({ result, PlotComponent, visibleChartCount }) {
 
   const charts = result?.charts || {};
   const entries = Object.entries(charts)
-    .slice(0, visibleChartCount)
     .map(([key, fig]) => {
       if (!fig || typeof fig !== "object") {
         return [key, { data: [], layout: {} }];
@@ -48,8 +47,20 @@ function ChartPanel({ result, PlotComponent, visibleChartCount }) {
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: "32px", paddingBottom: "40px" }}>
-      {entries.map(([key, fig]) => (
-        <div key={key} style={{ padding: '24px', backgroundColor: 'rgba(13, 18, 32, 0.7)', backdropFilter: 'blur(8px)', borderRadius: '14px', border: '1px solid var(--border-subtle)', boxShadow: 'var(--shadow-card)' }}>
+      {entries.map(([key, fig], idx) => (
+        <div
+          key={key}
+          style={{
+            padding: '24px',
+            backgroundColor: 'rgba(13, 18, 32, 0.7)',
+            backdropFilter: 'blur(8px)',
+            borderRadius: '14px',
+            border: '1px solid var(--border-subtle)',
+            boxShadow: 'var(--shadow-card)',
+            animation: 'fadeIn 0.35s cubic-bezier(0.2, 0.8, 0.2, 1) both',
+            animationDelay: `${idx * 90}ms`,
+          }}
+        >
           <PlotComponent
             data={fig.data}
             layout={{
@@ -81,7 +92,6 @@ const MAX_CHAT_MESSAGES = 40;
 
 export default function DataPulse({ user, onLogout }) {
   const [PlotComponent, setPlotComponent] = useState(null);
-  const [visibleChartCount, setVisibleChartCount] = useState(1);
   const [phase, setPhase] = useState("upload");
   const [result, setResult] = useState(null);
   const [fileName, setFileName] = useState("");
@@ -108,6 +118,7 @@ export default function DataPulse({ user, onLogout }) {
   const chatContainerRef = useRef(null);
   const dragCounterRef = useRef(0);
   const stageTimersRef = useRef([]);
+  const plotlyPreloadRef = useRef(null);
 
   useEffect(() => {
     loadHistory();
@@ -121,15 +132,6 @@ export default function DataPulse({ user, onLogout }) {
   }, []);
 
   useEffect(() => {
-    if (tab !== "charts" || !result?.charts) return;
-    const total = Object.keys(result.charts).length;
-    setVisibleChartCount(1);
-    Array.from({ length: total - 1 }, (_, i) => {
-      setTimeout(() => setVisibleChartCount(i + 2), (i + 1) * 150);
-    });
-  }, [tab, result]);
-
-  useEffect(() => {
     if (chatContainerRef.current) {
         // Use requestAnimationFrame instead of setTimeout to guarantee browser paint cycle has completed
         requestAnimationFrame(() => {
@@ -141,17 +143,21 @@ export default function DataPulse({ user, onLogout }) {
   }, [chatMsgs, chatLoading]);
 
   useEffect(() => {
-    if (tab === "charts" && !PlotComponent) {
-      Promise.all([
-        import("plotly.js-dist-min"),
-        import("react-plotly.js/factory"),
-      ]).then(([PlotlyModule, factoryModule]) => {
+    if (!result || PlotComponent || plotlyPreloadRef.current) return;
+
+    plotlyPreloadRef.current = Promise.all([
+      import("plotly.js-dist-min"),
+      import("react-plotly.js/factory"),
+    ])
+      .then(([PlotlyModule, factoryModule]) => {
         const createPlotlyComponent = factoryModule.default;
         const PlotlyLib = PlotlyModule.default;
         setPlotComponent(() => createPlotlyComponent(PlotlyLib));
+      })
+      .catch(() => {
+        plotlyPreloadRef.current = null;
       });
-    }
-  }, [tab, PlotComponent]);
+  }, [result, PlotComponent]);
   const clearStageTimers = () => {
     stageTimersRef.current.forEach((timerId) => clearTimeout(timerId));
     stageTimersRef.current = [];
@@ -362,6 +368,8 @@ export default function DataPulse({ user, onLogout }) {
 
   const stats = result?.stats_summary || {};
   const insights = result?.insights || {};
+  const numericColumns = stats?.numeric_columns || {};
+  const outliersByColumn = stats?.outliers || {};
   const dq = stats.data_quality || {};
   const numericCols = Object.keys(stats.numeric_columns || {});
   const outlierCols = Object.keys(stats.outliers || {});
@@ -409,9 +417,9 @@ export default function DataPulse({ user, onLogout }) {
   ];
 
   const sortedNumericRows = useMemo(() => {
-    return Object.keys(stats.numeric_columns || {})
+    return Object.keys(numericColumns)
       .map((col) => {
-        const st = stats.numeric_columns?.[col];
+        const st = numericColumns?.[col];
         return st ? {
           column: col,
           count: Number(st.count || 0),
@@ -420,7 +428,7 @@ export default function DataPulse({ user, onLogout }) {
           min: st.min,
           max: st.max,
           skewness: st.skewness,
-          outliers: Number(stats.outliers?.[col]?.count || 0)
+          outliers: Number(outliersByColumn?.[col]?.count || 0)
         } : null;
       })
       .filter(Boolean)
@@ -432,7 +440,7 @@ export default function DataPulse({ user, onLogout }) {
         const valB = Number(b[statsSortKey] ?? 0);
         return (valA - valB) * dir;
       });
-  }, [stats, statsFilter, statsSortKey, statsSortDirection]);
+  }, [numericColumns, outliersByColumn, statsFilter, statsSortKey, statsSortDirection]);
   return (
     <div style={{ minHeight: '100vh', display: 'flex', flexDirection: 'column', position: 'relative' }}>
       <ParticleBackground noExclude={phase === "done"} />
@@ -665,11 +673,6 @@ export default function DataPulse({ user, onLogout }) {
               <div className="panel-flat flex-col gap-24 animate-fade-in">
                 <div style={{ display: 'flex', borderBottom: '1px solid var(--border-subtle)', gap: '16px', paddingBottom: '12px' }}>
                   {PRIMARY_TABS.map(t => <button key={t} onClick={() => setTab(t)} style={{ background: 'none', border: 'none', color: tab === t ? 'var(--text-main)' : 'var(--text-muted)', fontWeight: tab === t ? 600 : 500, fontSize: '14px', cursor: 'pointer', borderBottom: tab === t ? '2px solid var(--primary-500)' : 'none', paddingBottom: '12px', marginBottom: '-13px', textTransform: 'capitalize', letterSpacing: '0.05em' }}>{t}</button>)}
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '4px', margin: '0 4px' }}>
-                    <div style={{ width: '1px', height: '16px', background: 'var(--border-subtle)' }} />
-                    <span style={{ fontSize: '10px', color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.1em' }}>Data</span>
-                    <div style={{ width: '1px', height: '16px', background: 'var(--border-subtle)' }} />
-                  </div>
                   {SECONDARY_TABS.map(t => <button key={t} onClick={() => setTab(t)} style={{ background: 'none', border: 'none', color: tab === t ? 'var(--text-main)' : 'var(--text-muted)', fontWeight: tab === t ? 600 : 500, fontSize: '14px', cursor: 'pointer', borderBottom: tab === t ? '2px solid var(--primary-500)' : 'none', paddingBottom: '12px', marginBottom: '-13px', textTransform: 'capitalize', letterSpacing: '0.05em' }}>{t}</button>)}
                 </div>
                 
@@ -705,7 +708,7 @@ export default function DataPulse({ user, onLogout }) {
                    </div>
                 )}
 
-                {tab === "charts" && <ChartPanel result={result} PlotComponent={PlotComponent} visibleChartCount={visibleChartCount} />} 
+                {tab === "charts" && <ChartPanel result={result} PlotComponent={PlotComponent} />} 
                 
                 {tab === "insights" && (
                   <div className="flex-col gap-24">

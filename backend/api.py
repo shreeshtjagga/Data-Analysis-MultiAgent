@@ -33,6 +33,8 @@ from .auth import (
     get_user_by_id,
     login_user,
     register_user,
+    request_password_reset,
+    reset_password_with_token,
     verify_access_token,
     verify_google_token,
     login_google_user,
@@ -50,8 +52,11 @@ from .models.schemas import (
     AuthResponse,
     ChatRequest,
     DeleteResponse,
+    ForgotPasswordRequest,
+    ForgotPasswordResponse,
     GoogleLoginRequest,
     HealthResponse,
+    ResetPasswordRequest,
     TokenResponse,
     UserLogin,
     UserRegister,
@@ -331,6 +336,24 @@ async def login(body: UserLogin, db: AsyncSession = Depends(get_db), response: R
             updated_at=user_obj["updated_at"],
         ),
     )
+
+
+@app.post("/auth/forgot-password", response_model=ForgotPasswordResponse, tags=["auth"])
+async def forgot_password(body: ForgotPasswordRequest, db: AsyncSession = Depends(get_db)):
+    result = await request_password_reset(db, body.email)
+    return ForgotPasswordResponse(
+        success=True,
+        message=result.get("message", "If an account exists for that email, a password reset link has been sent."),
+        debug_reset_token=result.get("debug_reset_token"),
+    )
+
+
+@app.post("/auth/reset-password", response_model=AuthResponse, tags=["auth"])
+async def reset_password(body: ResetPasswordRequest, db: AsyncSession = Depends(get_db)):
+    result = await reset_password_with_token(db, body.token, body.new_password)
+    if not result.get("success"):
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=result.get("message", "Password reset failed"))
+    return AuthResponse(success=True, message=result["message"])
 
 
 @app.post("/auth/google", response_model=TokenResponse, tags=["auth"])
