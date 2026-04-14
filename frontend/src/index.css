@@ -37,7 +37,6 @@
   box-sizing: border-box;
   margin: 0;
   padding: 0;
-  transition: all 0.25s cubic-bezier(0.4, 0, 0.2, 1);
   font-family: 'Inter', sans-serif;
 }
 
@@ -113,6 +112,7 @@ p, body { font-size: 15px; font-weight: 400; color: var(--text-muted); }
   background: linear-gradient(135deg, var(--primary-500), var(--primary-600));
   color: white;
   border: none;
+  transition: transform 0.2s ease, box-shadow 0.2s ease;
   font-family: 'Syne', sans-serif;
   font-weight: 700;
   font-size: 14px;
@@ -148,6 +148,7 @@ p, body { font-size: 15px; font-weight: 400; color: var(--text-muted); }
   background-color: var(--bg-input);
   font-size: 15px;
   color: var(--text-main);
+  transition: border-color 0.2s ease, box-shadow 0.2s ease, background-color 0.2s ease, color 0.2s ease;
   outline: none;
 }
 
@@ -174,6 +175,7 @@ p, body { font-size: 15px; font-weight: 400; color: var(--text-muted); }
   box-shadow: var(--shadow-card);
   position: relative;
   overflow: hidden;
+  transition: transform 0.25s ease, border-color 0.25s ease, box-shadow 0.25s ease;
 }
 
 .card::before {
@@ -198,9 +200,10 @@ p, body { font-size: 15px; font-weight: 400; color: var(--text-muted); }
   border: 1px solid var(--border-subtle);
   box-shadow: var(--shadow-card);
   position: relative;
-  overflow: hidden;
 }
-
+.panel-flat::before {
+  display: none;
+}
 /* Special Components */
 .upload-box {
   border: 2px dashed var(--border-active);
@@ -209,6 +212,7 @@ p, body { font-size: 15px; font-weight: 400; color: var(--text-muted); }
   text-align: center;
   background: radial-gradient(circle at center, rgba(99,102,241,0.08) 0%, transparent 100%);
   cursor: pointer;
+  transition: transform 0.3s cubic-bezier(0.34, 1.56, 0.64, 1), border-color 0.3s ease, box-shadow 0.3s ease;
   display: flex;
   flex-direction: column;
   align-items: center;
@@ -234,6 +238,8 @@ p, body { font-size: 15px; font-weight: 400; color: var(--text-muted); }
   display: inline-flex;
   align-items: center;
   gap: 5px;
+  transition: none;
+  pointer-events: none;
   font-size: 11px;
   font-family: 'Outfit', monospace;
   padding: 4px 10px;

@@ -11,14 +11,15 @@ export default function ParticleBackground({ noExclude = false }) {
     
     // Config
     let particles = [];
-    const numParticles = 80; 
+    const numParticles = noExclude? 35 : 80; 
     const maxDistance = 160;
 
     const resize = () => {
       canvas.width = window.innerWidth;
-      canvas.height = window.innerHeight;
+      canvas.height = Math.max(window.innerHeight, document.documentElement.scrollHeight);
     };
     window.addEventListener('resize', resize);
+    window.addEventListener('scroll', resize);
     resize();
 
     // Exclusion zone logic
@@ -96,33 +97,33 @@ export default function ParticleBackground({ noExclude = false }) {
         particles.push(new Particle());
     }
 
+    let frameCount = 0;
     const drawCanvas = () => {
+      frameCount++;
       ctx.clearRect(0, 0, canvas.width, canvas.height);
       
-      // Update & Draw Nodes
       for (let i = 0; i < numParticles; i++) {
         particles[i].update();
         particles[i].draw();
-        
         ctx.shadowBlur = 0;
 
-        for (let j = i + 1; j < numParticles; j++) {
+        if (frameCount % 2 === 0) {
+          for (let j = i + 1; j < numParticles; j++) {
             const dx = particles[i].x - particles[j].x;
             const dy = particles[i].y - particles[j].y;
             const dist = Math.sqrt(dx * dx + dy * dy);
-
             if (dist < maxDistance) {
-                ctx.beginPath();
-                ctx.moveTo(particles[i].x, particles[i].y);
-                ctx.lineTo(particles[j].x, particles[j].y);
-                const alpha = 1 - (dist / maxDistance);
-                ctx.strokeStyle = `rgba(99, 102, 241, ${alpha * 0.35})`;
-                ctx.lineWidth = 1.2;
-                ctx.stroke();
+              ctx.beginPath();
+              ctx.moveTo(particles[i].x, particles[i].y);
+              ctx.lineTo(particles[j].x, particles[j].y);
+              const alpha = 1 - (dist / maxDistance);
+              ctx.strokeStyle = `rgba(99, 102, 241, ${alpha * 0.35})`;
+              ctx.lineWidth = 1.2;
+              ctx.stroke();
             }
+          }
         }
       }
-
       animationFrameId = requestAnimationFrame(drawCanvas);
     };
 
@@ -130,6 +131,7 @@ export default function ParticleBackground({ noExclude = false }) {
 
     return () => {
       window.removeEventListener('resize', resize);
+      window.removeEventListener('scroll', resize);
       cancelAnimationFrame(animationFrameId);
     };
   }, [noExclude]);
