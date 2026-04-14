@@ -57,11 +57,6 @@ class TokenResponse(BaseModel):
     user: UserResponse
 
 
-class TokenData(BaseModel):
-    sub: str
-    email: str
-
-
 class AnalysisMetadata(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 

@@ -1,14 +1,12 @@
 
 
 import io
-import csv
 import asyncio
 import logging
 import os
 import json
-import zipfile
 from contextlib import asynccontextmanager
-from typing import Annotated, Optional
+from typing import Annotated
 
 import pandas as pd
 from fastapi import Depends, FastAPI, File, HTTPException, UploadFile, status, Request, Response, Query
@@ -43,6 +41,7 @@ from .auth import (
 from .core.constants import APP_VERSION, PIPELINE_VERSION
 from .core.graph import run_pipeline
 from .core.logging_config import configure_logging
+from .core.upload_parsing import read_csv_with_fallback, validate_upload_magic
 from .core.utils import sanitize_floats, truncate_stats_for_llm
 from .db import get_db, init_db
 from .models.schemas import (
@@ -80,116 +79,6 @@ CHAT_RATE_WINDOW = int(os.getenv("CHAT_RATE_WINDOW_SECONDS", "60"))
 
 _raw_origins = os.getenv("CORS_ORIGINS", "http://localhost:5173,http://localhost:3000")
 origins = [o.strip() for o in _raw_origins.split(",") if o.strip()]
-
-
-def _looks_like_csv(file_bytes: bytes) -> bool:
-    sample = file_bytes[:16384]
-    if not sample:
-        return False
-
-    text: Optional[str] = None
-    for encoding in ("utf-8-sig", "utf-16", "utf-16-le", "utf-16-be", "latin-1"):
-        try:
-            text = sample.decode(encoding)
-            break
-        except UnicodeDecodeError:
-            continue
-
-    if text is None:
-        return False
-
-    lines = [line for line in text.splitlines() if line.strip()]
-    if len(lines) < 1:
-        return False
-
-    sniff_sample = "\n".join(lines[:10])
-    try:
-        csv.Sniffer().sniff(sniff_sample)
-        return True
-    except csv.Error:
-        return any(delim in lines[0] for delim in (",", ";", "\t", "|"))
-
-
-def _validate_upload_magic(parsed_ext: str, file_bytes: bytes) -> None:
-    if parsed_ext == "csv":
-        if not _looks_like_csv(file_bytes):
-            raise HTTPException(status_code=400, detail="Invalid CSV content")
-        return
-
-    if parsed_ext == "xlsx":
-        if not zipfile.is_zipfile(io.BytesIO(file_bytes)):
-            raise HTTPException(status_code=400, detail="Invalid XLSX file signature")
-        return
-
-    if parsed_ext == "xls":
-        if not file_bytes.startswith(b"\xD0\xCF\x11\xE0\xA1\xB1\x1A\xE1"):
-            raise HTTPException(status_code=400, detail="Invalid XLS file signature")
-        return
-
-    raise HTTPException(status_code=400, detail="Unsupported file type")
-
-
-def _detect_csv_delimiter(file_bytes: bytes) -> Optional[str]:
-    sample = file_bytes[:16384]
-    for encoding in ("utf-8-sig", "utf-8", "latin-1"):
-        try:
-            text = sample.decode(encoding)
-            break
-        except UnicodeDecodeError:
-            text = None
-    if not text:
-        return None
-
-    lines = [line for line in text.splitlines() if line.strip()]
-    if not lines:
-        return None
-
-    sniff_sample = "\n".join(lines[:20])
-    try:
-        dialect = csv.Sniffer().sniff(sniff_sample, delimiters=[",", ";", "\t", "|"])
-        return dialect.delimiter
-    except csv.Error:
-        return None
-
-
-def _read_csv_with_fallback(file_bytes: bytes) -> pd.DataFrame:
-    delimiter = _detect_csv_delimiter(file_bytes)
-
-    attempts = []
-    encodings = ["utf-8-sig", "utf-8", "utf-16", "latin-1"]
-    for encoding in encodings:
-        if delimiter:
-            attempts.append({"engine": "python", "sep": delimiter, "encoding": encoding})
-        attempts.append({"engine": "python", "sep": None, "encoding": encoding})
-    attempts.append({})
-
-    errors = []
-    for csv_kwargs in attempts:
-        try:
-            header_df = pd.read_csv(io.BytesIO(file_bytes), nrows=0, **csv_kwargs)
-            if header_df.shape[1] == 0:
-                errors.append("No columns detected in CSV header")
-                continue
-            if header_df.shape[1] > MAX_ANALYZE_COLUMNS:
-                raise HTTPException(
-                    status_code=413,
-                    detail=f"Dataset has {header_df.shape[1]} columns. Maximum allowed is {MAX_ANALYZE_COLUMNS}.",
-                )
-
-            return pd.read_csv(
-                io.BytesIO(file_bytes),
-                nrows=MAX_ANALYZE_ROWS + 1,
-                **csv_kwargs,
-            )
-        except HTTPException:
-            raise
-        except Exception as exc:
-            errors.append(str(exc))
-
-    first_error = errors[0] if errors else "Unknown CSV parse error"
-    raise HTTPException(status_code=422, detail=f"Could not parse file: {first_error}")
-
-
 
 
 @asynccontextmanager
@@ -487,7 +376,7 @@ async def analyze(
     if len(file_bytes) == 0:
         raise HTTPException(status_code=400, detail="Uploaded file is empty")
 
-    _validate_upload_magic(parsed_ext, file_bytes)
+    validate_upload_magic(parsed_ext, file_bytes)
 
     file_hash = compute_file_hash(file_bytes, filename)
 
@@ -510,7 +399,11 @@ async def analyze(
 
     try:
         if parsed_ext == "csv":
-            df = _read_csv_with_fallback(file_bytes)
+            df = read_csv_with_fallback(
+                file_bytes,
+                max_analyze_rows=MAX_ANALYZE_ROWS,
+                max_analyze_columns=MAX_ANALYZE_COLUMNS,
+            )
         else:
             if parsed_ext == "xlsx":
                 from openpyxl import load_workbook

@@ -4,25 +4,8 @@ import logging
 import math
 from datetime import date, datetime
 from typing import Any
-from pathlib import Path
 
 logger = logging.getLogger(__name__)
-
-
-def load_csv(file_path: str) -> pd.DataFrame:
-
-    path = Path(file_path)
-    if not path.exists():
-        raise FileNotFoundError(f"File not found: {file_path}")
-    if path.suffix.lower() != ".csv":
-        raise ValueError(f"Expected a CSV file, got: {path.suffix}")
-
-    df = pd.read_csv(file_path)
-    if df.empty:
-        raise ValueError("The CSV file is empty")
-
-    logger.info("Loaded %d rows and %d columns from %s", len(df), len(df.columns), file_path)
-    return df
 
 
 def clean_dataframe(df: pd.DataFrame) -> tuple[pd.DataFrame, list]:
@@ -95,29 +78,6 @@ def detect_column_types(df: pd.DataFrame) -> dict[str, str]:
             except (ValueError, TypeError):
                 type_map[col] = "categorical"
     return type_map
-
-
-def safe_describe(df: pd.DataFrame) -> dict:
-    summary = {}
-    summary["shape"] = {"rows": int(df.shape[0]), "columns": int(df.shape[1])}
-    summary["columns"] = list(df.columns)
-    summary["dtypes"] = {col: str(dtype) for col, dtype in df.dtypes.items()}
-    summary["missing_values"] = {
-        col: int(count) for col, count in df.isna().sum().items() if count > 0
-    }
-
-    num_df = df.select_dtypes(include=[np.number]).describe()
-    if num_df.empty:
-        summary["numeric_summary"] = {}
-    else:
-        summary["numeric_summary"] = {
-            col: {stat: float(num_df[col][stat]) for stat in num_df.index}
-            for col in num_df.columns
-        }
-
-    return summary
-
-
 
 
 _SLIM_NUMERIC_KEYS = ("mean", "median", "std", "min", "max", "skewness", "count")

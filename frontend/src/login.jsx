@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { GoogleLogin } from '@react-oauth/google';
-import { apiLogin, apiRegister, apiGoogleLogin } from "./api.js";
+import { apiLogin, apiRegister, apiGoogleLogin } from "./services/api.js";
 import ParticleBackground from "./ParticleBackground.jsx";
 
 const GOOGLE_CLIENT_ID = import.meta.env.VITE_GOOGLE_CLIENT_ID;

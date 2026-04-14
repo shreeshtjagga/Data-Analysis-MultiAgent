@@ -63,7 +63,6 @@ export function getToken() {
 }
 
 export function clearToken() {
-  if (!accessToken) return;   // already logged out — skip the logout request
   accessToken = null;
   // Best-effort: ask backend to clear the HttpOnly refresh cookie.
   // Fire-and-forget is intentional — we don't need to await this.
@@ -140,10 +139,10 @@ async function apiFetch(path, options = {}) {
         }
         let detail = `HTTP ${retryResp.status}`;
         try {
-          const b = await retryResp.json();
-          detail = b.detail || b.message || detail;
+          const body = await retryResp.json();
+          detail = normalizeErrorDetail(body, detail);
         } catch (_) {
-          detail = String(detail);
+          // keep fallback detail
         }
         throw new Error(detail);
       }
@@ -160,10 +159,9 @@ async function apiFetch(path, options = {}) {
     let detail = `HTTP ${response.status}`;
     try {
       const body = await response.json();
-      const rawDetail = body.detail || body.message || detail;
-      detail = typeof rawDetail === 'object' ? JSON.stringify(rawDetail, null, 2) : rawDetail;
+      detail = normalizeErrorDetail(body, detail);
     } catch (_) {
-      detail = String(detail);
+      // keep fallback detail
     }
     throw new Error(detail);
   }

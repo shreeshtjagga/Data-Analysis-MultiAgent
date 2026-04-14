@@ -1,6 +1,7 @@
 import { useState, useRef, useCallback, useEffect, useMemo } from "react";
 import jsPDF from "jspdf";
-import { apiAnalyze, apiChat, apiHistory, apiHistoryAnalysis, apiDeleteAnalysis } from "./api.js";
+import html2canvas from "html2canvas";
+import { apiAnalyze, apiChat, apiHistory, apiHistoryAnalysis, apiDeleteAnalysis } from "./services/api.js";
 import ParticleBackground from "./ParticleBackground.jsx";
 
 const PALETTE = ["#6366f1", "#10b981", "#f59e0b", "#06b6d4", "#ef4444", "#a855f7", "#34d399", "#f472b6"];
@@ -55,7 +56,6 @@ function ChartPanel({ result, PlotComponent, visibleChartCount }) {
             layout={{
               ...PLOTLY_DARK_LAYOUT,
               ...fig.layout,
-              authorise : true,
               title: { 
                 ...(fig.layout?.title || {}), 
                 font: { color: "#FFFFFF", size: 16, weight: 'bold' } 
@@ -79,9 +79,20 @@ const PRIMARY_TABS = ["overview", "charts", "insights"];
 const SECONDARY_TABS = ["statistics", "quality"];
 const MAX_CHAT_MESSAGES = 40;
 
+const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+const getSafeDashboardFileName = (rawFileName) => {
+  const sourceName = String(rawFileName || "analysis").trim();
+  const withoutExt = sourceName.replace(/\.[^/.]+$/, "");
+  const compact = withoutExt.replace(/\s+/g, "-").toLowerCase();
+  const safeBase = compact.replace(/[^a-z0-9-_]/g, "").slice(0, 80) || "analysis";
+  return `${safeBase}-dashboard.pdf`;
+};
+
 export default function DataPulse({ user, onLogout }) {
   const [PlotComponent, setPlotComponent] = useState(null);
   const [visibleChartCount, setVisibleChartCount] = useState(1);
+  const [isExporting, setIsExporting] = useState(false);
   const [phase, setPhase] = useState("upload");
   const [result, setResult] = useState(null);
   const [fileName, setFileName] = useState("");
@@ -105,9 +116,11 @@ export default function DataPulse({ user, onLogout }) {
   const [statsSortDirection, setStatsSortDirection] = useState("desc");
   const [statsFilter, setStatsFilter] = useState("");
   const fileRef = useRef();
+  const exportPanelRef = useRef(null);
   const chatContainerRef = useRef(null);
   const dragCounterRef = useRef(0);
   const stageTimersRef = useRef([]);
+  const chartRevealTimersRef = useRef([]);
 
   useEffect(() => {
     loadHistory();
@@ -124,9 +137,10 @@ export default function DataPulse({ user, onLogout }) {
     if (tab !== "charts" || !result?.charts) return;
     const total = Object.keys(result.charts).length;
     setVisibleChartCount(1);
-    Array.from({ length: total - 1 }, (_, i) => {
-      setTimeout(() => setVisibleChartCount(i + 2), (i + 1) * 150);
-    });
+    chartRevealTimersRef.current.forEach((timerId) => clearTimeout(timerId));
+    chartRevealTimersRef.current = Array.from({ length: total - 1 }, (_, i) =>
+      setTimeout(() => setVisibleChartCount(i + 2), (i + 1) * 150)
+    );
   }, [tab, result]);
 
   useEffect(() => {
@@ -140,22 +154,33 @@ export default function DataPulse({ user, onLogout }) {
     }
   }, [chatMsgs, chatLoading]);
 
+  const loadPlotComponent = useCallback(async () => {
+    if (PlotComponent) return;
+    const [PlotlyModule, factoryModule] = await Promise.all([
+      import("plotly.js-dist-min"),
+      import("react-plotly.js/factory"),
+    ]);
+    const createPlotlyComponent = factoryModule.default;
+    const PlotlyLib = PlotlyModule.default;
+    setPlotComponent(() => createPlotlyComponent(PlotlyLib));
+  }, [PlotComponent]);
+
   useEffect(() => {
     if (tab === "charts" && !PlotComponent) {
-      Promise.all([
-        import("plotly.js-dist-min"),
-        import("react-plotly.js/factory"),
-      ]).then(([PlotlyModule, factoryModule]) => {
-        const createPlotlyComponent = factoryModule.default;
-        const PlotlyLib = PlotlyModule.default;
-        setPlotComponent(() => createPlotlyComponent(PlotlyLib));
-      });
+      loadPlotComponent();
     }
-  }, [tab, PlotComponent]);
+  }, [tab, PlotComponent, loadPlotComponent]);
   const clearStageTimers = () => {
     stageTimersRef.current.forEach((timerId) => clearTimeout(timerId));
     stageTimersRef.current = [];
   };
+
+  useEffect(() => {
+    return () => {
+      clearStageTimers();
+      chartRevealTimersRef.current.forEach((timerId) => clearTimeout(timerId));
+    };
+  }, [log]);
 
   const analyzeFile = useCallback(async (file) => {
     if (!file) return;
@@ -210,7 +235,7 @@ export default function DataPulse({ user, onLogout }) {
       setAnalysisError(err.message || "Analysis failed");
     }
 
-  }, []);
+  }, [log]);
 
   const onFile = useCallback((file) => analyzeFile(file), [analyzeFile]);
   const onDrop = useCallback((e) => {
@@ -282,49 +307,116 @@ export default function DataPulse({ user, onLogout }) {
   }
 };
 
-  const exportPDF = useCallback(() => {
-    if (!result) return;
-    const insights = result?.insights || {};
-    const doc = new jsPDF();
-    doc.setFont("helvetica", "bold");
-    doc.setFontSize(22);
-    doc.setTextColor(99, 102, 241);
-    doc.text("DATA PULSE — Analysis Report", 20, 25);
-    
-    doc.setFontSize(11);
-    doc.setTextColor(148, 163, 184);
-    doc.setFont("helvetica", "normal");
-    doc.text(`Origin: ${fileName}`, 20, 35);
-    doc.text(`Generated: ${new Date().toLocaleString()}`, 20, 42);
+  const ensurePlotReady = useCallback(async () => {
+    await loadPlotComponent();
+  }, [loadPlotComponent]);
 
-    let y = 60;
-    if (insights?.headline) {
-      doc.setFont("helvetica", "bold");
-      doc.setTextColor(15, 23, 42); // Dark for body readability
-      doc.text("EXECUTIVE SUMMARY", 20, y);
-      y += 10;
-      doc.setFont("helvetica", "normal");
-      const headTxt = String(insights.headline);
-      const lines = doc.splitTextToSize(headTxt, 170);
-      doc.text(lines, 20, y);
-      y += lines.length * 7 + 15;
-    }
+  const captureCurrentPanel = useCallback(async () => {
+    const node = exportPanelRef.current;
+    if (!node) return null;
 
-    if (insights?.findings) {
-      doc.setFont("helvetica", "bold");
-      doc.text("DETECTED VECTORS (FINDINGS)", 20, y);
-      y += 10;
-      doc.setFont("helvetica", "normal");
-      insights.findings.forEach(f => {
-        const lines = doc.splitTextToSize(`• ${f}`, 170);
-        if (y > 270) { doc.addPage(); y = 20; }
-        doc.text(lines, 20, y);
-        y += lines.length * 7 + 5;
+    const canvas = await html2canvas(node, {
+      useCORS: true,
+      allowTaint: false,
+      scale: Math.max(2, window.devicePixelRatio || 1),
+      backgroundColor: "#070c17",
+      logging: false,
+      width: node.scrollWidth,
+      height: node.scrollHeight,
+      windowWidth: node.scrollWidth,
+      windowHeight: node.scrollHeight,
+      scrollX: 0,
+      scrollY: -window.scrollY,
+    });
+
+    return canvas;
+  }, []);
+
+  const exportPDF = useCallback(async () => {
+    if (!result || isExporting) return;
+
+    const previousTab = tab;
+    const previousShowAllFindings = showAllFindings;
+    const previousVisibleChartCount = visibleChartCount;
+
+    setIsExporting(true);
+    setHistoryActionError("");
+
+    try {
+      await ensurePlotReady();
+
+      const tabsToCapture = ["overview", "charts", "statistics", "quality"];
+      const captures = [];
+
+      for (const captureTab of tabsToCapture) {
+        if (captureTab === "charts") {
+          const totalCharts = Object.keys(result?.charts || {}).length;
+          setVisibleChartCount(Math.max(totalCharts, 1));
+        }
+        if (captureTab === "overview") {
+          setShowAllFindings(true);
+        }
+
+        setTab(captureTab);
+        await wait(captureTab === "charts" ? 1200 : 500);
+
+        const canvas = await captureCurrentPanel();
+        if (canvas) {
+          captures.push({ tab: captureTab, canvas });
+        }
+      }
+
+      if (captures.length === 0) {
+        throw new Error("No dashboard content available for export.");
+      }
+
+      const pdf = new jsPDF({
+        orientation: "landscape",
+        unit: "pt",
+        format: "a4",
+        compress: true,
       });
-    }
 
-    doc.save(`DataPulse_Report_${new Date().getTime()}.pdf`);
-  }, [result]);
+      const pageWidth = pdf.internal.pageSize.getWidth();
+      const pageHeight = pdf.internal.pageSize.getHeight();
+      const margin = 24;
+      const usableWidth = pageWidth - margin * 2;
+      const usableHeight = pageHeight - margin * 2;
+
+      captures.forEach((entry, index) => {
+        const canvas = entry.canvas;
+        const imgData = canvas.toDataURL("image/png", 1.0);
+        const ratio = Math.min(usableWidth / canvas.width, usableHeight / canvas.height);
+        const renderWidth = canvas.width * ratio;
+        const renderHeight = canvas.height * ratio;
+        const x = (pageWidth - renderWidth) / 2;
+        const y = (pageHeight - renderHeight) / 2;
+
+        if (index > 0) {
+          pdf.addPage();
+        }
+        pdf.addImage(imgData, "PNG", x, y, renderWidth, renderHeight, undefined, "FAST");
+      });
+
+      pdf.save(getSafeDashboardFileName(fileName));
+    } catch (err) {
+      setHistoryActionError(err?.message || "Unable to download dashboard right now.");
+    } finally {
+      setTab(previousTab);
+      setShowAllFindings(previousShowAllFindings);
+      setVisibleChartCount(previousVisibleChartCount);
+      setIsExporting(false);
+    }
+  }, [
+    result,
+    isExporting,
+    tab,
+    showAllFindings,
+    visibleChartCount,
+    ensurePlotReady,
+    captureCurrentPanel,
+    fileName,
+  ]);
 
   const chatStats = useMemo(() => result?.stats_summary || {}, [result?.stats_summary]);
   const chatInsights = useMemo(() => result?.insights || {}, [result?.insights]);
@@ -360,10 +452,9 @@ export default function DataPulse({ user, onLogout }) {
     setChatLoading(false);
   }, [chatInput, chatLoading, result, chatContext]);
 
-  const stats = result?.stats_summary || {};
-  const insights = result?.insights || {};
+  const stats = useMemo(() => result?.stats_summary || {}, [result?.stats_summary]);
+  const insights = useMemo(() => result?.insights || {}, [result?.insights]);
   const dq = stats.data_quality || {};
-  const numericCols = Object.keys(stats.numeric_columns || {});
   const outlierCols = Object.keys(stats.outliers || {});
   const toTextList = (value) => {
     if (Array.isArray(value)) {
@@ -446,7 +537,7 @@ export default function DataPulse({ user, onLogout }) {
         <div style={{ display: 'flex', alignItems: 'center', gap: '32px' }}>
           <div style={{ display: 'flex', gap: '16px' }}>
             <button onClick={toggleHistory} style={{ background: 'none', border: 'none', color: 'var(--text-main)', cursor: 'pointer', fontWeight: 600, fontSize: '13px', textTransform: 'uppercase', letterSpacing: '0.1em', opacity: 0.8 }}>History</button>
-            {result && <button onClick={exportPDF} style={{ background: 'none', border: 'none', color: 'var(--text-main)', cursor: 'pointer', fontWeight: 600, fontSize: '13px', textTransform: 'uppercase', letterSpacing: '0.1em', opacity: 0.8 }}>Download</button>}
+            {result && <button onClick={exportPDF} disabled={isExporting} style={{ background: 'none', border: 'none', color: 'var(--text-main)', cursor: isExporting ? 'not-allowed' : 'pointer', fontWeight: 600, fontSize: '13px', textTransform: 'uppercase', letterSpacing: '0.1em', opacity: isExporting ? 0.5 : 0.8 }}>{isExporting ? "Downloading..." : "Download"}</button>}
           </div>
           <div style={{ width: '1px', height: '20px', background: 'var(--border-subtle)' }} />
           <div style={{ display: 'flex', alignItems: 'center', gap: '20px' }}>
@@ -654,7 +745,7 @@ export default function DataPulse({ user, onLogout }) {
                 <div style={{ minHeight: '500px', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center' }} className="animate-fade-in">
                     <div style={{ width: '44px', height: '44px', border: '3px solid rgba(99,102,241,0.2)', borderTop: '3px solid var(--primary-500)', borderRadius: '50%', animation: 'spin 0.9s linear infinite', marginBottom: '24px', boxShadow: '0 0 20px rgba(99,102,241,0.3)' }} />
                     <strong style={{ fontSize: '18px', color: 'var(--text-main)', marginBottom: '8px', fontFamily: "'Syne', sans-serif" }}>Processing Array...</strong>
-                    <p style={{ fontSize: '14px', color: 'var(--primary-500)', fontFamily: "'Outfit', monospace" }}>{agentLog[agentLog.length - 1]?.msg || "Extracting signatures..."}</p>
+                    <p style={{ fontSize: '14px', color: 'var(--primary-500)', fontFamily: "'Outfit', monospace" }}>{agentLog[agentLog.length - 1] || "Extracting signatures..."}</p>
                 </div>
               ) : !result ? (
                  <div className="card animate-fade-in" style={{ minHeight: '500px', display: 'flex', alignItems: 'center', justifyContent: 'center', width: '100%' }}>
@@ -662,7 +753,7 @@ export default function DataPulse({ user, onLogout }) {
                  </div>
               ) : (
 
-              <div className="panel-flat flex-col gap-24 animate-fade-in">
+              <div ref={exportPanelRef} className="panel-flat flex-col gap-24 animate-fade-in">
                 <div style={{ display: 'flex', borderBottom: '1px solid var(--border-subtle)', gap: '16px', paddingBottom: '12px' }}>
                   {PRIMARY_TABS.map(t => <button key={t} onClick={() => setTab(t)} style={{ background: 'none', border: 'none', color: tab === t ? 'var(--text-main)' : 'var(--text-muted)', fontWeight: tab === t ? 600 : 500, fontSize: '14px', cursor: 'pointer', borderBottom: tab === t ? '2px solid var(--primary-500)' : 'none', paddingBottom: '12px', marginBottom: '-13px', textTransform: 'capitalize', letterSpacing: '0.05em' }}>{t}</button>)}
                   <div style={{ display: 'flex', alignItems: 'center', gap: '4px', margin: '0 4px' }}>

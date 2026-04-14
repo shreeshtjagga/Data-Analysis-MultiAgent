@@ -170,11 +170,6 @@ async def get_user_by_id(db: AsyncSession, user_id: int) -> Optional[User]:
     return await db.get(User, user_id)
 
 
-async def get_user_by_email(db: AsyncSession, email: str) -> Optional[User]:
-    result = await db.execute(select(User).where(User.email == email))
-    return result.scalar_one_or_none()
-
-
 GOOGLE_CLIENT_ID = os.getenv("GOOGLE_CLIENT_ID")
 
 
