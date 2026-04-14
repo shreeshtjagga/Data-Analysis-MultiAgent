@@ -16,7 +16,7 @@ function PasswordInput({ id, placeholder, value, onChange, onKeyDown }) {
       <input
         id={id}
         className="input-field"
-        style={{ width: "100%", paddingRight: "55px", fontFamily: "'Outfit', monospace", letterSpacing: show ? "normal" : "0.2em", backgroundColor: '#f1f5f9', color: '#0f172a' }}
+        style={{ width: "100%", paddingRight: "55px", fontFamily: "'Outfit', monospace", backgroundColor: '#f1f5f9', color: '#0f172a' }}
         type={show ? "text" : "password"}
         placeholder={placeholder}
         value={value}
