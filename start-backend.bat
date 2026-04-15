@@ -12,7 +12,7 @@ cd /d "%~dp0"
 
 :: ── Check that .env file exists ────────────────────────────────────
 if not exist ".env" (
-    echo  [ERROR] .env file not found in %CD%
+    echo  [ERROR] .env file not found in "%CD%"
     echo          Copy .env.example to .env and fill in your credentials.
     pause
     exit /b 1
@@ -29,7 +29,7 @@ if not exist "%VENV_PY%" (
         echo  [ERROR] Failed to create virtual environment.
         echo          Make sure Python 3.10+ is installed and on PATH.
         pause
-        exit /b 1
+
     )
     echo        .venv created successfully.
 ) else (
