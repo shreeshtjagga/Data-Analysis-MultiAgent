@@ -24,6 +24,81 @@ const PLOTLY_DARK_LAYOUT = {
 
 const PLOTLY_CONFIG = { responsive: true, displayModeBar: false, displaylogo: false, modeBarButtonsToRemove: ["lasso2d", "select2d", "toggleSpikelines"] };
 
+function truncateLabel(value, max = 26) {
+  const text = String(value ?? "").trim();
+  if (text.length <= max) return text;
+  return `${text.slice(0, max - 1)}…`;
+}
+
+function cleanQuestionLabel(value) {
+  const raw = String(value ?? "").trim();
+  if (!raw) return "";
+  // Remove survey prefixes like "Q4 - " and leading punctuation artifacts.
+  let text = raw
+    .replace(/^Q\d+\s*[-:]*\s*/i, "")
+    .replace(/^[-\s.:]+/, "")
+    .trim();
+  // Keep labels concise and avoid trailing question mark in legends.
+  text = text.replace(/\?+$/, "").trim();
+  return text || raw;
+}
+
+function cleanAxisTitle(value) {
+  return truncateLabel(cleanQuestionLabel(value), 42);
+}
+
+function normalizeTraceData(data) {
+  return (Array.isArray(data) ? data : []).map((trace) => {
+    const next = { ...trace };
+    if (typeof next.name === "string") next.name = truncateLabel(cleanQuestionLabel(next.name), 24);
+    if (next.type === "pie") {
+      next.textinfo = next.textinfo || "percent+label";
+      next.textposition = next.textposition || "outside";
+      next.hole = typeof next.hole === "number" ? next.hole : 0.45;
+    }
+    return next;
+  });
+}
+
+function hasLongCategoryLabels(data) {
+  const samples = [];
+  (Array.isArray(data) ? data : []).forEach((trace) => {
+    if (Array.isArray(trace?.x)) samples.push(...trace.x.slice(0, 15));
+  });
+  return samples.some((v) => String(v ?? "").length > 14);
+}
+
+function getLegendConfig(traceCount, isMatrix) {
+  if (isMatrix || traceCount <= 1) {
+    return { showlegend: false, legend: {}, legendRows: 0 };
+  }
+  
+  const legendRows = Math.max(1, Math.ceil(traceCount / 4));
+  const legendYOffset = -0.14 - ((legendRows - 1) * 0.11);
+
+  return {
+    showlegend: true,
+    legendRows,
+    legend: {
+      orientation: "h",
+      yanchor: "top",
+      y: legendYOffset,
+      xanchor: "center",
+      x: 0.5,
+      font: { size: 11, color: "rgba(255,255,255,0.8)" },
+      tracegroupgap: 6,
+    },
+  };
+}
+
+function shouldHideLegend(data, traceCount) {
+  const traces = Array.isArray(data) ? data : [];
+  if (traceCount > 6) return true;
+  const barCount = traces.filter((t) => t?.type === "bar").length;
+  if (barCount >= 6) return true;
+  return false;
+}
+
 function ChartPanel({ result, PlotComponent }) {
   if (!PlotComponent) {
     return (
@@ -55,8 +130,20 @@ function ChartPanel({ result, PlotComponent }) {
       {entries.map(([key, fig], idx) => {
         const isMatrix = key.startsWith("scatter_matrix") || key.startsWith("heatmap") || key.includes("matrix");
         const isWide = isMatrix || key.startsWith("timeseries") || key.startsWith("line");
+        const traceCount = Array.isArray(fig.data) ? fig.data.length : 0;
+        const hasLongLabels = hasLongCategoryLabels(fig.data);
+        const { showlegend, legend, legendRows } = getLegendConfig(traceCount, isMatrix);
+        const hideLegend = shouldHideLegend(fig.data, traceCount);
+        const effectiveShowLegend = hideLegend ? false : showlegend;
         const gridSpan = isWide ? "span 12" : "span 6";
-        const chartHeight = isMatrix ? 600 : isWide ? 400 : 350;
+        const chartHeight = isMatrix ? 620 : isWide ? 500 : 450;
+        const normalizedData = normalizeTraceData(fig.data);
+        const margin = {
+          l: 60,
+          r: 24,
+          t: 70,
+          b: effectiveShowLegend ? (95 + (legendRows * 24)) : (hasLongLabels ? 90 : 68),
+        };
 
         return (
           <div
@@ -75,14 +162,17 @@ function ChartPanel({ result, PlotComponent }) {
             }}
           >
             <PlotComponent
-              data={fig.data}
+              data={normalizedData}
               layout={{
                 ...PLOTLY_DARK_LAYOUT,
                 ...fig.layout,
                 authorise : true,
                 title: { 
                   ...(fig.layout?.title || {}), 
-                  font: { color: "#FFFFFF", size: 16, weight: 'bold' } 
+                  text: truncateLabel(cleanQuestionLabel(fig.layout?.title?.text || fig.layout?.title || key.replaceAll("_", " ")), 85),
+                  font: { color: "#FFFFFF", size: 16, weight: 'bold' },
+                  x: 0.5,
+                  xanchor: "center",
                 },
                 paper_bgcolor: "rgba(0,0,0,0)",
                 plot_bgcolor: "rgba(0,0,0,0)",
@@ -93,16 +183,32 @@ function ChartPanel({ result, PlotComponent }) {
                   ...(fig.layout?.hoverlabel || {}),
                 },
                 height: chartHeight,
-                margin: { l: 50, r: 20, t: 60, b: 80 },
+                showlegend: effectiveShowLegend,
+                margin,
                 legend: {
                   ...(fig.layout?.legend || {}),
-                  orientation: "h",
-                  yanchor: "top",
-                  y: -0.15,
-                  xanchor: "center",
-                  x: 0.5,
-                  font: { size: 11, color: "rgba(255,255,255,0.7)" }
-                }
+                  ...legend,
+                },
+                xaxis: {
+                  ...(fig.layout?.xaxis || {}),
+                  title: {
+                    ...(fig.layout?.xaxis?.title || {}),
+                    text: cleanAxisTitle(fig.layout?.xaxis?.title?.text || fig.layout?.xaxis?.title || ""),
+                  },
+                  automargin: true,
+                  tickangle: hasLongLabels ? -28 : (fig.layout?.xaxis?.tickangle ?? 0),
+                  tickfont: { color: "#FFFFFF", size: 11 },
+                },
+                yaxis: {
+                  ...(fig.layout?.yaxis || {}),
+                  title: {
+                    ...(fig.layout?.yaxis?.title || {}),
+                    text: cleanAxisTitle(fig.layout?.yaxis?.title?.text || fig.layout?.yaxis?.title || ""),
+                  },
+                  automargin: true,
+                  tickfont: { color: "#FFFFFF", size: 11 },
+                },
+                uniformtext: { minsize: 10, mode: "hide" },
               }}
               config={PLOTLY_CONFIG}
               style={{ width: "100%", height: `${chartHeight}px` }}
@@ -514,7 +620,17 @@ export default function DataPulse({ user, onLogout }) {
   }, [numericColumns, outliersByColumn, statsFilter, statsSortKey, statsSortDirection]);
   return (
     <div style={{ height: '100vh', display: 'flex', flexDirection: 'column', position: 'relative', overflow: 'hidden' }}>
-      <ParticleBackground noExclude={phase === "done"} />
+      <ParticleBackground
+        noExclude={false}
+        exclusionSelectors={phase === "done"
+          ? [
+              ".col-4 > div:first-child",
+              ".col-4 .card",
+              ".panel-flat",
+            ]
+          : []}
+        exclusionPadding={14}
+      />
 
       {/* NAVBAR */}
       <div style={{ background: 'rgba(6, 9, 18, 0.90)', backdropFilter: 'blur(12px)', WebkitBackdropFilter: 'blur(12px)', padding: '16px 48px', borderBottom: '1px solid var(--border-subtle)', display: 'flex', justifyContent: 'space-between', alignItems: 'center', position: 'sticky', top: 0, zIndex: 100 }}>
@@ -542,7 +658,7 @@ export default function DataPulse({ user, onLogout }) {
              
              {/* LEFT SIDE: AI Animated Visual */}
              <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center' }}>
-                <div style={{ position: 'relative', width: '100%', maxWidth: '450px' }}>
+               <div style={{ position: 'relative', width: '100%', maxWidth: '390px' }}>
                   {/* Outer pulse ring */}
                   <div style={{ position: 'absolute', inset: 0, borderRadius: '50%', background: 'var(--primary-500)', filter: 'blur(40px)', opacity: 0.05, animation: 'pulse 4s infinite' }} />
                   
@@ -568,9 +684,9 @@ export default function DataPulse({ user, onLogout }) {
              </div>
 
              {/* RIGHT SIDE: Upload Logic */}
-             <div style={{ display: 'flex', flexDirection: 'column', justifyContent: 'center', gap: '24px' }}>
-               <div style={{ animation: 'slideUp 0.8s cubic-bezier(0.2, 0.8, 0.2, 1)' }}>
-                  <div style={{ display: 'inline-flex', alignItems: 'center', gap: '12px', padding: '6px 16px', background: 'rgba(99,102,241,0.1)', borderRadius: '100px', border: '1px solid rgba(99,102,241,0.2)', marginBottom: '16px', color: 'var(--primary-500)', fontSize: '13px', fontWeight: 600, letterSpacing: '0.1em', textTransform: 'uppercase' }}>
+             <div style={{ display: 'flex', flexDirection: 'column', justifyContent: 'center', alignItems: 'center', gap: '24px' }}>
+              <div style={{ animation: 'slideUp 0.8s cubic-bezier(0.2, 0.8, 0.2, 1)', textAlign: 'center', width: '100%' }}>
+                <div style={{ display: 'inline-flex', alignItems: 'center', gap: '12px', padding: '6px 16px', background: 'rgba(99,102,241,0.1)', borderRadius: '100px', border: '1px solid rgba(99,102,241,0.2)', marginBottom: '16px', color: 'var(--primary-500)', fontSize: '13px', fontWeight: 600, letterSpacing: '0.1em', textTransform: 'uppercase', marginInline: 'auto' }}>
                      <span style={{ width: '6px', height: '6px', background: 'var(--primary-500)', borderRadius: '50%', boxShadow: '0 0 10px var(--primary-500)' }} />
                      System Ready
                   </div>
