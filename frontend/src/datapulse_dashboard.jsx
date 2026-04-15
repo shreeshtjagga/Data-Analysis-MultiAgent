@@ -46,48 +46,66 @@ function ChartPanel({ result, PlotComponent }) {
   }
 
   return (
-    <div style={{ display: "flex", flexDirection: "column", gap: "32px", paddingBottom: "40px" }}>
-      {entries.map(([key, fig], idx) => (
-        <div
-          key={key}
-          style={{
-            padding: '24px',
-            backgroundColor: 'rgba(13, 18, 32, 0.7)',
-            backdropFilter: 'blur(8px)',
-            borderRadius: '14px',
-            border: '1px solid var(--border-subtle)',
-            boxShadow: 'var(--shadow-card)',
-            animation: 'fadeIn 0.35s cubic-bezier(0.2, 0.8, 0.2, 1) both',
-            animationDelay: `${idx * 90}ms`,
-          }}
-        >
-          <PlotComponent
-            data={fig.data}
-            layout={{
-              ...PLOTLY_DARK_LAYOUT,
-              ...fig.layout,
-              authorise : true,
-              title: { 
-                ...(fig.layout?.title || {}), 
-                font: { color: "#FFFFFF", size: 16, weight: 'bold' } 
-              },
-              paper_bgcolor: "rgba(0,0,0,0)",
-              plot_bgcolor: "rgba(0,0,0,0)",
-              font: { color: "#FFFFFF", family: "'Inter', sans-serif" },
-              height: 300,
+    <div style={{ display: "grid", gridTemplateColumns: "repeat(12, 1fr)", gap: "24px", paddingBottom: "40px", alignItems: "start" }}>
+      {entries.map(([key, fig], idx) => {
+        const isMatrix = key.startsWith("scatter_matrix") || key.startsWith("heatmap") || key.includes("matrix");
+        const isWide = isMatrix || key.startsWith("timeseries") || key.startsWith("line");
+        const gridSpan = isWide ? "span 12" : "span 6";
+        const chartHeight = isMatrix ? 600 : isWide ? 400 : 350;
+
+        return (
+          <div
+            key={key}
+            style={{
+              gridColumn: gridSpan,
+              minWidth: 0, 
+              padding: '24px',
+              backgroundColor: 'rgba(13, 18, 32, 0.7)',
+              backdropFilter: 'blur(8px)',
+              borderRadius: '14px',
+              border: '1px solid var(--border-subtle)',
+              boxShadow: 'var(--shadow-card)',
+              animation: 'fadeIn 0.35s cubic-bezier(0.2, 0.8, 0.2, 1) both',
+              animationDelay: `${idx * 90}ms`,
             }}
-            config={PLOTLY_CONFIG}
-            style={{ width: "100%", height: "300px" }}
-            
-          />
-        </div>
-      ))}
+          >
+            <PlotComponent
+              data={fig.data}
+              layout={{
+                ...PLOTLY_DARK_LAYOUT,
+                ...fig.layout,
+                authorise : true,
+                title: { 
+                  ...(fig.layout?.title || {}), 
+                  font: { color: "#FFFFFF", size: 16, weight: 'bold' } 
+                },
+                paper_bgcolor: "rgba(0,0,0,0)",
+                plot_bgcolor: "rgba(0,0,0,0)",
+                font: { color: "#FFFFFF", family: "'Inter', sans-serif" },
+                height: chartHeight,
+                margin: { l: 50, r: 20, t: 60, b: 80 },
+                legend: {
+                  ...(fig.layout?.legend || {}),
+                  orientation: "h",
+                  yanchor: "top",
+                  y: -0.15,
+                  xanchor: "center",
+                  x: 0.5,
+                  font: { size: 11, color: "rgba(255,255,255,0.7)" }
+                }
+              }}
+              config={PLOTLY_CONFIG}
+              style={{ width: "100%", height: `${chartHeight}px` }}
+            />
+          </div>
+        );
+      })}
     </div>
   );
 }
 
 const PRIMARY_TABS = ["overview", "charts", "insights"];
-const SECONDARY_TABS = ["statistics", "quality"];
+const SECONDARY_TABS = ["data"];
 const MAX_CHAT_MESSAGES = 40;
 
 export default function DataPulse({ user, onLogout }) {
@@ -332,6 +350,32 @@ export default function DataPulse({ user, onLogout }) {
     doc.save(`DataPulse_Report_${new Date().getTime()}.pdf`);
   }, [result]);
 
+  const downloadCleanedData = useCallback(() => {
+    if (!result || !result.clean_df || result.clean_df.length === 0) return;
+    
+    const df = result.clean_df;
+    const headers = Object.keys(df[0]);
+    const csvContent = [
+      headers.join(","),
+      ...df.map(row => headers.map(h => {
+        const val = row[h];
+        if (typeof val === 'string' && val.includes(',')) {
+          return `"${val}"`;
+        }
+        return val;
+      }).join(","))
+    ].join("\n");
+
+    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.setAttribute("download", `cleaned_data_${new Date().getTime()}.csv`);
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+  }, [result]);
+
   const chatStats = useMemo(() => result?.stats_summary || {}, [result?.stats_summary]);
   const chatInsights = useMemo(() => result?.insights || {}, [result?.insights]);
 
@@ -347,8 +391,9 @@ export default function DataPulse({ user, onLogout }) {
       outlierSummary,
       dataQuality: chatStats?.data_quality || {},
       correlations: chatStats?.strong_correlations?.slice(0, 5),
+      charts: result?.charts || {},
     };
-  }, [chatStats, chatInsights, fileName]);
+  }, [chatStats, chatInsights, fileName, result?.charts]);
 
   const sendChat = useCallback(async () => {
     const q = chatInput.trim();
@@ -442,7 +487,7 @@ export default function DataPulse({ user, onLogout }) {
       });
   }, [numericColumns, outliersByColumn, statsFilter, statsSortKey, statsSortDirection]);
   return (
-    <div style={{ minHeight: '100vh', display: 'flex', flexDirection: 'column', position: 'relative' }}>
+    <div style={{ height: '100vh', display: 'flex', flexDirection: 'column', position: 'relative', overflow: 'hidden' }}>
       <ParticleBackground noExclude={phase === "done"} />
 
       {/* NAVBAR */}
@@ -464,10 +509,10 @@ export default function DataPulse({ user, onLogout }) {
         </div>
       </div>
 
-      <div className="container" style={{ flex: 1, display: 'flex', flexDirection: 'column', position: 'relative', zIndex: 1, paddingBottom: '32px', paddingTop: '24px', minHeight: 'calc(100vh - 80px)', width: '100%' }}>
+      <div className="container" style={{ flex: 1, display: 'flex', flexDirection: 'column', position: 'relative', zIndex: 1, paddingBottom: '32px', paddingTop: '24px', height: 'calc(100vh - 80px)', width: '100%', overflow: 'hidden' }}>
         {/* MAIN SECTION */}
         {phase === "upload" ? (
-          <div className="animate-fade-in" style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', textAlign: 'center', gap: '48px', padding: '40px 0' }}>
+          <div className="animate-fade-in" style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', textAlign: 'center', gap: '48px', padding: '40px 0', overflowY: 'auto' }}>
              
              {/* Animated Welcome Section */}
              <div style={{ animation: 'slideUp 0.8s cubic-bezier(0.2, 0.8, 0.2, 1)' }}>
@@ -538,10 +583,10 @@ export default function DataPulse({ user, onLogout }) {
              </div>
           </div>
         ) : (
-          <div className="grid-12 animate-fade-in" style={{ alignItems: 'start', width: '100%', flex: 1 }}>
+          <div className="grid-12 animate-fade-in" style={{ alignItems: 'start', width: '100%', flex: 1, overflow: 'hidden', height: '100%' }}>
             
             {/* LEFT 3 (Chat & Status) */}
-            <div className="col-3 flex-col gap-24" style={{ position: 'sticky', top: '80px', maxHeight: 'calc(100vh - 96px)', overflowY: 'auto', alignSelf: 'flex-start' }}>
+            <div className="col-3 flex-col gap-24" style={{ height: '100%', overflowY: 'auto', paddingRight: '12px' }}>
                <div
                     onClick={() => fileRef.current?.click()}
                     style={{
@@ -624,7 +669,31 @@ export default function DataPulse({ user, onLogout }) {
                           marginBottom: '4px'
                         }}
                        >
-                         {m.text}
+                         {(() => {
+                           if (m.role !== 'ai' || !m.text.includes('[CHART:')) return m.text;
+                           const parts = m.text.split(/(\[CHART:\s*[^\]]+\])/);
+                           return parts.map((part, pIdx) => {
+                             const match = part.match(/\[CHART:\s*([^\]]+)\]/);
+                             if (match && result?.charts?.[match[1]]) {
+                               const figStr = result.charts[match[1]];
+                               let parsedFig = typeof figStr === "string" ? JSON.parse(figStr) : figStr;
+                               const data = Array.isArray(parsedFig?.data) ? parsedFig.data : [];
+                               const layout = (parsedFig?.layout && typeof parsedFig.layout === 'object') ? parsedFig.layout : {};
+                               return PlotComponent ? (
+                                 <div key={pIdx} style={{ margin: '16px 0', border: '1px solid rgba(99,102,241,0.2)', borderRadius: '12px', overflow: 'hidden', padding: '12px', background: 'rgba(0,0,0,0.3)', width: '100%' }}>
+                                   <PlotComponent
+                                     data={data}
+                                     layout={{ ...PLOTLY_DARK_LAYOUT, ...layout, height: 280, margin: {l: 40, r: 20, t: 40, b: 40}, title: { ...(layout.title || {}), font: { size: 14, color: '#fff', weight: 'bold' }, y: 0.95, yanchor: 'top' }, legend: { orientation: "h", yanchor: "top", y: -0.2, xanchor: "center", x: 0.5, font: { size: 10, color: "rgba(255,255,255,0.7)" } } }}
+                                     config={PLOTLY_CONFIG}
+                                     style={{ width: "100%", height: "280px" }}
+                                   />
+                                 </div>
+                               ) : <div key={pIdx} style={{ color: 'var(--primary-500)' }}>[Rendering Chart...]</div>;
+                             }
+                             if (match) return null; // hide broken chart tags if it doesn't exist
+                             return <span key={pIdx}>{part}</span>;
+                           });
+                         })()}
                        </div>
                      ))}
                      {chatLoading && <div style={{ fontSize: '13px', color: 'var(--primary-500)', fontFamily: "'Outfit', monospace" }}>Synthesizing...</div>}
@@ -650,7 +719,7 @@ export default function DataPulse({ user, onLogout }) {
             </div>
 
             {/* RIGHT (Results / Loading) */}
-            <div className="col-9">
+            <div className="col-9" style={{ height: '100%', overflowY: 'auto', paddingRight: '12px', paddingBottom: '32px' }}>
               {analysisError ? (
                 <div className="card flex-col align-center justify-center animate-fade-in" style={{ minHeight: '500px', textAlign: 'center', border: '1px solid rgba(239,68,68,0.2)' }}>
                   <div style={{ fontSize: '48px', color: 'var(--error)', marginBottom: '16px' }}>⚠</div>
@@ -722,118 +791,38 @@ export default function DataPulse({ user, onLogout }) {
                      </div>
                   </div>
                 )}
-
-                {tab === "statistics" && (
-                  <div className="flex-col gap-12">
-                    {/* Filter + sort controls */}
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
-                      <input
-                        className="input-field"
-                        value={statsFilter}
-                        onChange={e => setStatsFilter(e.target.value)}
-                        placeholder="Filter columns…"
-                        style={{ flex: 1, fontSize: '13px', padding: '8px 14px' }}
-                      />
-                      {statsFilter && (
-                        <button
-                          onClick={() => setStatsFilter("")}
-                          style={{ background: 'none', border: 'none', color: 'var(--text-muted)', cursor: 'pointer', fontSize: '16px', lineHeight: 1 }}
-                          title="Clear filter"
-                        >✕</button>
-                      )}
-                      <span style={{ fontSize: '12px', color: 'var(--text-muted)', whiteSpace: 'nowrap' }}>
-                        {sortedNumericRows.length} col{sortedNumericRows.length !== 1 ? 's' : ''}
-                      </span>
-                    </div>
-
-                    {/* Table */}
-                    <div style={{ overflowX: 'auto', border: '1px solid var(--border-subtle)', borderRadius: '12px' }}>
-                      <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '14px', textAlign: 'left', background: 'var(--bg-input)' }}>
-                        <thead style={{ background: 'rgba(99,102,241,0.05)', borderBottom: '1px solid var(--border-subtle)' }}>
-                          <tr>
-                            {[
-                              { label: 'Column',   key: 'column'   },
-                              { label: 'Count',    key: 'count'    },
-                              { label: 'Mean',     key: 'mean'     },
-                              { label: 'Std',      key: 'std'      },
-                              { label: 'Min',      key: 'min'      },
-                              { label: 'Max',      key: 'max'      },
-                              { label: 'Outliers', key: 'outliers' },
-                            ].map(({ label, key }) => {
-                              const active = statsSortKey === key;
-                              return (
-                                <th
-                                  key={key}
-                                  onClick={() => {
-                                    if (active) {
-                                      setStatsSortDirection(d => d === 'asc' ? 'desc' : 'asc');
-                                    } else {
-                                      setStatsSortKey(key);
-                                      setStatsSortDirection('desc');
-                                    }
-                                  }}
-                                  style={{
-                                    padding: '14px 12px',
-                                    color: active ? 'var(--primary-500)' : 'var(--text-muted)',
-                                    fontWeight: 600,
-                                    textTransform: 'uppercase',
-                                    fontSize: '12px',
-                                    letterSpacing: '0.05em',
-                                    cursor: 'pointer',
-                                    userSelect: 'none',
-                                    whiteSpace: 'nowrap',
-                                  }}
-                                >
-                                  {label}
-                                  <span style={{ marginLeft: '4px', opacity: active ? 1 : 0.3 }}>
-                                    {active ? (statsSortDirection === 'asc' ? '↑' : '↓') : '↕'}
-                                  </span>
-                                </th>
-                              );
-                            })}
-                          </tr>
-                        </thead>
-                        <tbody>
-                          {sortedNumericRows.length === 0 && (
-                            <tr>
-                              <td colSpan={7} style={{ padding: '40px', textAlign: 'center', color: 'var(--text-muted)', fontSize: '14px' }}>
-                                {statsFilter ? `No columns matching "${statsFilter}"` : "No numeric columns found in this dataset."}
-                              </td>
-                            </tr>
-                          )}
-                          {sortedNumericRows.map((r, idx) => (
-                            <tr key={r.column} style={{ borderBottom: idx === sortedNumericRows.length - 1 ? 'none' : '1px solid var(--border-subtle)' }}>
-                              <td style={{ padding: '16px 12px', color: '#818cf8', fontWeight: 500, fontFamily: "'Outfit', monospace" }}>{r.column}</td>
-                              <td style={{ padding: '16px 12px', color: 'var(--text-muted)' }}>{r.count}</td>
-                              <td style={{ padding: '16px 12px', color: 'var(--text-main)' }}>{f(r.mean)}</td>
-                              <td style={{ padding: '16px 12px', color: 'var(--text-muted)' }}>{f(r.std)}</td>
-                              <td style={{ padding: '16px 12px', color: 'var(--text-muted)' }}>{f(r.min)}</td>
-                              <td style={{ padding: '16px 12px', color: 'var(--text-muted)' }}>{f(r.max)}</td>
-                              <td style={{ padding: '16px 12px', color: r.outliers > 0 ? 'var(--error)' : 'var(--success)' }}>{r.outliers}</td>
-                            </tr>
-                          ))}
-                        </tbody>
-                      </table>
-                    </div>
-                  </div>
-                )}
                 
-                {tab === "quality" && (
+                {tab === "data" && (
                   <div className="flex-col gap-16">
-                    <strong style={{ fontSize: '15px', color: 'var(--text-main)', fontFamily: "'Syne', sans-serif" }}>Detected Anomalies</strong>
-                    {outlierCols.length === 0 ? (
-                      <p style={{ fontSize: '14px', color: 'var(--success)' }}>All systems nominal. No statistical outliers detected.</p>
-                    ) : outlierCols.map(col => {
-                       const info = stats.outliers[col];
-                       const pct = Number(info?.percentage ?? 0);
-                       const pctText = Number.isFinite(pct) ? pct.toFixed(1) : "0.0";
-                       return (
-                         <div key={col} style={{ padding: '16px', display: 'flex', justifyContent: 'space-between', background: 'var(--bg-input)', border: '1px solid rgba(239,68,68,0.2)', borderRadius: '12px' }}>
-                           <strong style={{ fontSize: '14px', color: '#fca5a5', fontFamily: "'Outfit', monospace" }}>{col}</strong>
-                           <span style={{ fontSize: '14px', color: 'var(--text-muted)' }}>{Number(info?.count ?? 0)} signals ({pctText}%)</span>
-                         </div>
-                       )
-                    })}
+                     <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                       <strong style={{ fontSize: '15px', color: 'var(--text-main)', fontFamily: "'Syne', sans-serif" }}>Cleaned Data Preview</strong>
+                       <button onClick={downloadCleanedData} className="btn-primary" style={{ padding: '0 16px', height: '36px', fontSize: '12px' }}>Download Data (CSV)</button>
+                     </div>
+                     <p style={{ fontSize: '13px', color: 'var(--text-muted)' }}>This preview shows up to 100 array segments from your engine after cleaning and imputation algorithms have run.</p>
+                     <div style={{ overflowX: 'auto', border: '1px solid var(--border-subtle)', borderRadius: '12px' }}>
+                        {result?.clean_df && result.clean_df.length > 0 ? (
+                          <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '13px', textAlign: 'left', background: 'var(--bg-input)' }}>
+                            <thead style={{ background: 'rgba(99,102,241,0.05)', borderBottom: '1px solid var(--border-subtle)' }}>
+                              <tr>
+                                {Object.keys(result.clean_df[0]).map(k => (
+                                  <th key={k} style={{ padding: '12px 14px', color: 'var(--text-muted)', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.05em', whiteSpace: 'nowrap' }}>{k}</th>
+                                ))}
+                              </tr>
+                            </thead>
+                            <tbody>
+                              {result.clean_df.map((row, i) => (
+                                <tr key={i} style={{ borderBottom: i === result.clean_df.length - 1 ? 'none' : '1px solid var(--border-subtle)' }}>
+                                  {Object.values(row).map((v, j) => (
+                                    <td key={j} style={{ padding: '12px 14px', color: 'var(--text-main)', whiteSpace: 'nowrap' }}>{String(v)}</td>
+                                  ))}
+                                </tr>
+                              ))}
+                            </tbody>
+                          </table>
+                        ) : (
+                          <div style={{ padding: '24px', textAlign: 'center', color: 'var(--text-muted)' }}>Cleaned data unavailable.</div>
+                        )}
+                     </div>
                   </div>
                 )}
                 
@@ -877,7 +866,7 @@ export default function DataPulse({ user, onLogout }) {
                     <button 
                       onClick={(e) => { e.stopPropagation(); deleteItem(item.analysis_id); }} 
                       disabled={deleteLoading === item.analysis_id}
-                      style={{ background: 'none', border: 'none', color: 'var(--text-muted)', cursor: 'pointer', padding: '8px' }}
+                      style={{ background: 'none', border: 'none', color: 'var(--text-muted)', cursor: 'pointer', padding: '8px', fontSize: '24px' }}
                     >
                       {deleteLoading === item.analysis_id ? "..." : "🗑"}
                     </button>

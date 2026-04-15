@@ -84,6 +84,14 @@ export default function App() {
         }
       />
       <Route
+        path="/register"
+        element={
+          authState.user
+            ? <Navigate to="/" replace />
+            : <Login onLogin={handleLogin} />
+        }
+      />
+      <Route
         path="/forgot-password"
         element={
           authState.user

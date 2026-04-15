@@ -100,3 +100,6 @@ coverage.xml
 *.backup
 *.orig
 .cache/
+
+# ─── Duplicate Local Copies ──────────────────────────────────────────────────
+Data-Analysis-MultiAgent/

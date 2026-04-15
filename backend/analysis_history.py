@@ -108,6 +108,7 @@ async def save_analysis(
     file_hash: str,
     file_size: int,
     analysis_result: dict,
+    serialized_charts: Optional[dict] = None,
 ) -> dict:
     try:
         stats = analysis_result.get("stats_summary") or {}
@@ -125,7 +126,10 @@ async def save_analysis(
         if isinstance(clean_data, pd.DataFrame):
             clean_data = clean_data.head(100).to_dict(orient="records")
 
-        charts_json = _to_json(_serialize_charts(analysis_result.get("charts") or {}))
+        if serialized_charts is not None:
+             charts_json = _to_json(serialized_charts)
+        else:
+             charts_json = _to_json(_serialize_charts(analysis_result.get("charts") or {}))
 
         result = await db.execute(
             select(AnalysisHistory).where(
