@@ -84,6 +84,22 @@ export default function App() {
         }
       />
       <Route
+        path="/forgot-password"
+        element={
+          authState.user
+            ? <Navigate to="/" replace />
+            : <Login onLogin={handleLogin} />
+        }
+      />
+      <Route
+        path="/reset-password"
+        element={
+          authState.user
+            ? <Navigate to="/" replace />
+            : <Login onLogin={handleLogin} />
+        }
+      />
+      <Route
         path="/"
         element={
           authState.user

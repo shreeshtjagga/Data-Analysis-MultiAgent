@@ -197,6 +197,22 @@ export async function apiGoogleLogin(credential, clientId = null) {
   });
 }
 
+export async function apiForgotPassword(email) {
+  return apiFetch("/auth/forgot-password", {
+    method: "POST",
+    withAuth: false,
+    body: JSON.stringify({ email }),
+  });
+}
+
+export async function apiResetPassword(token, newPassword) {
+  return apiFetch("/auth/reset-password", {
+    method: "POST",
+    withAuth: false,
+    body: JSON.stringify({ token, new_password: newPassword }),
+  });
+}
+
 export async function apiMe() {
   return apiFetch("/auth/me");
 }

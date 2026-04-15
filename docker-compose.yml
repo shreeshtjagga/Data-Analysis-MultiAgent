@@ -38,6 +38,8 @@ services:
       - .env
     environment:
       - APP_ENV=development
+      - DATABASE_URL=postgresql+asyncpg://datapulse:datapulse_secret@db:5432/datapulse
+      - REDIS_URL=redis://redis:6379
     depends_on:
       db:
         condition: service_healthy

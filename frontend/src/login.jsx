@@ -1,6 +1,7 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
+import { useLocation, useNavigate } from "react-router-dom";
 import { GoogleLogin } from '@react-oauth/google';
-import { apiLogin, apiRegister, apiGoogleLogin } from "./services/api.js";
+import { apiLogin, apiRegister, apiGoogleLogin, apiForgotPassword, apiResetPassword } from "./api.js";
 import ParticleBackground from "./ParticleBackground.jsx";
 
 const GOOGLE_CLIENT_ID = import.meta.env.VITE_GOOGLE_CLIENT_ID;
@@ -98,7 +99,7 @@ function GoogleAuthComponent({ onLogin, setError, setLoading, setTab }) {
   );
 }
 
-function LoginForm({ onLogin }) {
+function LoginForm({ onLogin, onForgot }) {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [loading, setLoading] = useState(false);
@@ -150,8 +151,134 @@ function LoginForm({ onLogin }) {
       <button id="login-submit" className="btn-primary" style={{ width: "100%", marginTop: '24px' }} onClick={submit} disabled={loading}>
         {loading ? "LOGGING IN…" : "LOGIN"}
       </button>
+      <button
+        type="button"
+        onClick={onForgot}
+        style={{ background: 'none', border: 'none', color: 'var(--primary-500)', cursor: 'pointer', fontSize: '13px', textAlign: 'left', padding: 0 }}
+      >
+        Forgot your password?
+      </button>
       
       <GoogleAuthComponent onLogin={onLogin} setError={setError} setLoading={setLoading} setTab={() => {}} />
+    </div>
+  );
+}
+
+function ForgotPasswordForm({ onBackToLogin }) {
+  const [email, setEmail] = useState("");
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState("");
+  const [success, setSuccess] = useState("");
+  const [debugToken, setDebugToken] = useState("");
+
+  const submit = async () => {
+    setError("");
+    setSuccess("");
+    setDebugToken("");
+    if (!email) {
+      setError("Please enter your email");
+      return;
+    }
+    setLoading(true);
+    try {
+      const data = await apiForgotPassword(email);
+      setSuccess(data?.message || "If an account exists for that email, a reset link has been sent.");
+      if (data?.debug_reset_token) {
+        setDebugToken(data.debug_reset_token);
+      }
+    } catch (err) {
+      setError(err.message || "Could not process request");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  return (
+    <div className="flex-col gap-16">
+      {error && <div style={{ padding: '12px', borderRadius: '8px', backgroundColor: 'rgba(239,68,68,0.1)', border: '1px solid rgba(239,68,68,0.3)', color: '#fca5a5', fontSize: '14px' }}>{error}</div>}
+      {success && <div style={{ padding: '12px', borderRadius: '8px', backgroundColor: 'rgba(16,185,129,0.1)', border: '1px solid rgba(16,185,129,0.3)', color: '#6ee7b7', fontSize: '14px' }}>{success}</div>}
+      {!!debugToken && (
+        <div style={{ padding: '10px', borderRadius: '8px', backgroundColor: 'rgba(99,102,241,0.1)', border: '1px solid rgba(99,102,241,0.3)', color: '#c7d2fe', fontSize: '12px', wordBreak: 'break-all' }}>
+          Dev token: {debugToken}
+        </div>
+      )}
+      <div className="flex-col gap-8">
+        <label style={{ fontSize: '13px', fontWeight: 600, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Account Email</label>
+        <input
+          className="input-field"
+          style={{ width: "100%", backgroundColor: '#f1f5f9', color: '#0f172a' }}
+          type="email"
+          placeholder="you@example.com"
+          value={email}
+          onChange={(e) => setEmail(e.target.value)}
+          onKeyDown={(e) => e.key === "Enter" && submit()}
+        />
+      </div>
+      <button className="btn-primary" style={{ width: "100%" }} onClick={submit} disabled={loading}>
+        {loading ? "SENDING…" : "SEND RESET LINK"}
+      </button>
+      <button type="button" onClick={onBackToLogin} style={{ background: 'none', border: 'none', color: 'var(--primary-500)', cursor: 'pointer', fontSize: '13px', textAlign: 'left', padding: 0 }}>
+        Back to Login
+      </button>
+    </div>
+  );
+}
+
+function ResetPasswordForm({ token, onBackToLogin }) {
+  const [password, setPassword] = useState("");
+  const [confirm, setConfirm] = useState("");
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState("");
+  const [success, setSuccess] = useState("");
+
+  const submit = async () => {
+    setError("");
+    setSuccess("");
+    if (!token) {
+      setError("Reset token is missing. Please open the link from your email.");
+      return;
+    }
+    if (!password || !confirm) {
+      setError("Please fill in all fields");
+      return;
+    }
+    if (password !== confirm) {
+      setError("Passwords do not match");
+      return;
+    }
+    if (password.length < 6) {
+      setError("Password must be at least 6 characters");
+      return;
+    }
+    setLoading(true);
+    try {
+      const data = await apiResetPassword(token, password);
+      setSuccess(data?.message || "Password reset successful.");
+    } catch (err) {
+      setError(err.message || "Could not reset password");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  return (
+    <div className="flex-col gap-16">
+      {error && <div style={{ padding: '12px', borderRadius: '8px', backgroundColor: 'rgba(239,68,68,0.1)', border: '1px solid rgba(239,68,68,0.3)', color: '#fca5a5', fontSize: '14px' }}>{error}</div>}
+      {success && <div style={{ padding: '12px', borderRadius: '8px', backgroundColor: 'rgba(16,185,129,0.1)', border: '1px solid rgba(16,185,129,0.3)', color: '#6ee7b7', fontSize: '14px' }}>{success}</div>}
+      <div className="flex-col gap-8">
+        <label style={{ fontSize: '13px', fontWeight: 600, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>New Password</label>
+        <PasswordInput id="reset-password" placeholder="••••••••" value={password} onChange={(e) => setPassword(e.target.value)} />
+      </div>
+      <div className="flex-col gap-8">
+        <label style={{ fontSize: '13px', fontWeight: 600, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Confirm Password</label>
+        <PasswordInput id="reset-confirm" placeholder="••••••••" value={confirm} onChange={(e) => setConfirm(e.target.value)} onKeyDown={(e) => e.key === "Enter" && submit()} />
+      </div>
+      <button className="btn-primary" style={{ width: "100%" }} onClick={submit} disabled={loading}>
+        {loading ? "UPDATING…" : "RESET PASSWORD"}
+      </button>
+      <button type="button" onClick={onBackToLogin} style={{ background: 'none', border: 'none', color: 'var(--primary-500)', cursor: 'pointer', fontSize: '13px', textAlign: 'left', padding: 0 }}>
+        Back to Login
+      </button>
     </div>
   );
 }
@@ -218,7 +345,33 @@ function RegisterForm({ onLogin, setTab }) {
 }
 
 export default function Login({ onLogin }) {
-  const [tab, setTab] = useState("login");
+  const location = useLocation();
+  const navigate = useNavigate();
+  const params = new URLSearchParams(location.search);
+  const resetToken = params.get("token") || "";
+  const deriveTabFromPath = (pathname) => {
+    if (pathname === "/reset-password") return "reset";
+    if (pathname === "/forgot-password") return "forgot";
+    return "login";
+  };
+  const [tab, setTab] = useState(deriveTabFromPath(location.pathname));
+
+  useEffect(() => {
+    const routeTab = deriveTabFromPath(location.pathname);
+    if (routeTab !== tab) {
+      setTab(routeTab);
+    }
+  }, [location.pathname, tab]);
+
+  const goToLogin = () => {
+    setTab("login");
+    navigate("/login", { replace: true });
+  };
+
+  const goToForgot = () => {
+    setTab("forgot");
+    navigate("/forgot-password", { replace: true });
+  };
 
   return (
     <div style={{ minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '24px', position: 'relative' }}>
@@ -241,7 +394,7 @@ export default function Login({ onLogin }) {
               fontWeight: 700,
               cursor: 'pointer', fontSize: '13px', textTransform: 'uppercase', letterSpacing: '0.08em'
             }} 
-            onClick={() => setTab("login")}
+            onClick={goToLogin}
           >
             Login
           </button>
@@ -254,15 +407,27 @@ export default function Login({ onLogin }) {
               fontWeight: 700,
               cursor: 'pointer', fontSize: '13px', textTransform: 'uppercase', letterSpacing: '0.08em'
             }} 
-            onClick={() => setTab("register")}
+            onClick={() => { setTab("register"); navigate("/login", { replace: true }); }}
           >
             Register
           </button>
         </div>
 
-        {tab === "login"
-          ? <LoginForm onLogin={onLogin} />
-          : <RegisterForm onLogin={onLogin} setTab={setTab} />}
+        {tab === "login" && <LoginForm onLogin={onLogin} onForgot={goToForgot} />}
+        {tab === "register" && (
+          <>
+            <RegisterForm onLogin={onLogin} setTab={setTab} />
+            <button
+              type="button"
+              onClick={goToForgot}
+              style={{ background: 'none', border: 'none', color: 'var(--primary-500)', cursor: 'pointer', fontSize: '13px', textAlign: 'left', padding: 0, marginTop: '12px' }}
+            >
+              Forgot your password?
+            </button>
+          </>
+        )}
+        {tab === "forgot" && <ForgotPasswordForm onBackToLogin={goToLogin} />}
+        {tab === "reset" && <ResetPasswordForm token={resetToken} onBackToLogin={goToLogin} />}
       </div>
     </div>
   );
