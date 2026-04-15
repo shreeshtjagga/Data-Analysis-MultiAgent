@@ -17,37 +17,8 @@
 // In Production, vercel.json proxies this to the Render backend.
 const BASE = "/api";
 
-function normalizeErrorDetail(body, fallback) {
-  const raw = body?.detail ?? body?.message ?? fallback;
-
-  if (typeof raw === "string") return raw;
-  if (Array.isArray(raw)) {
-    return raw
-      .map((item) => (typeof item === "string" ? item : JSON.stringify(item)))
-      .join("; ");
-  }
-  if (raw && typeof raw === "object") {
-    if (typeof raw.message === "string" && raw.message.trim()) {
-      const extra = Array.isArray(raw.errors) && raw.errors.length
-        ? ` (${raw.errors
-            .map((item) => {
-              if (typeof item === "string") return item;
-              try { return JSON.stringify(item); } catch (_) { return String(item); }
-            })
-            .join("; ")})`
-        : "";
-      return `${raw.message}${extra}`;
-    }
-    try {
-      return JSON.stringify(raw);
-    } catch (_) {
-      return fallback;
-    }
-  }
-  return String(raw ?? fallback);
-}
-
 // ── Token storage: in-memory access token + HttpOnly refresh cookie ───────
+
 // Access token is held only in memory (lost on hard refresh). Refresh tokens
 // are stored in an HttpOnly cookie set by the backend; we call /auth/refresh
 // to obtain a new access token when needed.

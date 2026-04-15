@@ -1,5 +1,4 @@
 
-
 import logging
 import os
 import smtplib
@@ -252,14 +251,6 @@ async def login_user(db: AsyncSession, email: str, password: str) -> dict:
 
 async def get_user_by_id(db: AsyncSession, user_id: int) -> Optional[User]:
     return await db.get(User, user_id)
-
-
-async def get_user_by_email(db: AsyncSession, email: str) -> Optional[User]:
-    normalized_email = normalize_email(email, check_deliverability=False)
-    if not normalized_email:
-        return None
-    result = await db.execute(select(User).where(func.lower(User.email) == normalized_email))
-    return result.scalar_one_or_none()
 
 
 GOOGLE_CLIENT_ID = (

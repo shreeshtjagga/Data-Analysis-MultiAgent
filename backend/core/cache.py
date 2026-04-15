@@ -1,65 +1,29 @@
 
-
 import json
 import logging
 import os
 from typing import Any, Optional
-from urllib.parse import urlparse, urlunparse
 
 import redis.asyncio as aioredis
 
-from .utils import json_default, sanitize_for_json
+from .utils import json_default, rewrite_local_dev_host, sanitize_for_json
 
 logger = logging.getLogger(__name__)
 
 
 CACHE_TTL_ANALYSIS: int = int(os.getenv("CACHE_TTL_ANALYSIS", str(3 * 24 * 3600)))  # 3 days
-CACHE_TTL_SESSION: int = int(os.getenv("CACHE_TTL_SESSION", str(24 * 3600)))         # 1 day
+
 
 
 
 _redis_client: Optional[aioredis.Redis] = None
 
 
-def _running_in_container() -> bool:
-    return (
-        os.getenv("RUNNING_IN_DOCKER", "false").lower() == "true"
-        or os.path.exists("/.dockerenv")
-    )
-
-
-def _rewrite_local_dev_redis_host(redis_url: str) -> str:
-    app_env = os.getenv("APP_ENV", "production")
-    if app_env != "development" or _running_in_container():
-        return redis_url
-
-    parsed = urlparse(redis_url)
-    if parsed.hostname != "redis":
-        return redis_url
-
-    netloc = parsed.netloc
-    if "@" in netloc:
-        auth, host_port = netloc.rsplit("@", 1)
-        if host_port.startswith("redis:"):
-            netloc = f"{auth}@localhost:{host_port.split(':', 1)[1]}"
-        elif host_port == "redis":
-            netloc = f"{auth}@localhost"
-    else:
-        if netloc.startswith("redis:"):
-            netloc = f"localhost:{netloc.split(':', 1)[1]}"
-        elif netloc == "redis":
-            netloc = "localhost"
-
-    rewritten = urlunparse(parsed._replace(netloc=netloc))
-    logger.warning("REDIS_URL host 'redis' detected in local dev; using localhost instead")
-    return rewritten
-
-
 def _get_client() -> aioredis.Redis:
     global _redis_client
     if _redis_client is None:
         redis_url = os.getenv("REDIS_URL", "redis://localhost:6379/0")
-        redis_url = _rewrite_local_dev_redis_host(redis_url)
+        redis_url = rewrite_local_dev_host(redis_url, service_name="redis")
         _redis_client = aioredis.from_url(
             redis_url,
             encoding="utf-8",
@@ -83,10 +47,6 @@ async def close() -> None:
 
 def analysis_key(user_id: int, file_hash: str) -> str:
     return f"analysis:{user_id}:{file_hash}"
-
-
-def session_key(user_id: int) -> str:
-    return f"session:{user_id}"
 
 
 
@@ -126,30 +86,6 @@ async def delete(key: str) -> bool:
     except Exception as exc:
         logger.warning("Cache DELETE failed for key '%s': %s", key, exc)
         return False
-
-
-async def exists(key: str) -> bool:
-    try:
-        client = _get_client()
-        return bool(await client.exists(key))
-    except Exception as exc:
-        logger.warning("Cache EXISTS failed for key '%s': %s", key, exc)
-        return False
-
-
-async def flush_user(user_id: int) -> int:
-    try:
-        client = _get_client()
-        pattern = f"analysis:{user_id}:*"
-        keys = await client.keys(pattern)
-        if not keys:
-            return 0
-        deleted = await client.delete(*keys)
-        logger.info("Flushed %d cache keys for user %d", deleted, user_id)
-        return deleted
-    except Exception as exc:
-        logger.warning("Cache flush failed for user %d: %s", user_id, exc)
-        return 0
 
 
 async def ping() -> bool:

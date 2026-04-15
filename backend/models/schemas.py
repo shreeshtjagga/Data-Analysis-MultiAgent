@@ -107,21 +107,6 @@ class TokenResponse(BaseModel):
     user: UserResponse
 
 
-class TokenData(BaseModel):
-    sub: str
-    email: str
-
-
-class AnalysisMetadata(BaseModel):
-    model_config = ConfigDict(from_attributes=True)
-
-    file_name: str
-    file_size: Optional[int] = None
-    row_count: Optional[int] = None
-    column_count: Optional[int] = None
-    completeness: Optional[float] = None
-
-
 class AnalysisHistoryList(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
@@ -139,16 +124,6 @@ class AnalysisListResponse(BaseModel):
     message: str
     total: int
     analyses: List[AnalysisHistoryList]
-
-
-class AnalysisStatsSummary(BaseModel):
-    row_count: int
-    column_count: int
-    missing_cells: int
-    duplicate_rows: int
-    completeness: float
-    outlier_cols: int
-    strong_correlations: int
 
 
 class ChatRequest(BaseModel):

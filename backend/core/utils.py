@@ -1,28 +1,57 @@
-import pandas as pd
-import numpy as np
 import logging
 import math
+import os
 from datetime import date, datetime
 from typing import Any
-from pathlib import Path
+from urllib.parse import urlparse, urlunparse
+
+import numpy as np
+import pandas as pd
 
 logger = logging.getLogger(__name__)
 
 
-def load_csv(file_path: str) -> pd.DataFrame:
+def running_in_container() -> bool:
+    """Check if the process is running inside a Docker container."""
+    return (
+        os.getenv("RUNNING_IN_DOCKER", "false").lower() == "true"
+        or os.path.exists("/.dockerenv")
+    )
 
-    path = Path(file_path)
-    if not path.exists():
-        raise FileNotFoundError(f"File not found: {file_path}")
-    if path.suffix.lower() != ".csv":
-        raise ValueError(f"Expected a CSV file, got: {path.suffix}")
 
-    df = pd.read_csv(file_path)
-    if df.empty:
-        raise ValueError("The CSV file is empty")
+def rewrite_local_dev_host(url: str, *, service_name: str) -> str:
+    """Map a Docker-compose service hostname to localhost for non-container dev runs.
 
-    logger.info("Loaded %d rows and %d columns from %s", len(df), len(df.columns), file_path)
-    return df
+    Works for both database (service_name='db') and Redis (service_name='redis').
+    """
+    app_env = os.getenv("APP_ENV", "production")
+    if app_env != "development" or running_in_container():
+        return url
+
+    parsed = urlparse(url)
+    if parsed.hostname != service_name:
+        return url
+
+    netloc = parsed.netloc
+    if "@" in netloc:
+        auth, host_port = netloc.rsplit("@", 1)
+        if host_port.startswith(f"{service_name}:"):
+            netloc = f"{auth}@localhost:{host_port.split(':', 1)[1]}"
+        elif host_port == service_name:
+            netloc = f"{auth}@localhost"
+    else:
+        if netloc.startswith(f"{service_name}:"):
+            netloc = f"localhost:{netloc.split(':', 1)[1]}"
+        elif netloc == service_name:
+            netloc = "localhost"
+
+    rewritten = urlunparse(parsed._replace(netloc=netloc))
+    logger.warning(
+        "URL host '%s' detected in local dev; using localhost instead",
+        service_name,
+    )
+    return rewritten
+
 
 
 def clean_dataframe(df: pd.DataFrame) -> tuple[pd.DataFrame, list]:
@@ -104,25 +133,6 @@ def detect_column_types(df: pd.DataFrame) -> dict[str, str]:
     return type_map
 
 
-def safe_describe(df: pd.DataFrame) -> dict:
-    summary = {}
-    summary["shape"] = {"rows": int(df.shape[0]), "columns": int(df.shape[1])}
-    summary["columns"] = list(df.columns)
-    summary["dtypes"] = {col: str(dtype) for col, dtype in df.dtypes.items()}
-    summary["missing_values"] = {
-        col: int(count) for col, count in df.isna().sum().items() if count > 0
-    }
-
-    num_df = df.select_dtypes(include=[np.number]).describe()
-    if num_df.empty:
-        summary["numeric_summary"] = {}
-    else:
-        summary["numeric_summary"] = {
-            col: {stat: float(num_df[col][stat]) for stat in num_df.index}
-            for col in num_df.columns
-        }
-
-    return summary
 
 
 

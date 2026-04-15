@@ -1,5 +1,4 @@
 
-
 import io
 import csv
 import asyncio
@@ -600,7 +599,6 @@ async def analyze(
         )
 
     # Run the agentic pipeline
-    import asyncio
     state = await asyncio.to_thread(run_pipeline, df)
 
     # ── Critical fix: strip full DataFrames BEFORE model_dump to prevent
