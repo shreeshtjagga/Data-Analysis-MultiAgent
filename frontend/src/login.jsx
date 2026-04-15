@@ -352,6 +352,7 @@ export default function Login({ onLogin }) {
   const deriveTabFromPath = (pathname) => {
     if (pathname === "/reset-password") return "reset";
     if (pathname === "/forgot-password") return "forgot";
+    if (pathname === "/register") return "register";
     return "login";
   };
   const [tab, setTab] = useState(deriveTabFromPath(location.pathname));
@@ -407,7 +408,7 @@ export default function Login({ onLogin }) {
               fontWeight: 700,
               cursor: 'pointer', fontSize: '13px', textTransform: 'uppercase', letterSpacing: '0.08em'
             }} 
-            onClick={() => { setTab("register"); navigate("/login", { replace: true }); }}
+            onClick={() => { setTab("register"); navigate("/register", { replace: true }); }}
           >
             Register
           </button>
