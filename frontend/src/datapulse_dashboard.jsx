@@ -12,6 +12,11 @@ const PLOTLY_DARK_LAYOUT = {
   title: { font: { color: "#FFFFFF", size: 14 } },
   xaxis: { gridcolor: "rgba(99,102,241,0.1)", zerolinecolor: "rgba(99,102,241,0.2)", tickfont: { color: "#FFFFFF" } },
   yaxis: { gridcolor: "rgba(99,102,241,0.1)", zerolinecolor: "rgba(99,102,241,0.2)", tickfont: { color: "#FFFFFF" } },
+  hoverlabel: {
+    bgcolor: "rgba(8,12,24,0.98)",
+    bordercolor: "rgba(99,102,241,0.85)",
+    font: { color: "#F8FAFC", size: 12 },
+  },
   colorway: PALETTE,
   autosize: true,
   margin: { l: 40, r: 20, t: 40, b: 30 },
@@ -82,6 +87,11 @@ function ChartPanel({ result, PlotComponent }) {
                 paper_bgcolor: "rgba(0,0,0,0)",
                 plot_bgcolor: "rgba(0,0,0,0)",
                 font: { color: "#FFFFFF", family: "'Inter', sans-serif" },
+                hovermode: fig.layout?.hovermode || "closest",
+                hoverlabel: {
+                  ...PLOTLY_DARK_LAYOUT.hoverlabel,
+                  ...(fig.layout?.hoverlabel || {}),
+                },
                 height: chartHeight,
                 margin: { l: 50, r: 20, t: 60, b: 80 },
                 legend: {
@@ -108,6 +118,20 @@ const PRIMARY_TABS = ["overview", "charts", "insights"];
 const SECONDARY_TABS = ["data"];
 const MAX_CHAT_MESSAGES = 40;
 
+function inferDatasetType(result, fileName) {
+  const profile = result?.stats_summary?.dataset_profile || {};
+  const label = String(profile?.label || "").trim();
+  const domain = String(profile?.domain || "").trim();
+
+  if (label && label.toLowerCase() !== "unknown") return label;
+  if (domain) return `${domain} dataset`;
+
+  const lower = String(fileName || "").toLowerCase();
+  if (lower.endsWith(".csv")) return "tabular csv dataset";
+  if (lower.endsWith(".xlsx") || lower.endsWith(".xls")) return "tabular excel dataset";
+  return "structured dataset";
+}
+
 export default function DataPulse({ user, onLogout }) {
   const [PlotComponent, setPlotComponent] = useState(null);
   const [phase, setPhase] = useState("upload");
@@ -116,7 +140,6 @@ export default function DataPulse({ user, onLogout }) {
   const [agentLog, setAgentLog] = useState([]);
   const [analysisError, setAnalysisError] = useState("");
   const [isDragOver, setIsDragOver] = useState(false);
-  const [showAllFindings, setShowAllFindings] = useState(false);
   const [tab, setTab] = useState("overview");
   const [chatMsgs, setChatMsgs] = useState([]);
   const [historyStale, setHistoryStale] = useState(false);
@@ -378,6 +401,7 @@ export default function DataPulse({ user, onLogout }) {
 
   const chatStats = useMemo(() => result?.stats_summary || {}, [result?.stats_summary]);
   const chatInsights = useMemo(() => result?.insights || {}, [result?.insights]);
+  const datasetTypeLabel = useMemo(() => inferDatasetType(result, fileName), [result, fileName]);
 
   const chatContext = useMemo(() => {
     if (!chatStats) return null;
@@ -386,6 +410,8 @@ export default function DataPulse({ user, onLogout }) {
       .sort((a, b) => b.count - a.count).slice(0, 10);
     return {
       fileName,
+      datasetTypeLabel,
+      datasetProfile: chatStats?.dataset_profile || null,
       stats: chatStats,
       insights: chatInsights,
       outlierSummary,
@@ -393,7 +419,7 @@ export default function DataPulse({ user, onLogout }) {
       correlations: chatStats?.strong_correlations?.slice(0, 5),
       charts: result?.charts || {},
     };
-  }, [chatStats, chatInsights, fileName, result?.charts]);
+  }, [chatStats, chatInsights, fileName, result?.charts, datasetTypeLabel]);
 
   const sendChat = useCallback(async () => {
     const q = chatInput.trim();
@@ -685,7 +711,18 @@ export default function DataPulse({ user, onLogout }) {
                       <div style={{ padding: '8px', background: 'rgba(99,102,241,0.1)', borderRadius: '8px', fontSize: '14px', border: '1px solid rgba(99,102,241,0.2)', color: 'var(--primary-500)' }}>📄</div>
                       <strong style={{ fontSize: '14px', color: 'var(--text-main)' }}>{fileName}</strong>
                     </div>
-                    {phase === "done" && <span className="data-pill success">Verified ⬢</span>}
+                    {phase === "done" && (
+                      <span
+                        className="data-pill"
+                        style={{
+                          color: '#7dd3fc',
+                          borderColor: 'rgba(6,182,212,0.35)',
+                          background: 'rgba(6,182,212,0.1)'
+                        }}
+                      >
+                        {datasetTypeLabel}
+                      </span>
+                    )}
                   </div>
                 </div>
               )}
@@ -696,10 +733,10 @@ export default function DataPulse({ user, onLogout }) {
                   <strong style={{ fontSize: '14px', color: 'var(--text-main)', fontFamily: 'Syne, sans-serif' }}>Analyst Advisor</strong>
                   <div ref={chatContainerRef} style={{ flex: 1, overflowY: "auto", display: "flex", flexDirection: "column", gap: "12px", background: 'var(--bg-input)', padding: '16px', borderRadius: '12px', border: '1px solid var(--border-subtle)' }}>
                      {chatMsgs.length === 0 ? (
-                       <div style={{ margin: 'auto', textAlign: 'center', display: 'flex', flexDirection: 'column', gap: '8px', opacity: 0.8 }}>
-                         <div style={{ fontSize: '24px', marginBottom: '4px' }}>🤖</div>
-                         <strong style={{ fontSize: '14px', color: 'var(--text-main)', fontFamily: "'Syne', sans-serif" }}>I am your Data Analyst.</strong>
-                         <p style={{ fontSize: '13px', color: 'var(--text-muted)', maxWidth: '200px', lineHeight: 1.5 }}>Feel free to ask me any questions about your data!</p>
+                       <div style={{ margin: 'auto', textAlign: 'center', display: 'flex', flexDirection: 'column', gap: '10px', maxWidth: '310px', background: 'linear-gradient(180deg, rgba(99,102,241,0.08), rgba(6,9,18,0.05))', border: '1px solid rgba(99,102,241,0.2)', borderRadius: '12px', padding: '16px 18px' }}>
+                         <strong style={{ fontSize: '16px', color: 'var(--text-main)', fontFamily: "'Syne', sans-serif", letterSpacing: '0.02em' }}>I am your Data Analyst.</strong>
+                         <p style={{ fontSize: '13px', color: '#cbd5e1', lineHeight: 1.55, fontFamily: "'Inter', sans-serif" }}>Feel free to ask me any questions about your data.</p>
+                         <p style={{ fontSize: '12px', color: 'var(--text-muted)', lineHeight: 1.5 }}>Dataset type: <span style={{ color: '#7dd3fc' }}>{datasetTypeLabel}</span></p>
                        </div>
                      ) : chatMsgs.map((m, i) => (
                        <div 
@@ -740,7 +777,7 @@ export default function DataPulse({ user, onLogout }) {
                                        paper_bgcolor: "rgba(0,0,0,0)",
                                        plot_bgcolor: "rgba(0,0,0,0)",
                                        font: { color: "#FFFFFF", family: "'Inter', sans-serif" },
-                                       hoverlabel: { bgcolor: "#0d1220", font: { color: "#FFFFFF" }, bordercolor: "rgba(99,102,241,0.5)" },
+                                       hoverlabel: { bgcolor: "rgba(8,12,24,0.98)", font: { color: "#F8FAFC", size: 12 }, bordercolor: "rgba(99,102,241,0.85)" },
                                        height: 280, 
                                        margin: {l: 40, r: 20, t: 40, b: 40}, 
                                        title: { ...(layout.title || {}), font: { size: 14, color: '#fff', weight: 'bold' }, y: 0.95, yanchor: 'top' }, 
@@ -810,17 +847,12 @@ export default function DataPulse({ user, onLogout }) {
                        ))}
                      </div>
                      <div style={{ padding: '20px', background: 'var(--bg-input)', borderRadius: '12px', border: '1px solid var(--border-subtle)' }}>
-                       <strong style={{ fontSize: '15px', display: 'block', marginBottom: '16px', color: 'var(--text-main)', fontFamily: "'Syne', sans-serif" }}>Detected Vectors</strong>
-                       {(showAllFindings ? findings : findings.slice(0, 5)).map((f, i) => (
+                       <strong style={{ fontSize: '15px', display: 'block', marginBottom: '16px', color: 'var(--text-main)', fontFamily: "'Syne', sans-serif" }}>Data Info</strong>
+                       {findings.map((f, i) => (
                           <div key={i} style={{ fontSize: '15px', color: 'var(--text-muted)', marginBottom: '12px', display: 'flex', gap: '12px', alignItems: 'center' }}>
                             <div style={{ width: '6px', height: '6px', background: 'var(--primary-500)', borderRadius: '50%', boxShadow: '0 0 10px var(--primary-500)' }} /> {f}
                           </div>
                         ))}
-                        {findings.length > 5 && (
-                          <button onClick={() => setShowAllFindings(v => !v)} style={{ background: 'none', border: 'none', color: 'var(--primary-500)', cursor: 'pointer', fontSize: '13px', fontWeight: 600, textAlign: 'left', padding: '4px 0', marginTop: '4px' }}>
-                            {showAllFindings ? "Show less" : `+ ${findings.length - 5} more findings`}
-                          </button>
-                        )}
                      </div>
                    </div>
                 )}
@@ -829,14 +861,38 @@ export default function DataPulse({ user, onLogout }) {
                 
                 {tab === "insights" && (
                   <div className="flex-col gap-24">
+                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '16px' }}>
+                      <div style={{ padding: '18px', borderRadius: '12px', border: '1px solid var(--border-subtle)', background: 'var(--bg-input)' }}>
+                        <strong style={{ fontSize: '12px', color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.08em' }}>Strong Correlations</strong>
+                        <div style={{ marginTop: '8px', fontSize: '26px', color: 'var(--text-main)', fontFamily: "'Syne', sans-serif" }}>{(stats?.strong_correlations || []).length}</div>
+                      </div>
+                      <div style={{ padding: '18px', borderRadius: '12px', border: '1px solid var(--border-subtle)', background: 'var(--bg-input)' }}>
+                        <strong style={{ fontSize: '12px', color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.08em' }}>Columns With Outliers</strong>
+                        <div style={{ marginTop: '8px', fontSize: '26px', color: 'var(--text-main)', fontFamily: "'Syne', sans-serif" }}>{outlierCols.length}</div>
+                      </div>
+                      <div style={{ padding: '18px', borderRadius: '12px', border: '1px solid var(--border-subtle)', background: 'var(--bg-input)' }}>
+                        <strong style={{ fontSize: '12px', color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.08em' }}>Data Completeness</strong>
+                        <div style={{ marginTop: '8px', fontSize: '26px', color: 'var(--text-main)', fontFamily: "'Syne', sans-serif" }}>{formatPercent(dq.completeness || 100)}</div>
+                      </div>
+                    </div>
+
                     <div style={{ padding: '20px', background: 'var(--bg-input)', borderRadius: '12px', border: '1px solid var(--border-subtle)' }}>
-                       <strong style={{ fontSize: '15px', display: 'block', marginBottom: '16px', color: 'var(--text-main)', fontFamily: "'Syne', sans-serif" }}>Actionable Protocols</strong>
-                       {recommendations.map((r, i) => (
-                          <div key={i} style={{ fontSize: '15px', color: 'var(--text-muted)', marginBottom: '12px', display: 'flex', gap: '12px' }}>
-                            <span style={{ color: 'var(--primary-500)', fontSize: '18px' }}>⇥</span> {r}
-                          </div>
-                       ))}
-                     </div>
+                      <strong style={{ fontSize: '15px', display: 'block', marginBottom: '14px', color: 'var(--text-main)', fontFamily: "'Syne', sans-serif" }}>Key Insights</strong>
+                      {findings.length ? findings.map((f, i) => (
+                        <div key={`ins-${i}`} style={{ fontSize: '14px', color: 'var(--text-muted)', marginBottom: '10px', display: 'flex', gap: '10px', lineHeight: 1.5 }}>
+                          <span style={{ color: 'var(--info)' }}>•</span>{f}
+                        </div>
+                      )) : <div style={{ fontSize: '14px', color: 'var(--text-muted)' }}>No insights available for this dataset.</div>}
+                    </div>
+
+                    <div style={{ padding: '20px', background: 'var(--bg-input)', borderRadius: '12px', border: '1px solid var(--border-subtle)' }}>
+                      <strong style={{ fontSize: '15px', display: 'block', marginBottom: '14px', color: 'var(--text-main)', fontFamily: "'Syne', sans-serif" }}>Recommended Actions</strong>
+                      {recommendations.length ? recommendations.map((r, i) => (
+                        <div key={`rec-${i}`} style={{ fontSize: '14px', color: 'var(--text-muted)', marginBottom: '10px', display: 'flex', gap: '10px', lineHeight: 1.5 }}>
+                          <span style={{ color: 'var(--primary-500)' }}>⇥</span>{r}
+                        </div>
+                      )) : <div style={{ fontSize: '14px', color: 'var(--text-muted)' }}>No recommendations were generated.</div>}
+                    </div>
                   </div>
                 )}
                 

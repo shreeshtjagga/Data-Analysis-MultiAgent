@@ -4,7 +4,7 @@ import numpy as np
 import logging
 import math
 from datetime import date, datetime
-from typing import Any
+from typing import Any, Optional, Tuple
 
 logger = logging.getLogger(__name__)
 
@@ -62,7 +62,7 @@ def _normalize_null_strings(series: pd.Series) -> pd.Series:
     return series.where(~lower.isin(_NULL_STRINGS), other=np.nan)
 
 
-def _try_parse_currency(series: pd.Series) -> tuple[pd.Series | None, bool]:
+def _try_parse_currency(series: pd.Series) -> Tuple[Optional[pd.Series], bool]:
     """Try to parse currency strings like '$1,234.56', '€500', '1.2M' → float."""
     sample = series.dropna().head(30).astype(str)
     if len(sample) == 0:
@@ -94,7 +94,7 @@ def _try_parse_currency(series: pd.Series) -> tuple[pd.Series | None, bool]:
     return parsed, valid_ratio > 0.5
 
 
-def _try_parse_percentage(series: pd.Series) -> tuple[pd.Series | None, bool]:
+def _try_parse_percentage(series: pd.Series) -> Tuple[Optional[pd.Series], bool]:
     """Try to parse percentage strings like '85%', '3.5 %' → float (0.85, 0.035)."""
     sample = series.dropna().head(30).astype(str).str.strip()
     if len(sample) == 0:
@@ -116,7 +116,7 @@ def _try_parse_percentage(series: pd.Series) -> tuple[pd.Series | None, bool]:
     return parsed, valid_ratio > 0.5
 
 
-def _try_parse_boolean(series: pd.Series) -> tuple[pd.Series | None, bool]:
+def _try_parse_boolean(series: pd.Series) -> Tuple[Optional[pd.Series], bool]:
     """Try to parse boolean-text columns (Yes/No, True/False, Y/N) → 0.0/1.0."""
     sample = series.dropna().head(30).astype(str).str.strip().str.lower()
     if len(sample) == 0:
@@ -140,7 +140,7 @@ def _try_parse_boolean(series: pd.Series) -> tuple[pd.Series | None, bool]:
     return parsed, valid_ratio > 0.7
 
 
-def _try_parse_mixed_numeric(series: pd.Series) -> tuple[pd.Series | None, bool]:
+def _try_parse_mixed_numeric(series: pd.Series) -> Tuple[Optional[pd.Series], bool]:
     """
     Handle columns that are mostly numeric but contain text noise
     like 'N/A', 'unknown', '-' mixed in with real numbers.

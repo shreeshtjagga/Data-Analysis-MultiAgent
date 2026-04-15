@@ -177,14 +177,47 @@ def _style(fig: go.Figure, height: int = 440) -> go.Figure:
         plot_bgcolor="rgba(0,0,0,0)",
         paper_bgcolor="rgba(0,0,0,0)",
         legend=dict(font=dict(size=12), orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
-        xaxis=dict(showgrid=True, gridwidth=1, gridcolor="rgba(0,0,0,0.06)"),
-        yaxis=dict(showgrid=True, gridwidth=1, gridcolor="rgba(0,0,0,0.06)"),
+        xaxis=dict(showgrid=True, gridwidth=1, gridcolor="rgba(0,0,0,0.06)",
+                   automargin=True, tickformat="~s"),
+        yaxis=dict(showgrid=True, gridwidth=1, gridcolor="rgba(0,0,0,0.06)",
+                   automargin=True, tickformat="~s"),
     )
     return fig
 
 
 def _optimal_nbins(n: int) -> int:
     return min(max(int(np.ceil(np.log2(n) + 1)), 10), 60)
+
+
+def _is_percentage_col(name: str) -> bool:
+    lowered = name.lower()
+    return "%" in lowered or "percent" in lowered or "percentage" in lowered
+
+
+def _should_use_sum(name: str, series: pd.Series) -> bool:
+    lowered = name.lower()
+    keywords = ("population", "total", "count", "volume", "sales", "revenue", "amount", "profit")
+    if any(k in lowered for k in keywords):
+        return True
+    # Fallback: very large, non-negative magnitudes often represent totals
+    if series.dropna().min() >= 0 and series.dropna().max() >= 1_000_000:
+        return True
+    return False
+
+
+def _is_categorical_numeric(name: str, series: pd.Series) -> bool:
+    if not pd.api.types.is_integer_dtype(series):
+        return False
+    n = len(series)
+    if n == 0:
+        return False
+    nunique = series.nunique(dropna=True)
+    if nunique == 0:
+        return False
+    name_hint = any(k in name.lower() for k in ("city", "country", "state", "region", "referrer", "role", "category"))
+    small_cardinality = nunique <= min(20, max(4, int(n * 0.05)))
+    bounded_range = (series.dropna().min() >= 0 and series.dropna().max() <= 100)
+    return name_hint or (small_cardinality and bounded_range)
 
 
 # ── Chart builders ──────────────────────────────────────────────────────────
@@ -210,6 +243,10 @@ def _try_timeseries(df: pd.DataFrame, date_cols: list, num_cols: list) -> tuple[
 
     if len(valid_nums) >= 2:
         series_cols = valid_nums[:4]
+        # Avoid multi-series plots with wildly different magnitudes
+        medians = [abs(df[c].median()) for c in series_cols if df[c].notna().any()]
+        if medians and max(medians) / max(min(medians), 1e-6) > 50:
+            series_cols = [max(series_cols, key=lambda c: abs(df[c].median()))]
         plot_df = _resample_timeseries(df_sorted, dcol, series_cols, _TS_MAX_POINTS)
         df_long = plot_df.melt(id_vars=dcol, var_name="Series", value_name="Value")
         comp_avg = float(np.mean([_completeness(df[c]) for c in series_cols]))
@@ -249,6 +286,14 @@ def _try_scatter(df: pd.DataFrame, num_cols: list, cat_cols: list, stats: dict) 
     else:
         x_col, y_col = num_cols[0], num_cols[1]
         r = float(df[[x_col, y_col]].dropna().corr().iloc[0, 1])
+
+    # Skip derived percentage relationships that are effectively a rescale
+    if abs(r) > 0.995 and (_is_percentage_col(x_col) ^ _is_percentage_col(y_col)):
+        ratio = (df[y_col] / df[x_col]).replace([np.inf, -np.inf], np.nan).dropna()
+        if len(ratio) > 10:
+            rel_var = float(ratio.std() / max(abs(ratio.mean()), 1e-6))
+            if rel_var < 0.02:
+                return None, set()
 
     # Relax threshold for datasets with few numeric columns (e.g. survey data)
     min_r = 0.10 if len(num_cols) <= 4 else 0.18
@@ -306,22 +351,28 @@ def _try_bar_mean(df: pd.DataFrame, cat_cols: list, num_cols: list, used: set) -
     if _cat_score(best_cat) < 0:
         return None
 
-    num_col = next((c for c in num_cols if c not in used), num_cols[0])
+    num_col = next((c for c in num_cols if c not in used and not _is_categorical_numeric(c, df[c])), None)
+    if num_col is None:
+        return None
     comp = min(_completeness(df[best_cat]), _completeness(df[num_col]))
     n_groups = df[best_cat].nunique()
     score = 42 + comp * 42 + min(n_groups * 2.5, 22)
 
-    grouped = df.groupby(best_cat)[num_col].mean().reset_index().sort_values(num_col, ascending=False)
+    agg = "sum" if _should_use_sum(num_col, df[num_col]) else "mean"
+    grouped = df.groupby(best_cat)[num_col].agg(agg).reset_index().sort_values(num_col, ascending=False)
     orientation = "h" if n_groups > 8 else "v"
     if orientation == "h":
         fig = px.bar(grouped, y=best_cat, x=num_col,
-                     title=f"Mean {num_col} by {best_cat}", orientation="h", color=best_cat)
+                     title=f"Total {num_col} by {best_cat}" if agg == "sum" else f"Mean {num_col} by {best_cat}",
+                     orientation="h", color=best_cat)
     else:
         fig = px.bar(grouped, x=best_cat, y=num_col,
-                     title=f"Mean {num_col} by {best_cat}", color=best_cat)
+                     title=f"Total {num_col} by {best_cat}" if agg == "sum" else f"Mean {num_col} by {best_cat}",
+                     color=best_cat)
+        fig.update_layout(xaxis_tickangle=-25, xaxis_automargin=True)
     fig.update_layout(showlegend=False)
     return ScoredChart("bar_mean", _style(fig, 460), round(score, 1),
-                       f"cat={best_cat}({n_groups}), num={num_col}")
+                       f"cat={best_cat}({n_groups}), num={num_col}, agg={agg}")
 
 
 def _try_heatmap(df: pd.DataFrame, num_cols: list, stats: dict, used: set) -> Optional[ScoredChart]:
@@ -491,7 +542,9 @@ def _try_boxplot(df: pd.DataFrame, num_cols: list, used: set) -> Optional[Scored
     remaining = [c for c in num_cols if c not in used]
     if len(remaining) < 2:
         return None
-    cols = remaining[:8]
+    # Prefer columns with higher variance and cap to reduce label crowding
+    variances = {c: float(df[c].var()) for c in remaining}
+    cols = [c for c, _ in sorted(variances.items(), key=lambda item: item[1], reverse=True)][:6]
     comp_avg = float(np.mean([_completeness(df[c]) for c in cols]))
     if comp_avg < 0.65:
         return None
@@ -502,7 +555,8 @@ def _try_boxplot(df: pd.DataFrame, num_cols: list, used: set) -> Optional[Scored
     for col in cols:
         fig.add_trace(go.Box(y=plot_df[col], name=col, boxmean=True,
                              marker_color=COLOR_PALETTE[cols.index(col) % len(COLOR_PALETTE)]))
-    fig.update_layout(title="Numeric Distribution Overview", showlegend=False)
+    fig.update_layout(title="Numeric Distribution Overview", showlegend=False,
+                      xaxis_tickangle=-25, xaxis_automargin=True)
     return ScoredChart("boxplots", _style(fig, 440), round(score, 1),
                        f"cols={len(cols)}, avg_comp={comp_avg:.0%}")
 
@@ -582,14 +636,17 @@ def _llm_select_charts(candidates: list[ScoredChart], stats: dict) -> list[Score
 def _select_charts(df: pd.DataFrame, stats: dict) -> dict:
     # Respect columns excluded by the architect (mostly-null, constant, high-cardinality IDs)
     excluded = {e["column"] for e in stats.get("excluded_columns", [])}
-
-    all_num = [col for col in df.select_dtypes(include=np.number).columns
-               if not _is_likely_id(df, col) and col not in excluded]
+    all_num_raw = [col for col in df.select_dtypes(include=np.number).columns
+                   if not _is_likely_id(df, col) and col not in excluded]
+    cat_num = [col for col in all_num_raw if _is_categorical_numeric(col, df[col])]
+    all_num = [col for col in all_num_raw if col not in cat_num]
     # Split into true numeric vs Likert/rating scales
     likert_cols  = [c for c in all_num if _is_likert(df[c])]
     num_cols     = [c for c in all_num if not _is_likert(df[c])]
     cat_cols     = [col for col in _str_cols(df)
                     if not _is_likely_id(df, col) and col not in excluded]
+    # Add numeric-coded categoricals to categorical pool
+    cat_cols += [col for col in cat_num if col not in cat_cols]
     date_cols    = df.select_dtypes(include="datetime").columns.tolist()
 
     logger.info(
