@@ -107,6 +107,9 @@ async def set(key: str, value: Any, ttl: int = CACHE_TTL_ANALYSIS) -> bool:
         client = _get_client()
         cleaned = sanitize_for_json(value)
         serialised = json.dumps(cleaned, default=json_default, allow_nan=False)
+        if len(serialised) > 4 * 1024 * 1024:
+            logger.warning("Cache payload too large (%d bytes), skipping Redis SET", len(serialised))
+            return False
         await client.setex(key, ttl, serialised)
         logger.debug("Cache SET key='%s' ttl=%ds", key, ttl)
         return True

@@ -148,7 +148,7 @@ def _computed_insights(stats: dict) -> dict:
     ]
 
     distribution_insights = []
-    for col, col_stats in numeric.items():
+    for col, col_stats in list(numeric.items())[:10]:
         skewness = col_stats.get("skewness", 0)
         if abs(skewness) < 0.5:
             dist_type = "approximately normal"

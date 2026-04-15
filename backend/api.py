@@ -72,9 +72,9 @@ FRONTEND_GOOGLE_CLIENT_ID = (
     os.getenv("FRONTEND_GOOGLE_CLIENT_ID", "").strip()
     or os.getenv("VITE_GOOGLE_CLIENT_ID", "").strip()
 )
-MAX_UPLOAD_BYTES = int(os.getenv("MAX_UPLOAD_BYTES", str(30 * 1024 * 1024)))
-MAX_ANALYZE_ROWS = int(os.getenv("MAX_ANALYZE_ROWS", "250000"))
-MAX_ANALYZE_COLUMNS = int(os.getenv("MAX_ANALYZE_COLUMNS", "300"))
+MAX_UPLOAD_BYTES = int(os.getenv("MAX_UPLOAD_BYTES", str(10 * 1024 * 1024))) # 10 MB limit for strict RAM bounds
+MAX_ANALYZE_ROWS = int(os.getenv("MAX_ANALYZE_ROWS", "15000")) # Lowered to 15K rows for 500MB Render memory limit
+MAX_ANALYZE_COLUMNS = int(os.getenv("MAX_ANALYZE_COLUMNS", "150"))
 MAX_EXCEL_SHEETS = int(os.getenv("MAX_EXCEL_SHEETS", "5"))
 MAX_QUESTION_CHARS = int(os.getenv("CHAT_MAX_QUESTION_CHARS", "1200"))
 MAX_CONTEXT_BYTES = int(os.getenv("CHAT_MAX_CONTEXT_BYTES", str(128 * 1024)))
@@ -599,8 +599,26 @@ async def analyze(
             detail=f"Dataset has {column_count} columns. Maximum allowed is {MAX_ANALYZE_COLUMNS}.",
         )
 
+    # Run the agentic pipeline
+    import asyncio
     state = await asyncio.to_thread(run_pipeline, df)
+
+    # ── Critical fix: strip full DataFrames BEFORE model_dump to prevent
+    # serialising 30k rows as Python dicts (≈500 MB RAM spike).            ──
+    preview_raw = json.loads(
+        state.raw_df.head(100).to_json(orient="records")
+    ) if getattr(state, "raw_df", None) is not None else []
+    
+    preview_clean = json.loads(
+        state.clean_df.head(100).to_json(orient="records")
+    ) if getattr(state, "clean_df", None) is not None else []
+    
+    state.raw_df   = None
+    state.clean_df = None
+
     result = state.model_dump()
+    result["raw_df"]   = preview_raw
+    result["clean_df"] = preview_clean
 
     if state.errors or state.partial:
         logger.error("Pipeline failed for user %d / %s: %s", user_id, filename, state.errors)
@@ -614,6 +632,8 @@ async def analyze(
             },
         )
 
+    # Fix #6: compute serialized charts once, reuse for both DB save and response
+    serialized_charts = _serialize_charts(result.get("charts") or {})
 
     save_result = await save_analysis(
         db=db,
@@ -622,23 +642,15 @@ async def analyze(
         file_hash=file_hash,
         file_size=len(file_bytes),
         analysis_result=result,
+        serialized_charts=serialized_charts,
     )
     if not save_result["success"]:
         logger.warning("Failed to persist analysis: %s", save_result["message"])
     else:
         result["analysis_id"] = save_result.get("analysis_id")
 
-
-    result["charts"] = _serialize_charts(result.get("charts") or {})
+    result["charts"] = serialized_charts
     result["partial"] = False
-
-
-    for key in ("raw_df", "clean_df"):
-        df_val = result.get(key)
-        if hasattr(df_val, "to_json"):
-            result[key] = json.loads(df_val.head(100).to_json(orient="records"))
-
-
     result = sanitize_floats(result)
 
     return {"from_cache": False, "pipeline_version": PIPELINE_VERSION, **result}

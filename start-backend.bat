@@ -38,7 +38,7 @@ if not exist "%VENV_PY%" (
 
 :: ── Install / sync dependencies ────────────────────────────────────
 echo  [2/3] Installing/updating Python dependencies from requirements.txt ...
-"%VENV_PIP%" install -r requirements.txt --quiet
+"%VENV_PIP%" install -r requirements.txt
 if errorlevel 1 (
     echo  [ERROR] pip install failed. Check requirements.txt and your internet connection.
     pause

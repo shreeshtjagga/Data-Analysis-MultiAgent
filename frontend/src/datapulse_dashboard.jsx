@@ -877,7 +877,7 @@ export default function DataPulse({ user, onLogout }) {
                     <button 
                       onClick={(e) => { e.stopPropagation(); deleteItem(item.analysis_id); }} 
                       disabled={deleteLoading === item.analysis_id}
-                      style={{ background: 'none', border: 'none', color: 'var(--text-muted)', cursor: 'pointer', padding: '8px' }}
+                      style={{ background: 'none', border: 'none', color: 'var(--text-muted)', cursor: 'pointer', padding: '8px', fontSize: '24px' }}
                     >
                       {deleteLoading === item.analysis_id ? "..." : "🗑"}
                     </button>
