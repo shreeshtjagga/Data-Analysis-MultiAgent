@@ -443,7 +443,7 @@ export default function DataPulse({ user, onLogout }) {
       const pageWidth = doc.internal.pageSize.getWidth();  // ~297mm
       const pageHeight = doc.internal.pageSize.getHeight(); // ~210mm
       
-      // 0. Background Color (Pale Teal)
+      // 0. Background Color (Pale Teal/Cream)
       doc.setFillColor(236, 244, 243);
       doc.rect(0, 0, pageWidth, pageHeight, 'F');
 
@@ -451,67 +451,75 @@ export default function DataPulse({ user, onLogout }) {
 
       // 1. TITLE
       doc.setFont("times", "bold"); // Serif font for dashboard title
-      doc.setFontSize(24);
+      doc.setFontSize(22);
       doc.setTextColor(34, 49, 63); // Dark slate
-      doc.text("DataPulse Analytics Dashboard", margin, 20);
+      const displayTitle = fileName ? `${fileName.replace(/\.[^/.]+$/, "")} Dashboard` : "Analytics Dashboard";
+      doc.text(truncateLabel(displayTitle, 45), margin, 20);
       
-      // Decorative top right circle (like the image)
-      doc.setFillColor(152, 214, 204);
-      doc.circle(pageWidth, 0, 20, 'F');
+      // DataPulse Watermark
+      doc.setFont("helvetica", "bolditalic");
+      doc.setFontSize(14);
+      doc.setTextColor(180, 200, 195);
+      doc.text("DataPulse", pageWidth - margin - 20, margin + 4);
       
       // 2. SUBTITLE / HEADLINE
       doc.setFont("helvetica", "normal");
-      doc.setFontSize(9);
-      doc.setTextColor(100, 110, 110);
+      doc.setFontSize(10);
+      doc.setTextColor(40, 40, 40);
       
       const insights = result.insights || {};
-      let subtitle = `This dashboard graphically represents an automated AI analysis of the source file: ${fileName}.`;
+      let subtitle = "Executive Summary: ";
       if (insights.headline) {
          const headlineText = typeof insights.headline === 'object' ? String(insights.headline.text || "") : String(insights.headline);
-         subtitle += " " + headlineText;
-      }
-      if (insights.findings && insights.findings.length > 0) {
-         const firstFinding = typeof insights.findings[0] === 'object' ? String(insights.findings[0].text || insights.findings[0].message || "") : String(insights.findings[0]);
-         subtitle += " Key Finding: " + firstFinding;
+         subtitle += headlineText;
+      } else {
+         subtitle += "Data processed successfully via automated AI analysis.";
       }
       const splitSubtitle = doc.splitTextToSize(subtitle, pageWidth - margin * 2 - 20);
       doc.text(splitSubtitle, margin, 26);
 
-      // 3. TOP METRICS ROW
+      // 3. TOP METRICS ROW (Business Insights)
       const stats = result.stats_summary || {};
-      const completeness = Number(stats.data_quality?.completeness || 100).toFixed(1);
+      const findingsList = [];
+      if (insights.findings && Array.isArray(insights.findings)) {
+         insights.findings.forEach(f => {
+            findingsList.push(typeof f === 'object' ? String(f.text || f.message || "") : String(f));
+         });
+      }
+      if (insights.recommendations && Array.isArray(insights.recommendations)) {
+         insights.recommendations.forEach(f => {
+            findingsList.push(typeof f === 'object' ? String(f.text || f.message || "") : String(f));
+         });
+      }
       
-      const metrics = [
-        { label: "Total Rows", value: (stats.row_count || 0).toLocaleString() },
-        { label: "Total Columns", value: String(stats.column_count || 0) },
-        { label: "Completeness", value: `${completeness}%` },
-        { label: "Missing Cells", value: String(stats.data_quality?.missing_cells || 0) },
-        { label: "Generated", value: new Date().toLocaleDateString() }
-      ];
+      const topFinding = findingsList.length > 0 ? findingsList[0] : "Data processed and structured successfully.";
+      const secondFinding = findingsList.length > 1 ? findingsList[1] : `Analyzed ${stats.row_count || 0} rows across ${stats.column_count || 0} variables.`;
+
+      let metricY = 38;
+      const numMetrics = 3;
+      const metricBoxWidth = (pageWidth - margin * 2 - 20) / numMetrics;
       
-      const numMetrics = metrics.length;
-      const metricSpacing = (pageWidth - margin * 2) / numMetrics;
-      
-      let metricY = 45;
-      for (let i = 0; i < metrics.length; i++) {
-         const mX = margin + i * metricSpacing + (metricSpacing / 2);
+      for (let i = 0; i < numMetrics; i++) {
+         const mX = margin + i * (metricBoxWidth + 10);
          
          // Label
-         doc.setFont("helvetica", "normal");
-         doc.setFontSize(10);
-         doc.setTextColor(40, 40, 40);
-         doc.text(metrics[i].label, mX, metricY, { align: 'center' });
-         
-         // Line below label
-         doc.setDrawColor(180, 200, 195);
-         doc.setLineWidth(0.4);
-         doc.line(mX - 15, metricY + 3, mX + 15, metricY + 3);
+         doc.setFont("helvetica", "bold");
+         doc.setFontSize(9);
+         doc.setTextColor(50, 70, 70);
+         const label = i === 0 ? "Primary Insight" : (i === 1 ? "Secondary Observation" : "Dataset Volume");
+         doc.text(label, mX, metricY);
          
          // Value
-         doc.setFont("times", "bold");
-         doc.setFontSize(14);
+         doc.setFont("helvetica", "normal");
+         doc.setFontSize(10);
          doc.setTextColor(20, 30, 30);
-         doc.text(metrics[i].value, mX, metricY + 10, { align: 'center' });
+         let valStr = "";
+         if (i === 0) valStr = topFinding;
+         else if (i === 1) valStr = secondFinding;
+         else valStr = `${(stats.row_count || 0).toLocaleString()} records processed accurately.`;
+         
+         const splitVal = doc.splitTextToSize(valStr, metricBoxWidth);
+         doc.text(splitVal, mX, metricY + 6);
       }
 
       // 4. CHARTS GRID
@@ -519,27 +527,48 @@ export default function DataPulse({ user, onLogout }) {
       const chartKeys = Object.keys(charts);
       
       if (chartKeys.length > 0) {
-        // Grid constraints
-        const cols = 3;
-        const rows = 2; // Fixed to fit on 1 landscape page cleanly
-        const maxCharts = cols * rows; 
+        const totalCharts = Math.min(chartKeys.length, 6);
+        let cols = 3;
+        if (totalCharts <= 4) cols = 2;
+        if (totalCharts === 1) cols = 1;
         
-        const gap = 8;
-        const chartBoxWidth = (pageWidth - margin * 2 - gap * (cols - 1)) / cols;
-        const chartBoxHeight = 65;
-        const startY = 65;
+        const gap = 12;
+        const availableWidth = pageWidth - margin * 2;
+        const chartBoxWidth = (availableWidth - gap * (cols - 1)) / cols;
+        
+        const startY = 60; // Shifted up slightly
+        const availableHeight = pageHeight - startY - margin;
+        const totalRows = Math.ceil(totalCharts / cols);
+        const yGap = 12;
+        const chartBoxHeight = totalRows > 1 ? (availableHeight - yGap) / totalRows : Math.min(availableHeight, 100);
 
-        for (let i = 0; i < Math.min(chartKeys.length, maxCharts); i++) {
+        for (let i = 0; i < totalCharts; i++) {
           const key = chartKeys[i];
           const fig = charts[key];
           if (!fig || !fig.data) continue;
 
           try {
              // Calculate positions
-             const col = i % cols;
-             const row = Math.floor(i / cols);
-             const boxX = margin + col * (chartBoxWidth + gap);
-             const boxY = startY + row * (chartBoxHeight + gap + 4);
+             let col = i % cols;
+             let row = Math.floor(i / cols);
+             
+             let boxX = margin + col * (chartBoxWidth + gap);
+             
+             // Center bottom row if exactly 3 charts (2 top, 1 bottom)
+             if (totalCharts === 3 && i === 2) {
+                 boxX = margin + (availableWidth / 2) - (chartBoxWidth / 2);
+             }
+             // Center bottom row if exactly 5 charts (3 top, 2 bottom)
+             if (totalCharts === 5 && i >= 3) {
+                 // For 5 charts, cols=3. The bottom row has 2 charts.
+                 // The width of 2 charts + 1 gap is (2*chartBoxWidth + gap).
+                 const bottomRowWidth = (2 * chartBoxWidth) + gap;
+                 const startOff = margin + (availableWidth - bottomRowWidth) / 2;
+                 const bottomCol = i - 3;
+                 boxX = startOff + bottomCol * (chartBoxWidth + gap);
+             }
+             
+             const boxY = startY + row * (chartBoxHeight + yGap);
 
              // Draw White Rounded Container
              doc.setFillColor(255, 255, 255);
@@ -547,42 +576,62 @@ export default function DataPulse({ user, onLogout }) {
              doc.roundedRect(boxX, boxY, chartBoxWidth, chartBoxHeight, 3, 3, 'FD');
 
              // Draw Dark Title Pill Overlapping Top
-             const pillWidth = chartBoxWidth * 0.85;
+             const pillWidth = chartBoxWidth * 0.95;
              const pillX = boxX + (chartBoxWidth - pillWidth) / 2;
              const pillY = boxY - 3;
              const pillHeight = 6;
              doc.setFillColor(4, 59, 72); // dark teal
              doc.roundedRect(pillX, pillY, pillWidth, pillHeight, 2, 2, 'F');
              
-             // Pill Text
-             doc.setFontSize(8);
+             // Pill Text Cleansing
+             let baseTitle = key;
+             if (fig.layout && fig.layout.title) {
+                 baseTitle = typeof fig.layout.title === 'string' ? fig.layout.title : (fig.layout.title.text || key.replaceAll("_", " "));
+             }
+             let strippedTitle = baseTitle.replace(/^(timeseries|scatter|bar\s?counts?|frequency\s?of|composition\s?of|donut|pie|line|heatmap)(?:\s+multi)?[\s-:]*/gi, "").trim() || baseTitle;
+             // Remove instances of "Q10 - ", "Q4 - " anywhere in the title
+             strippedTitle = strippedTitle.replace(/\bQ\d+\s*[-:]*\s*/gi, "").trim() || strippedTitle;
+             // Remove aggregation suffixes e.g., "(agg to 16 pts)" and trailing question marks
+             strippedTitle = strippedTitle.replace(/\(agg[^)]+\)/gi, "").replace(/\?+$/, "").trim() || strippedTitle;
+             
+             doc.setFontSize(7.5); // Reduced slightly for better fit
              doc.setTextColor(255, 255, 255);
              doc.setFont("helvetica", "bold");
-             const titleStr = key.replace(/_/g, ' ').charAt(0).toUpperCase() + key.replace(/_/g, ' ').slice(1);
-             const trTitle = titleStr.length > 38 ? titleStr.slice(0, 35) + '...' : titleStr;
-             doc.text(trTitle, boxX + chartBoxWidth / 2, pillY + 4.2, { align: 'center' });
+             const titleStr = strippedTitle.charAt(0).toUpperCase() + strippedTitle.slice(1);
+             const trTitle = titleStr.length > 60 ? titleStr.slice(0, 57) + '...' : titleStr;
+             doc.text(trTitle, boxX + chartBoxWidth / 2, pillY + 4.0, { align: 'center' });
 
-             // Prepare Plotly Configuration
+             // Prepare Plotly Configuration for Light Mode
              const pdfLayout = {
                ...fig.layout,
                paper_bgcolor: "rgba(0,0,0,0)",
                plot_bgcolor: "rgba(0,0,0,0)",
-               font: { color: "#333333", family: "Helvetica", size: 8 },
+               font: { color: "#333333", family: "Helvetica", size: 14 }, 
+               xaxis: {
+                  ...fig.layout.xaxis,
+                  tickfont: { color: "#555555", size: 13 },
+                  title: { ...(fig.layout.xaxis?.title || {}), font: { color: "#333333", size: 15 } }
+               },
+               yaxis: {
+                  ...fig.layout.yaxis,
+                  tickfont: { color: "#555555", size: 13 },
+                  title: { ...(fig.layout.yaxis?.title || {}), font: { color: "#333333", size: 15 } }
+               },
                width: 450,
-               height: 300,
+               height: 320,
                showlegend: false,
-               margin: { l: 30, r: 15, t: 15, b: 25 },
+               margin: { l: 45, r: 25, t: 20, b: 45 }, 
                title: null // Title is handled by pdf pill
              };
 
-             // Generate Image
+             // Generate Image with retuned resolution ratio
              const imgData = await Plotly.toImage(
                 { data: fig.data, layout: pdfLayout }, 
-                { format: 'png', width: 450, height: 300 }
+                { format: 'png', width: 450, height: 320, scale: 3 }
              );
 
              // Add Image to Box
-             doc.addImage(imgData, 'PNG', boxX + 2, boxY + 4, chartBoxWidth - 4, chartBoxHeight - 6);
+             doc.addImage(imgData, 'PNG', boxX + 2, boxY + 4, chartBoxWidth - 4, chartBoxHeight - 8);
 
           } catch (chartErr) {
              console.warn(`Skipped chart ${key}`, chartErr);
@@ -591,7 +640,7 @@ export default function DataPulse({ user, onLogout }) {
       }
 
       const cleanFileName = fileName.replace(/\.[^/.]+$/, "");
-      doc.save(`DataPulse_Dashboard_${cleanFileName}.pdf`);
+      doc.save(`${cleanFileName}_Dashboard.pdf`);
       
     } catch (err) {
       console.error("PDF Generation Error:", err);
