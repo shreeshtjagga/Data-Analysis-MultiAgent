@@ -463,20 +463,22 @@ export default function DataPulse({ user, onLogout }) {
       doc.text("DataPulse", pageWidth - margin - 20, margin + 4);
       
       // 2. SUBTITLE / HEADLINE
+      const insights = result.insights || {};
+      let headlineText = "Data processed successfully via automated AI analysis.";
+      if (insights.headline) {
+         headlineText = typeof insights.headline === 'object' ? String(insights.headline.text || "") : String(insights.headline);
+      }
+      
+      doc.setFont("helvetica", "bold");
+      doc.setFontSize(11); // Bold explicit heading
+      doc.setTextColor(30, 40, 40);
+      doc.text("Executive Summary", margin, 26);
+      
       doc.setFont("helvetica", "normal");
       doc.setFontSize(10);
       doc.setTextColor(40, 40, 40);
-      
-      const insights = result.insights || {};
-      let subtitle = "Executive Summary: ";
-      if (insights.headline) {
-         const headlineText = typeof insights.headline === 'object' ? String(insights.headline.text || "") : String(insights.headline);
-         subtitle += headlineText;
-      } else {
-         subtitle += "Data processed successfully via automated AI analysis.";
-      }
-      const splitSubtitle = doc.splitTextToSize(subtitle, pageWidth - margin * 2 - 20);
-      doc.text(splitSubtitle, margin, 26);
+      const splitSubtitle = doc.splitTextToSize(headlineText, pageWidth - margin * 2 - 20);
+      doc.text(splitSubtitle, margin, 31);
 
       // 3. TOP METRICS ROW (Business Insights)
       const stats = result.stats_summary || {};
@@ -495,7 +497,7 @@ export default function DataPulse({ user, onLogout }) {
       const topFinding = findingsList.length > 0 ? findingsList[0] : "Data processed and structured successfully.";
       const secondFinding = findingsList.length > 1 ? findingsList[1] : `Analyzed ${stats.row_count || 0} rows across ${stats.column_count || 0} variables.`;
 
-      let metricY = 38;
+      let metricY = 41;
       const numMetrics = 3;
       const metricBoxWidth = (pageWidth - margin * 2 - 20) / numMetrics;
       
@@ -504,9 +506,9 @@ export default function DataPulse({ user, onLogout }) {
          
          // Label
          doc.setFont("helvetica", "bold");
-         doc.setFontSize(9);
-         doc.setTextColor(50, 70, 70);
-         const label = i === 0 ? "Primary Insight" : (i === 1 ? "Secondary Observation" : "Dataset Volume");
+         doc.setFontSize(10);
+         doc.setTextColor(30, 50, 50);
+         const label = i === 0 ? "Strategic Insight" : (i === 1 ? "Key Finding" : "Dataset Scope");
          doc.text(label, mX, metricY);
          
          // Value
@@ -536,7 +538,7 @@ export default function DataPulse({ user, onLogout }) {
         const availableWidth = pageWidth - margin * 2;
         const chartBoxWidth = (availableWidth - gap * (cols - 1)) / cols;
         
-        const startY = 60; // Shifted up slightly
+        const startY = 62; // Shifted down to accommodate standalone Executive Summary
         const availableHeight = pageHeight - startY - margin;
         const totalRows = Math.ceil(totalCharts / cols);
         const yGap = 12;
