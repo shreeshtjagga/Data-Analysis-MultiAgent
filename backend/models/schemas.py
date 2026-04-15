@@ -1,6 +1,7 @@
 from datetime import datetime
 from typing import Any, List, Optional
 
+from email_validator import EmailNotValidError, validate_email
 from pydantic import BaseModel, ConfigDict, EmailStr, Field, field_validator
 
 from ..core.constants import APP_VERSION
@@ -24,6 +25,15 @@ class UserRegister(BaseModel):
             raise ValueError("Password must not be blank")
         return v
 
+    @field_validator("email", mode="before")
+    @classmethod
+    def email_must_be_deliverable(cls, v: str) -> str:
+        try:
+            info = validate_email(str(v).strip(), check_deliverability=True)
+            return info.normalized.lower()
+        except EmailNotValidError as exc:
+            raise ValueError(str(exc)) from exc
+
 
 class UserLogin(BaseModel):
     model_config = ConfigDict(
@@ -35,10 +45,50 @@ class UserLogin(BaseModel):
     email: EmailStr
     password: str
 
+    @field_validator("email", mode="before")
+    @classmethod
+    def normalize_login_email(cls, v: str) -> str:
+        try:
+            info = validate_email(str(v).strip(), check_deliverability=False)
+            return info.normalized.lower()
+        except EmailNotValidError as exc:
+            raise ValueError(str(exc)) from exc
+
 
 class GoogleLoginRequest(BaseModel):
     credential: str = Field(..., min_length=1)
     client_id: Optional[str] = None
+
+
+class ForgotPasswordRequest(BaseModel):
+    email: EmailStr
+
+    @field_validator("email", mode="before")
+    @classmethod
+    def normalize_forgot_email(cls, v: str) -> str:
+        try:
+            info = validate_email(str(v).strip(), check_deliverability=False)
+            return info.normalized.lower()
+        except EmailNotValidError as exc:
+            raise ValueError(str(exc)) from exc
+
+
+class ResetPasswordRequest(BaseModel):
+    token: str = Field(..., min_length=1)
+    new_password: str = Field(..., min_length=6, max_length=256)
+
+    @field_validator("new_password")
+    @classmethod
+    def reset_password_not_blank(cls, v: str) -> str:
+        if not v.strip():
+            raise ValueError("Password must not be blank")
+        return v
+
+
+class ForgotPasswordResponse(BaseModel):
+    success: bool
+    message: str
+    debug_reset_token: Optional[str] = None
 
 
 class UserResponse(BaseModel):

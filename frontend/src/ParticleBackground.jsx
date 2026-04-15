@@ -2,6 +2,11 @@ import { useEffect, useRef } from 'react';
 
 export default function ParticleBackground({ noExclude = false }) {
   const canvasRef = useRef(null);
+  const noExcludeRef = useRef(noExclude);
+
+  useEffect(() => {
+    noExcludeRef.current = noExclude;
+  }, [noExclude]);
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -11,20 +16,23 @@ export default function ParticleBackground({ noExclude = false }) {
     
     // Config
     let particles = [];
-    const numParticles = noExclude? 35 : 80; 
     const maxDistance = 160;
+
+    const getRuntimeConfig = () => ({
+      targetParticles: noExcludeRef.current ? 28 : 80,
+      drawConnections: !noExcludeRef.current,
+    });
 
     const resize = () => {
       canvas.width = window.innerWidth;
       canvas.height = window.innerHeight;
     };
     window.addEventListener('resize', resize);
-    window.addEventListener('scroll', resize);
     resize();
 
     // Exclusion zone logic
     const getExcludeZone = () => {
-      if (noExclude) return { xMin: -1, xMax: -1, yMin: -1, yMax: -1 };
+      if (noExcludeRef.current) return { xMin: -1, xMax: -1, yMin: -1, yMax: -1 };
       const centerX = canvas.width / 2;
       const centerY = canvas.height / 2;
       const padX = 300; // 600px total width
@@ -93,22 +101,29 @@ export default function ParticleBackground({ noExclude = false }) {
       }
     }
 
-    for (let i = 0; i < numParticles; i++) {
+    for (let i = 0; i < getRuntimeConfig().targetParticles; i++) {
         particles.push(new Particle());
     }
 
-    let frameCount = 0;
     const drawCanvas = () => {
-      frameCount++;
       ctx.clearRect(0, 0, canvas.width, canvas.height);
+      const { targetParticles, drawConnections } = getRuntimeConfig();
+
+      if (particles.length < targetParticles) {
+        for (let i = particles.length; i < targetParticles; i++) {
+          particles.push(new Particle());
+        }
+      } else if (particles.length > targetParticles) {
+        particles.length = targetParticles;
+      }
       
-      for (let i = 0; i < numParticles; i++) {
+      for (let i = 0; i < particles.length; i++) {
         particles[i].update();
         particles[i].draw();
         ctx.shadowBlur = 0;
 
-        if (frameCount % 2 === 0) {
-          for (let j = i + 1; j < numParticles; j++) {
+        if (drawConnections) {
+          for (let j = i + 1; j < particles.length; j++) {
             const dx = particles[i].x - particles[j].x;
             const dy = particles[i].y - particles[j].y;
             const dist = Math.sqrt(dx * dx + dy * dy);
@@ -131,10 +146,9 @@ export default function ParticleBackground({ noExclude = false }) {
 
     return () => {
       window.removeEventListener('resize', resize);
-      window.removeEventListener('scroll', resize);
       cancelAnimationFrame(animationFrameId);
     };
-  }, [noExclude]);
+  }, []);
 
   return (
     <canvas 
