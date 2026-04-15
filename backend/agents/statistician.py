@@ -99,23 +99,27 @@ def statistician_agent(state: AnalysisState) -> AnalysisState:
         ]
         numeric_stats: dict = {}
         numeric_errors: list[dict] = []
+        outliers_summary: dict = {}
 
         for col in numeric_cols:
             try:
                 col_data = df[col].dropna()
                 if len(col_data) == 0:
                     continue
+                    
+                q1 = float(col_data.quantile(0.25))
+                q3 = float(col_data.quantile(0.75))
+                iqr = q3 - q1
+                
                 numeric_stats[col] = {
                     "mean": float(col_data.mean()),
                     "median": float(col_data.median()),
                     "std": float(col_data.std()),
                     "min": float(col_data.min()),
                     "max": float(col_data.max()),
-                    "q1": float(col_data.quantile(0.25)),
-                    "q3": float(col_data.quantile(0.75)),
-                    "iqr": float(
-                        col_data.quantile(0.75) - col_data.quantile(0.25)
-                    ),
+                    "q1": q1,
+                    "q3": q3,
+                    "iqr": iqr,
                     "skewness": float(
                         scipy_stats.skew(col_data, nan_policy="omit")
                     ),
@@ -125,6 +129,19 @@ def statistician_agent(state: AnalysisState) -> AnalysisState:
                     "variance": float(col_data.var()),
                     "count": int(col_data.count()),
                 }
+                
+                lower_bound = q1 - 1.5 * iqr
+                upper_bound = q3 + 1.5 * iqr
+
+                outliers = df[(df[col] < lower_bound) | (df[col] > upper_bound)]
+                if len(outliers) > 0:
+                    outliers_summary[col] = {
+                        "count": int(len(outliers)),
+                        "percentage": float((len(outliers) / len(df)) * 100),
+                        "lower_bound": float(lower_bound),
+                        "upper_bound": float(upper_bound),
+                    }
+                    
             except Exception as col_err:
                 logger.warning("Skipping numeric column '%s': %s", col, col_err)
                 numeric_errors.append({"column": col, "error": str(col_err)})
@@ -178,37 +195,13 @@ def statistician_agent(state: AnalysisState) -> AnalysisState:
             stats_summary["categorical_column_errors"] = categorical_errors
 
 
-        outliers_summary: dict = {}
-        for col in numeric_cols:
-            try:
-                col_data = df[col].dropna()
-                if len(col_data) == 0:
-                    continue
-                Q1 = col_data.quantile(0.25)
-                Q3 = col_data.quantile(0.75)
-                IQR = Q3 - Q1
-                lower_bound = Q1 - 1.5 * IQR
-                upper_bound = Q3 + 1.5 * IQR
-
-                outliers = df[(df[col] < lower_bound) | (df[col] > upper_bound)]
-                if len(outliers) > 0:
-                    outliers_summary[col] = {
-                        "count": int(len(outliers)),
-                        "percentage": float((len(outliers) / len(df)) * 100),
-                        "lower_bound": float(lower_bound),
-                        "upper_bound": float(upper_bound),
-                    }
-            except Exception as col_err:
-                logger.warning(
-                    "Outlier detection skipped for '%s': %s", col, col_err
-                )
-
         stats_summary["outliers"] = outliers_summary
 
 
         if len(numeric_cols) > 1:
             try:
-                correlation_matrix = df[numeric_cols].corr()
+                corr_sample = df[numeric_cols].sample(min(len(df), 5000), random_state=42) if len(df) > 5000 else df[numeric_cols]
+                correlation_matrix = corr_sample.corr()
                 strong_correlations = []
                 for i in range(len(correlation_matrix.columns)):
                     for j in range(i + 1, len(correlation_matrix.columns)):

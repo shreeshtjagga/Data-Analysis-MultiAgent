@@ -37,14 +37,17 @@ def clean_dataframe(df: pd.DataFrame) -> tuple[pd.DataFrame, list]:
     initial_rows = len(df)
     logs = []
 
-    str_cols = df.select_dtypes(include=["object"]).columns
-    for col in str_cols:
-        df[col] = df[col].str.strip()
-
     df = df.drop_duplicates()
     dropped = initial_rows - len(df)
     if dropped > 0:
         logger.info("Dropped %d duplicate rows", dropped)
+
+    str_cols = df.select_dtypes(include=["object"]).columns
+    for col in str_cols:
+        try:
+            df[col] = df[col].astype(str).str.strip()
+        except Exception:
+            pass
 
     num_cols = df.select_dtypes(include=[np.number]).columns
     for col in num_cols:
@@ -89,8 +92,12 @@ def detect_column_types(df: pd.DataFrame) -> dict[str, str]:
         elif pd.api.types.is_datetime64_any_dtype(df[col]):
             type_map[col] = "datetime"
         else:
+            sample = df[col].dropna().head(50)
+            if sample.empty:
+                type_map[col] = "categorical"
+                continue
             try:
-                pd.to_datetime(df[col], format="mixed")
+                pd.to_datetime(sample, format="mixed")
                 type_map[col] = "datetime"
             except (ValueError, TypeError):
                 type_map[col] = "categorical"
