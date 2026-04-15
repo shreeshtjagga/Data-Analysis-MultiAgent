@@ -652,20 +652,24 @@ async def chat_with_analysis(
                 details = []
                 for trace in c.get("data", []):
                     ttype = trace.get("type", "unknown")
-                    if ttype == "pie":
-                        labels = trace.get("labels", [])
-                        values = trace.get("values", [])
-                        pairs = [f"{l}: {val}" for l, val in zip(labels, values)]
-                        details.append(f"Pie Breakdown: {', '.join(pairs)}")
-                    elif ttype == "bar":
-                        x = trace.get("x", [])[:6]
-                        y = trace.get("y", [])[:6]
-                        details.append(f"Bar Data (top): X={x}, Y={y}")
+                    if ttype in ("pie", "pie"):
+                        labels = trace.get("labels") or trace.get("x") or []
+                        values = trace.get("values") or trace.get("y") or []
+                        if isinstance(labels, list) and isinstance(values, list):
+                            pairs = [f"{l}: {val}" for l, val in zip(labels[:10], values[:10])]
+                            details.append(f"Pie Breakdown: {', '.join(pairs)}")
+                    elif ttype in ("bar", "scatter", "violin", "box"):
+                        x = (trace.get("x") or [])[:8]
+                        y = (trace.get("y") or [])[:8]
+                        details.append(f"{ttype.capitalize()} Data: X={x}, Y={y}")
                     else:
-                        details.append(f"{ttype} chart format")
-                charts_summary[k] = " | ".join(details)
-            except Exception:
-                charts_summary[k] = "Visual chart structure"
+                        details.append(f"{ttype} chart")
+                title = c.get("layout", {}).get("title", {}).get("text", k) if isinstance(c.get("layout", {}).get("title"), dict) else k
+                charts_summary[k] = f"Title '{title}' - " + " | ".join(details)
+            except Exception as e:
+                import traceback
+                print("CHART EXCEPTION:", k, traceback.format_exc())
+                charts_summary[k] = f"Visual chart (metadata only)"
     else:
         charts_summary = charts_data
     outlier_summary = context.get("outlierSummary") or [
@@ -679,7 +683,8 @@ async def chat_with_analysis(
         "Keep answers to 2-5 clear sentences. Use examples or analogies when helpful. "
         "Never claim data is missing if it exists in context. "
         "If context is insufficient, say exactly which information is missing in plain language.\n"
-        "If you are explaining or referencing a specific chart from the 'Available Charts' list, you MUST include the text `[CHART: <chart_name>]` in your response so the UI can render it. Do this ONLY if the user asks about a chart or if a specific chart perfectly answers their question.\n\n"
+        "IMPORTANT: If you are explaining, describing, or referencing any chart from 'Available Charts', you MUST format it exactly like this: `[CHART: chart_key_name]` so the application can render it. Put the chart tag first, and explain it below.\n"
+        "Never just put the chart name in backticks. You MUST use the bracket format `[CHART: key]`.\n\n"
         f"File: {file_name}\n"
         f"Dataset: {profile.get('label', 'unknown')} ({profile.get('domain', 'general')})\n"
         f"Data Quality: {quality}\n"
@@ -701,7 +706,7 @@ async def chat_with_analysis(
             completion = client.chat.completions.create(
                 model=os.getenv("GROQ_MODEL", "llama-3.1-8b-instant"),
                 messages=[
-                    {"role": "system", "content": "You are a friendly, easy-to-understand data analyst. Explain things in simple everyday language. Avoid technical jargon. Be helpful and clear."},
+                    {"role": "system", "content": "You are a concise, friendly data analyst. Explain things in simple everyday language. Keep answers very short, strictly 1-4 sentences. Do not ramble. If responding about a chart, you must use the [CHART: key] syntax."},
                     {"role": "user", "content": prompt},
                 ],
                 temperature=0.3,

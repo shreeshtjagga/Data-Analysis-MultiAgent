@@ -518,23 +518,24 @@ export default function DataPulse({ user, onLogout }) {
              <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center' }}>
                 <div style={{ position: 'relative', width: '100%', maxWidth: '450px' }}>
                   {/* Outer pulse ring */}
-                  <div style={{ position: 'absolute', inset: 0, borderRadius: '50%', background: 'var(--primary-500)', filter: 'blur(80px)', opacity: 0.15, animation: 'pulse 4s infinite' }} />
+                  <div style={{ position: 'absolute', inset: 0, borderRadius: '50%', background: 'var(--primary-500)', filter: 'blur(40px)', opacity: 0.05, animation: 'pulse 4s infinite' }} />
                   
                   {/* The AI Image Hologram Container */}
                   <div className="ai-hologram-layer" style={{ zIndex: 1 }}>
-                     {/* Base Image */}
                      <img 
                         src="/ai_hologram.png" 
                         alt="AI Matrix Core" 
-                        style={{ width: '100%', borderRadius: '24px', position: 'relative', zIndex: 2, border: '1px solid rgba(99,102,241,0.2)' }} 
+                        style={{ width: '100%', borderRadius: '24px', position: 'relative', zIndex: 2 }} 
                      />
-                     
-                     {/* Glitch Overlay for Animated Effect */}
-                     <img 
-                        className="ai-glitch-layer"
-                        src="/ai_hologram.png" 
-                        alt="" 
-                        style={{ zIndex: 3 }}
+                     <div 
+                        style={{ 
+                           position: 'absolute', 
+                           inset: 0, 
+                           borderRadius: '24px', 
+                           zIndex: 3, 
+                           pointerEvents: 'none', 
+                           boxShadow: 'inset 0 0 60px 15px #0A0F1C' 
+                        }} 
                      />
                   </div>
                 </div>
@@ -547,10 +548,10 @@ export default function DataPulse({ user, onLogout }) {
                      <span style={{ width: '6px', height: '6px', background: 'var(--primary-500)', borderRadius: '50%', boxShadow: '0 0 10px var(--primary-500)' }} />
                      System Ready
                   </div>
-                  <h1 style={{ fontSize: '46px', margin: '0 0 4px 0', letterSpacing: '-0.05em', lineHeight: 1, color: 'var(--text-main)', opacity: 0.9 }}>
+                  <h1 style={{ fontSize: '42px', margin: '0 0 4px 0', letterSpacing: '-0.02em', lineHeight: 1, color: 'var(--text-main)', opacity: 0.9, fontFamily: "'Inter', sans-serif", fontWeight: 700 }}>
                      Welcome
                   </h1>
-                  <h2 style={{ fontSize: '56px', margin: '0 0 16px 0', color: 'var(--primary-500)', textShadow: '0 0 30px rgba(99,102,241,0.4)', lineHeight: 1 }}>
+                  <h2 style={{ fontSize: '48px', margin: '0 0 16px 0', color: 'var(--primary-500)', textShadow: '0 0 20px rgba(99,102,241,0.3)', lineHeight: 1, fontFamily: "'Inter', sans-serif", fontWeight: 700 }}>
                      {user?.name || user?.email?.split('@')[0] || "Analyst"}
                   </h2>
                   <p style={{ fontSize: '16px', color: 'var(--text-muted)', lineHeight: 1.6, margin: 0 }}>
@@ -695,7 +696,11 @@ export default function DataPulse({ user, onLogout }) {
                   <strong style={{ fontSize: '14px', color: 'var(--text-main)', fontFamily: 'Syne, sans-serif' }}>Analyst Advisor</strong>
                   <div ref={chatContainerRef} style={{ flex: 1, overflowY: "auto", display: "flex", flexDirection: "column", gap: "12px", background: 'var(--bg-input)', padding: '16px', borderRadius: '12px', border: '1px solid var(--border-subtle)' }}>
                      {chatMsgs.length === 0 ? (
-                       <div style={{ margin: 'auto', textAlign: 'center', fontSize: '13px', color: 'var(--text-muted)' }}>Establish a query connection with your data.</div>
+                       <div style={{ margin: 'auto', textAlign: 'center', display: 'flex', flexDirection: 'column', gap: '8px', opacity: 0.8 }}>
+                         <div style={{ fontSize: '24px', marginBottom: '4px' }}>🤖</div>
+                         <strong style={{ fontSize: '14px', color: 'var(--text-main)', fontFamily: "'Syne', sans-serif" }}>I am your Data Analyst.</strong>
+                         <p style={{ fontSize: '13px', color: 'var(--text-muted)', maxWidth: '200px', lineHeight: 1.5 }}>Feel free to ask me any questions about your data!</p>
+                       </div>
                      ) : chatMsgs.map((m, i) => (
                        <div 
                         key={i} 
@@ -776,13 +781,12 @@ export default function DataPulse({ user, onLogout }) {
             </div>
 
             {/* RIGHT (Results / Loading) */}
-            <div className="col-8" style={{ height: '100%', overflowY: 'auto', paddingRight: '12px', paddingBottom: '32px' }}>
+            <div className="col-8" style={{ height: '100%', overflowY: 'auto', paddingRight: '12px', paddingBottom: '32px', display: 'flex', flexDirection: 'column' }}>
               {!result ? (
                  <div className="card animate-fade-in" style={{ minHeight: '500px', display: 'flex', alignItems: 'center', justifyContent: 'center', width: '100%' }}>
                    <p style={{ color: 'var(--text-muted)' }}>Synchronizing data... Standby.</p>
                  </div>
               ) : (
-
               <div className="panel-flat flex-col gap-24 animate-fade-in">
                 <div style={{ display: 'flex', borderBottom: '1px solid var(--border-subtle)', gap: '16px', paddingBottom: '12px' }}>
                   {PRIMARY_TABS.map(t => <button key={t} onClick={() => setTab(t)} style={{ background: 'none', border: 'none', color: tab === t ? 'var(--text-main)' : 'var(--text-muted)', fontWeight: tab === t ? 600 : 500, fontSize: '14px', cursor: 'pointer', borderBottom: tab === t ? '2px solid var(--primary-500)' : 'none', paddingBottom: '12px', marginBottom: '-13px', textTransform: 'capitalize', letterSpacing: '0.05em' }}>{t}</button>)}
