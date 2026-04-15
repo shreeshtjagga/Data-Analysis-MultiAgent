@@ -432,49 +432,172 @@ export default function DataPulse({ user, onLogout }) {
   }
 };
 
-  const exportPDF = useCallback(() => {
+  const exportPDF = useCallback(async () => {
     if (!result) return;
-    const insights = result?.insights || {};
-    const doc = new jsPDF();
-    doc.setFont("helvetica", "bold");
-    doc.setFontSize(22);
-    doc.setTextColor(99, 102, 241);
-    doc.text("DATA PULSE — Analysis Report", 20, 25);
     
-    doc.setFontSize(11);
-    doc.setTextColor(148, 163, 184);
-    doc.setFont("helvetica", "normal");
-    doc.text(`Origin: ${fileName}`, 20, 35);
-    doc.text(`Generated: ${new Date().toLocaleString()}`, 20, 42);
+    try {
+      const { default: Plotly } = await import("plotly.js-dist-min");
+      
+      // Initialize Landscape A4
+      const doc = new jsPDF("l", "mm", "a4");
+      const pageWidth = doc.internal.pageSize.getWidth();  // ~297mm
+      const pageHeight = doc.internal.pageSize.getHeight(); // ~210mm
+      
+      // 0. Background Color (Pale Teal)
+      doc.setFillColor(236, 244, 243);
+      doc.rect(0, 0, pageWidth, pageHeight, 'F');
 
-    let y = 60;
-    if (insights?.headline) {
-      doc.setFont("helvetica", "bold");
-      doc.setTextColor(15, 23, 42); // Dark for body readability
-      doc.text("EXECUTIVE SUMMARY", 20, y);
-      y += 10;
+      const margin = 12;
+
+      // 1. TITLE
+      doc.setFont("times", "bold"); // Serif font for dashboard title
+      doc.setFontSize(24);
+      doc.setTextColor(34, 49, 63); // Dark slate
+      doc.text("DataPulse Analytics Dashboard", margin, 20);
+      
+      // Decorative top right circle (like the image)
+      doc.setFillColor(152, 214, 204);
+      doc.circle(pageWidth, 0, 20, 'F');
+      
+      // 2. SUBTITLE / HEADLINE
       doc.setFont("helvetica", "normal");
-      const headTxt = String(insights.headline);
-      const lines = doc.splitTextToSize(headTxt, 170);
-      doc.text(lines, 20, y);
-      y += lines.length * 7 + 15;
-    }
+      doc.setFontSize(9);
+      doc.setTextColor(100, 110, 110);
+      
+      const insights = result.insights || {};
+      let subtitle = `This dashboard graphically represents an automated AI analysis of the source file: ${fileName}.`;
+      if (insights.headline) {
+         const headlineText = typeof insights.headline === 'object' ? String(insights.headline.text || "") : String(insights.headline);
+         subtitle += " " + headlineText;
+      }
+      if (insights.findings && insights.findings.length > 0) {
+         const firstFinding = typeof insights.findings[0] === 'object' ? String(insights.findings[0].text || insights.findings[0].message || "") : String(insights.findings[0]);
+         subtitle += " Key Finding: " + firstFinding;
+      }
+      const splitSubtitle = doc.splitTextToSize(subtitle, pageWidth - margin * 2 - 20);
+      doc.text(splitSubtitle, margin, 26);
 
-    if (insights?.findings) {
-      doc.setFont("helvetica", "bold");
-      doc.text("DETECTED VECTORS (FINDINGS)", 20, y);
-      y += 10;
-      doc.setFont("helvetica", "normal");
-      insights.findings.forEach(f => {
-        const lines = doc.splitTextToSize(`• ${f}`, 170);
-        if (y > 270) { doc.addPage(); y = 20; }
-        doc.text(lines, 20, y);
-        y += lines.length * 7 + 5;
-      });
-    }
+      // 3. TOP METRICS ROW
+      const stats = result.stats_summary || {};
+      const completeness = Number(stats.data_quality?.completeness || 100).toFixed(1);
+      
+      const metrics = [
+        { label: "Total Rows", value: (stats.row_count || 0).toLocaleString() },
+        { label: "Total Columns", value: String(stats.column_count || 0) },
+        { label: "Completeness", value: `${completeness}%` },
+        { label: "Missing Cells", value: String(stats.data_quality?.missing_cells || 0) },
+        { label: "Generated", value: new Date().toLocaleDateString() }
+      ];
+      
+      const numMetrics = metrics.length;
+      const metricSpacing = (pageWidth - margin * 2) / numMetrics;
+      
+      let metricY = 45;
+      for (let i = 0; i < metrics.length; i++) {
+         const mX = margin + i * metricSpacing + (metricSpacing / 2);
+         
+         // Label
+         doc.setFont("helvetica", "normal");
+         doc.setFontSize(10);
+         doc.setTextColor(40, 40, 40);
+         doc.text(metrics[i].label, mX, metricY, { align: 'center' });
+         
+         // Line below label
+         doc.setDrawColor(180, 200, 195);
+         doc.setLineWidth(0.4);
+         doc.line(mX - 15, metricY + 3, mX + 15, metricY + 3);
+         
+         // Value
+         doc.setFont("times", "bold");
+         doc.setFontSize(14);
+         doc.setTextColor(20, 30, 30);
+         doc.text(metrics[i].value, mX, metricY + 10, { align: 'center' });
+      }
 
-    doc.save(`DataPulse_Report_${new Date().getTime()}.pdf`);
-  }, [result]);
+      // 4. CHARTS GRID
+      const charts = result.charts || {};
+      const chartKeys = Object.keys(charts);
+      
+      if (chartKeys.length > 0) {
+        // Grid constraints
+        const cols = 3;
+        const rows = 2; // Fixed to fit on 1 landscape page cleanly
+        const maxCharts = cols * rows; 
+        
+        const gap = 8;
+        const chartBoxWidth = (pageWidth - margin * 2 - gap * (cols - 1)) / cols;
+        const chartBoxHeight = 65;
+        const startY = 65;
+
+        for (let i = 0; i < Math.min(chartKeys.length, maxCharts); i++) {
+          const key = chartKeys[i];
+          const fig = charts[key];
+          if (!fig || !fig.data) continue;
+
+          try {
+             // Calculate positions
+             const col = i % cols;
+             const row = Math.floor(i / cols);
+             const boxX = margin + col * (chartBoxWidth + gap);
+             const boxY = startY + row * (chartBoxHeight + gap + 4);
+
+             // Draw White Rounded Container
+             doc.setFillColor(255, 255, 255);
+             doc.setDrawColor(200, 215, 215);
+             doc.roundedRect(boxX, boxY, chartBoxWidth, chartBoxHeight, 3, 3, 'FD');
+
+             // Draw Dark Title Pill Overlapping Top
+             const pillWidth = chartBoxWidth * 0.85;
+             const pillX = boxX + (chartBoxWidth - pillWidth) / 2;
+             const pillY = boxY - 3;
+             const pillHeight = 6;
+             doc.setFillColor(4, 59, 72); // dark teal
+             doc.roundedRect(pillX, pillY, pillWidth, pillHeight, 2, 2, 'F');
+             
+             // Pill Text
+             doc.setFontSize(8);
+             doc.setTextColor(255, 255, 255);
+             doc.setFont("helvetica", "bold");
+             const titleStr = key.replace(/_/g, ' ').charAt(0).toUpperCase() + key.replace(/_/g, ' ').slice(1);
+             const trTitle = titleStr.length > 38 ? titleStr.slice(0, 35) + '...' : titleStr;
+             doc.text(trTitle, boxX + chartBoxWidth / 2, pillY + 4.2, { align: 'center' });
+
+             // Prepare Plotly Configuration
+             const pdfLayout = {
+               ...fig.layout,
+               paper_bgcolor: "rgba(0,0,0,0)",
+               plot_bgcolor: "rgba(0,0,0,0)",
+               font: { color: "#333333", family: "Helvetica", size: 8 },
+               width: 450,
+               height: 300,
+               showlegend: false,
+               margin: { l: 30, r: 15, t: 15, b: 25 },
+               title: null // Title is handled by pdf pill
+             };
+
+             // Generate Image
+             const imgData = await Plotly.toImage(
+                { data: fig.data, layout: pdfLayout }, 
+                { format: 'png', width: 450, height: 300 }
+             );
+
+             // Add Image to Box
+             doc.addImage(imgData, 'PNG', boxX + 2, boxY + 4, chartBoxWidth - 4, chartBoxHeight - 6);
+
+          } catch (chartErr) {
+             console.warn(`Skipped chart ${key}`, chartErr);
+          }
+        }
+      }
+
+      const cleanFileName = fileName.replace(/\.[^/.]+$/, "");
+      doc.save(`DataPulse_Dashboard_${cleanFileName}.pdf`);
+      
+    } catch (err) {
+      console.error("PDF Generation Error:", err);
+      alert("Failed to compile PDF document. Please try again.");
+    }
+  }, [result, fileName]);
 
   const downloadCleanedData = useCallback(() => {
     if (!result || !result.clean_df || result.clean_df.length === 0) return;
