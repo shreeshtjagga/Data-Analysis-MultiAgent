@@ -12,40 +12,75 @@ from ..core.utils import clean_dataframe, detect_column_types
 
 logger = logging.getLogger(__name__)
 
-_NULL_THRESHOLD = 0.70
-_CARDINALITY_THRESHOLD = 0.90
-_ID_PATTERNS = frozenset(
-    {"id", "uuid", "guid", "key", "index", "hash", "code", "_id", "pk"}
-)
+_NULL_THRESHOLD        = 0.60   # matches imputation threshold in utils.py
+_CARDINALITY_THRESHOLD = 0.90   # >90% unique values → high-cardinality ID
+_QUASI_CONST_THRESHOLD = 0.95   # one value in >95% of rows → not useful
+_FREE_TEXT_AVG_LEN     = 30     # avg string length > this → free-text column
+_FREE_TEXT_CARDINALITY = 0.60   # >60% unique values + long text = free text
+
+# Column name substrings that strongly indicate metadata / ID columns
+_ID_PATTERNS = frozenset({
+    "id", "uuid", "guid", "key", "index", "hash", "_id", "pk",
+    "email", "e-mail", "mail",
+    "phone", "mobile", "tel",
+    "url", "link", "href", "website", "http",
+    "ip", "ipaddress", "ip_address",
+    "zip", "postal", "postcode",
+    "token", "secret", "password", "passwd", "pwd",
+    "timestamp", "created_at", "updated_at", "deleted_at",
+    "latitude", "longitude", "lat", "lon", "lng",
+})
 
 
 def _classify_columns(df: pd.DataFrame) -> dict:
     excluded: list[dict] = []
     kept: list[str] = []
+    n = len(df)
 
     for col in df.columns:
         reason = None
-        n = len(df)
         null_ratio = df[col].isna().sum() / n if n > 0 else 0
-        nunique = df[col].nunique()
+        nunique = df[col].nunique(dropna=True)
+        col_lower = col.lower()
 
+        # 1. Mostly null
         if null_ratio > _NULL_THRESHOLD:
             reason = f"mostly_null ({null_ratio:.0%} missing)"
+
+        # 2. Constant or quasi-constant (one value dominates ≥95% of rows)
         elif nunique <= 1:
             first_val = df[col].dropna().unique()[0] if nunique == 1 else "N/A"
-            reason = f"constant (only value: {first_val})"
-        elif (
-            df[col].dtype == "object"
-            and n > 0
-            and nunique / n > _CARDINALITY_THRESHOLD
-            and any(p in col.lower() for p in _ID_PATTERNS)
-        ):
-            reason = f"high_cardinality_id ({nunique} unique in {n} rows)"
+            reason = f"constant (only value: {first_val!r})"
+        elif nunique >= 2:
+            top_freq = df[col].value_counts(dropna=True).iloc[0] / n
+            if top_freq >= _QUASI_CONST_THRESHOLD:
+                top_val = df[col].value_counts(dropna=True).index[0]
+                reason = f"quasi_constant ({top_freq:.0%} = {top_val!r})"
+
+        # 3. High-cardinality ID column (name matches ID pattern + very high uniqueness)
+        if reason is None and df[col].dtype == "object" and n > 0:
+            if (nunique / n > _CARDINALITY_THRESHOLD
+                    and any(p in col_lower for p in _ID_PATTERNS)):
+                reason = f"high_cardinality_id ({nunique} unique / {n} rows)"
+
+        # 4. Free-text column (open-ended survey answers, comments, descriptions)
+        if reason is None and df[col].dtype == "object" and nunique > 0:
+            non_null = df[col].dropna()
+            avg_len = non_null.astype(str).str.len().mean() if len(non_null) > 0 else 0
+            if avg_len > _FREE_TEXT_AVG_LEN and nunique / max(n, 1) > _FREE_TEXT_CARDINALITY:
+                reason = f"free_text (avg_len={avg_len:.0f}, {nunique} unique)"
 
         if reason:
             excluded.append({"column": col, "reason": reason})
         else:
             kept.append(col)
+
+    if excluded:
+        logger.info(
+            "Excluded %d columns: %s",
+            len(excluded),
+            [(e["column"], e["reason"]) for e in excluded],
+        )
 
     return {"excluded": excluded, "kept": kept}
 

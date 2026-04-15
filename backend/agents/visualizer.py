@@ -57,6 +57,42 @@ def _str_cols(df: pd.DataFrame) -> list:
     ]
 
 
+def _clean_other_specify(df: pd.DataFrame) -> pd.DataFrame:
+    """Collapse survey free-text variants into 'Other' for all object columns.
+    Handles both formats:
+      - 'Other (Please Specify):Logistics'  (standard SurveyMonkey)
+      - 'Other:SQL'  (compact export format used by this dataset)
+    """
+    df = df.copy()
+    import re
+    _other_pat = re.compile(r"^Other[:\s(]", re.IGNORECASE)
+    for col in df.select_dtypes(include="object").columns:
+        mask = df[col].astype(str).str.contains(_other_pat, na=False)
+        collapsed = mask.sum()
+        if collapsed > 0:
+            df.loc[mask, col] = "Other"
+            logger.info(
+                "Collapsed %d 'Other:...' entries in '%s' \u2192 'Other'",
+                collapsed, col
+            )
+    return df
+
+
+def _is_likert(series: pd.Series) -> bool:
+    """Detect 0-10 or 1-5 rating/Likert scale columns."""
+    if not pd.api.types.is_numeric_dtype(series):
+        return False
+    col_data = series.dropna()
+    if len(col_data) == 0:
+        return False
+    col_min = col_data.min()
+    col_max = col_data.max()
+    n_unique = col_data.nunique()
+    # A Likert/rating scale: bounded 0-10, integer-like, ≤11 unique values
+    return (col_min >= 0 and col_max <= 10 and n_unique <= 11
+            and float(col_data.apply(lambda x: x == int(x)).mean()) > 0.95)
+
+
 def _is_likely_id(df: pd.DataFrame, col: str) -> bool:
     """FIXED: Only true ID columns are removed. Numeric columns (sales, profit, etc.) are kept."""
     if col not in df.columns:
@@ -114,7 +150,16 @@ def _coerce_types(df: pd.DataFrame) -> pd.DataFrame:
         except Exception:
             pass
         try:
-            df[col] = pd.to_numeric(df[col], errors="raise")
+            converted = pd.to_numeric(df[col], errors="raise")
+            # Skip label-encoded categoricals: small-range contiguous integers
+            # e.g. Browser=0/1/2/3/4, OS=0/1/2, City=0/1/2 are NOT real numerics
+            if (pd.api.types.is_integer_dtype(converted)
+                    and converted.nunique() <= 15
+                    and converted.min() >= 0):
+                logger.debug("Skipping coercion of '%s' — looks like label-encoded categorical", col)
+                pass  # keep as string
+            else:
+                df[col] = converted
         except (ValueError, TypeError):
             pass
     return df
@@ -192,7 +237,12 @@ def _try_scatter(df: pd.DataFrame, num_cols: list, cat_cols: list, stats: dict) 
     if len(df) < 10 or len(num_cols) < 2:
         return None, set()
 
-    top_corr = stats.get("strong_correlations", [])
+    # Only consider correlations between true numeric (non-Likert) columns
+    num_col_set = set(num_cols)
+    top_corr = [
+        c for c in stats.get("strong_correlations", [])
+        if c["col1"] in num_col_set and c["col2"] in num_col_set
+    ]
     if top_corr:
         best = max(top_corr, key=lambda x: abs(x["correlation"]))
         x_col, y_col, r = best["col1"], best["col2"], best["correlation"]
@@ -200,7 +250,9 @@ def _try_scatter(df: pd.DataFrame, num_cols: list, cat_cols: list, stats: dict) 
         x_col, y_col = num_cols[0], num_cols[1]
         r = float(df[[x_col, y_col]].dropna().corr().iloc[0, 1])
 
-    if abs(r) < 0.18:
+    # Relax threshold for datasets with few numeric columns (e.g. survey data)
+    min_r = 0.10 if len(num_cols) <= 4 else 0.18
+    if abs(r) < min_r:
         return None, set()
 
     comp = min(_completeness(df[x_col]), _completeness(df[y_col]))
@@ -399,6 +451,42 @@ def _try_bar_counts(df: pd.DataFrame, cat_cols: list, used: set) -> Optional[Sco
                        f"col={best}, unique={n}")
 
 
+def _try_likert_bars(df: pd.DataFrame, likert_cols: list) -> Optional[ScoredChart]:
+    """Horizontal ranked bar: average score per Likert/rating question. Perfect for surveys."""
+    if len(likert_cols) < 2:
+        return None
+    # Strip column names to short readable labels (take last part after parenthesis/colon)
+    def _short_label(col: str) -> str:
+        # e.g. 'Q6 - How Happy are you ... (Salary)' → '(Salary)'
+        for sep in ["(", "-", ":"]:
+            if sep in col:
+                parts = col.rsplit(sep, 1)
+                candidate = (sep + parts[-1]).strip() if sep != "-" else parts[-1].strip()
+                if len(candidate) <= 35:
+                    return candidate
+        return col[:35]
+
+    means = [
+        {"Question": _short_label(col), "Avg Rating": round(df[col].mean(), 2)}
+        for col in likert_cols
+        if _completeness(df[col]) >= 0.5
+    ]
+    if len(means) < 2:
+        return None
+    means_df = pd.DataFrame(means).sort_values("Avg Rating")
+    fig = px.bar(
+        means_df, x="Avg Rating", y="Question", orientation="h",
+        title="Average Satisfaction Ratings (0–10 Scale)",
+        color="Avg Rating", color_continuous_scale="RdYlGn",
+        range_x=[0, 10], text="Avg Rating"
+    )
+    fig.update_traces(textposition="outside")
+    fig.update_layout(coloraxis_showscale=False, yaxis_title="")
+    score = 72.0  # High priority — always valuable in survey datasets
+    return ScoredChart("likert_bars", _style(fig, 480), score,
+                       f"likert_cols={len(likert_cols)}")
+
+
 def _try_boxplot(df: pd.DataFrame, num_cols: list, used: set) -> Optional[ScoredChart]:
     remaining = [c for c in num_cols if c not in used]
     if len(remaining) < 2:
@@ -492,12 +580,22 @@ def _llm_select_charts(candidates: list[ScoredChart], stats: dict) -> list[Score
 
 # ── Orchestrator ────────────────────────────────────────────────────────────
 def _select_charts(df: pd.DataFrame, stats: dict) -> dict:
-    num_cols = [col for col in df.select_dtypes(include=np.number).columns if not _is_likely_id(df, col)]
-    cat_cols = [col for col in _str_cols(df) if not _is_likely_id(df, col)]
-    date_cols = df.select_dtypes(include="datetime").columns.tolist()
+    # Respect columns excluded by the architect (mostly-null, constant, high-cardinality IDs)
+    excluded = {e["column"] for e in stats.get("excluded_columns", [])}
 
-    logger.info("Column inventory (cleaned) — numeric: %d | categorical: %d | datetime: %d",
-                len(num_cols), len(cat_cols), len(date_cols))
+    all_num = [col for col in df.select_dtypes(include=np.number).columns
+               if not _is_likely_id(df, col) and col not in excluded]
+    # Split into true numeric vs Likert/rating scales
+    likert_cols  = [c for c in all_num if _is_likert(df[c])]
+    num_cols     = [c for c in all_num if not _is_likert(df[c])]
+    cat_cols     = [col for col in _str_cols(df)
+                    if not _is_likely_id(df, col) and col not in excluded]
+    date_cols    = df.select_dtypes(include="datetime").columns.tolist()
+
+    logger.info(
+        "Column inventory — numeric: %d | likert: %d | categorical: %d | datetime: %d | excluded: %d",
+        len(num_cols), len(likert_cols), len(cat_cols), len(date_cols), len(excluded)
+    )
 
     candidates: list[ScoredChart] = []
     used: set = set()
@@ -513,6 +611,7 @@ def _select_charts(df: pd.DataFrame, stats: dict) -> dict:
     sc, sc_cols = _try_scatter(df, num_cols, cat_cols, stats)
     _add(sc, sc_cols)
 
+    _add(_try_likert_bars(df, likert_cols))
     _add(_try_scatter_matrix(df, num_cols, used, stats))
     _add(_try_bar_mean(df, cat_cols, num_cols, used))
     _add(_try_heatmap(df, num_cols, stats, used))
@@ -565,6 +664,7 @@ def run(state: AnalysisState) -> AnalysisState:
 
     try:
         df = _coerce_types(state.clean_df)
+        df = _clean_other_specify(df)   # collapse survey free-text variants
         state.charts = _select_charts(df, state.stats_summary or {})
         logger.info("Visualizer done — %d improved dashboard charts generated", len(state.charts))
         state.completed_agents.append("visualizer")

@@ -38,7 +38,8 @@ call ".venv\Scripts\activate.bat"
 :: ── Dependencies ────────────────────────────────────────────────────────
 echo  [2/3] Updating dependencies...
 python -m pip install --upgrade pip --quiet
-python -m pip install -r requirements.txt --quiet
+python -m pip install greenlet==3.1.1 --prefer-binary --quiet
+python -m pip install -r requirements.txt --prefer-binary
 echo        Dependencies ready.
 
 :: ── Start FastAPI with LIVE console logs ────────────────────────────────
