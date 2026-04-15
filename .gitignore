@@ -88,11 +88,33 @@ logs/
 .coverage
 htmlcov/
 .tox/
+.nox/
 .mypy_cache/
 .dmypy.json
+.ruff_cache/
+.pyre/
+.pytype/
 coverage.xml
 *.cover
 .hypothesis/
+
+# ─── Frontend build/test cache ───────────────────────────────────────────────
+frontend/coverage/
+frontend/.eslintcache
+frontend/.parcel-cache/
+frontend/.turbo/
+
+# ─── Local env/tooling ───────────────────────────────────────────────────────
+.python-version
+.envrc
+.direnv/
+
+# ─── Runtime artifacts ───────────────────────────────────────────────────────
+*.pid
+*.pid.lock
+*.seed
+tmp/
+temp/
 
 # ─── Misc ─────────────────────────────────────────────────────────────────────
 *.tmp
