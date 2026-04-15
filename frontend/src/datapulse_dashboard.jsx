@@ -258,9 +258,6 @@ export default function DataPulse({ user, onLogout }) {
   const [historyLoading, setHistoryLoading] = useState(false);
   const [deleteLoading, setDeleteLoading] = useState(null);
   const [historySelectLoading, setHistorySelectLoading] = useState(null);
-  const [statsSortKey, setStatsSortKey] = useState("outliers");
-  const [statsSortDirection, setStatsSortDirection] = useState("desc");
-  const [statsFilter, setStatsFilter] = useState("");
   const fileRef = useRef();
   const chatContainerRef = useRef(null);
   const dragCounterRef = useRef(0);
@@ -545,10 +542,7 @@ export default function DataPulse({ user, onLogout }) {
 
   const stats = result?.stats_summary || {};
   const insights = result?.insights || {};
-  const numericColumns = stats?.numeric_columns || {};
-  const outliersByColumn = stats?.outliers || {};
   const dq = stats.data_quality || {};
-  const numericCols = Object.keys(stats.numeric_columns || {});
   const outlierCols = Object.keys(stats.outliers || {});
   const toTextList = (value) => {
     if (Array.isArray(value)) {
@@ -585,39 +579,11 @@ export default function DataPulse({ user, onLogout }) {
     return Number.isInteger(n) ? `${n}%` : `${n.toFixed(1)}%`;
   };
 
-  const f = (n) => (typeof n === 'number' && isFinite(n) ? n.toFixed(2) : "0.00");
-
   const keyMetrics = [
     { label: "Total Rows", val: (stats.row_count || 0).toLocaleString() },
     { label: "Schema Columns", val: stats.column_count || 0 },
     { label: "Completeness", val: formatPercent(dq.completeness || 100) },
   ];
-
-  const sortedNumericRows = useMemo(() => {
-    return Object.keys(numericColumns)
-      .map((col) => {
-        const st = numericColumns?.[col];
-        return st ? {
-          column: col,
-          count: Number(st.count || 0),
-          mean: st.mean,
-          std: st.std,
-          min: st.min,
-          max: st.max,
-          skewness: st.skewness,
-          outliers: Number(outliersByColumn?.[col]?.count || 0)
-        } : null;
-      })
-      .filter(Boolean)
-      .filter((row) => (row.column || "").toLowerCase().includes(statsFilter.trim().toLowerCase()))
-      .sort((a, b) => {
-        const dir = statsSortDirection === "asc" ? 1 : -1;
-        if (statsSortKey === "column") return (a.column || "").localeCompare(b.column || "") * dir;
-        const valA = Number(a[statsSortKey] ?? 0);
-        const valB = Number(b[statsSortKey] ?? 0);
-        return (valA - valB) * dir;
-      });
-  }, [numericColumns, outliersByColumn, statsFilter, statsSortKey, statsSortDirection]);
   return (
     <div style={{ height: '100vh', display: 'flex', flexDirection: 'column', position: 'relative', overflow: 'hidden' }}>
       <ParticleBackground
@@ -852,7 +818,6 @@ export default function DataPulse({ user, onLogout }) {
                        <div style={{ margin: 'auto', textAlign: 'center', display: 'flex', flexDirection: 'column', gap: '10px', maxWidth: '310px', background: 'linear-gradient(180deg, rgba(99,102,241,0.08), rgba(6,9,18,0.05))', border: '1px solid rgba(99,102,241,0.2)', borderRadius: '12px', padding: '16px 18px' }}>
                          <strong style={{ fontSize: '16px', color: 'var(--text-main)', fontFamily: "'Syne', sans-serif", letterSpacing: '0.02em' }}>I am your Data Analyst.</strong>
                          <p style={{ fontSize: '13px', color: '#cbd5e1', lineHeight: 1.55, fontFamily: "'Inter', sans-serif" }}>Feel free to ask me any questions about your data.</p>
-                         <p style={{ fontSize: '12px', color: 'var(--text-muted)', lineHeight: 1.5 }}>Dataset type: <span style={{ color: '#7dd3fc' }}>{datasetTypeLabel}</span></p>
                        </div>
                      ) : chatMsgs.map((m, i) => (
                        <div 
