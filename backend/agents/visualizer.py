@@ -73,7 +73,7 @@ def _is_likely_id(df: pd.DataFrame, col: str) -> bool:
     return False
 
 
-def _sample(df: pd.DataFrame, max_rows: int, stratify_col: str | None = None) -> pd.DataFrame:
+def _sample(df: pd.DataFrame, max_rows: int, stratify_col: Optional[str] = None) -> pd.DataFrame:
     if len(df) <= max_rows:
         return df
     if stratify_col and stratify_col in df.columns:

@@ -641,21 +641,49 @@ async def chat_with_analysis(
     top_outliers = sorted(outlier_counts.items(), key=lambda kv: kv[1], reverse=True)[:10]
     correlations = context.get("correlations") or slim_stats.get("strong_correlations") or []
     quality = context.get("dataQuality") or slim_stats.get("data_quality") or {}
-    charts = list(context.get("charts", {}).keys()) if isinstance(context.get("charts"), dict) else context.get("charts", [])
+    
+    # Extract structural summaries of charts so the LLM understands exactly what data is inside them
+    charts_data = context.get("charts", {})
+    charts_summary = {}
+    if isinstance(charts_data, dict):
+        for k, v in charts_data.items():
+            try:
+                c = json.loads(v) if isinstance(v, str) else v
+                details = []
+                for trace in c.get("data", []):
+                    ttype = trace.get("type", "unknown")
+                    if ttype == "pie":
+                        labels = trace.get("labels", [])
+                        values = trace.get("values", [])
+                        pairs = [f"{l}: {val}" for l, val in zip(labels, values)]
+                        details.append(f"Pie Breakdown: {', '.join(pairs)}")
+                    elif ttype == "bar":
+                        x = trace.get("x", [])[:6]
+                        y = trace.get("y", [])[:6]
+                        details.append(f"Bar Data (top): X={x}, Y={y}")
+                    else:
+                        details.append(f"{ttype} chart format")
+                charts_summary[k] = " | ".join(details)
+            except Exception:
+                charts_summary[k] = "Visual chart structure"
+    else:
+        charts_summary = charts_data
     outlier_summary = context.get("outlierSummary") or [
         {"column": col, "count": count} for col, count in top_outliers
     ]
 
     prompt = (
-        "You are a data analyst assistant. "
-        "Answer clearly in 2-4 short sentences based only on provided context. "
+        "You are a friendly data analyst assistant helping a non-technical user understand their data. "
+        "Answer in simple, everyday language — avoid jargon, statistical terms, or overly technical explanations. "
+        "Explain things like you would to a smart friend who doesn't know data science. "
+        "Keep answers to 2-5 clear sentences. Use examples or analogies when helpful. "
         "Never claim data is missing if it exists in context. "
-        "If context is insufficient, say exactly which field is missing.\n"
+        "If context is insufficient, say exactly which information is missing in plain language.\n"
         "If you are explaining or referencing a specific chart from the 'Available Charts' list, you MUST include the text `[CHART: <chart_name>]` in your response so the UI can render it. Do this ONLY if the user asks about a chart or if a specific chart perfectly answers their question.\n\n"
         f"File: {file_name}\n"
         f"Dataset: {profile.get('label', 'unknown')} ({profile.get('domain', 'general')})\n"
         f"Data Quality: {quality}\n"
-        f"Available Charts: {charts}\n"
+        f"Available Charts & Data Summaries: {charts_summary}\n"
         f"Outlier Counts: {outlier_counts}\n"
         f"Outlier Summary: {outlier_summary}\n"
         f"Correlations: {correlations}\n"
@@ -673,11 +701,11 @@ async def chat_with_analysis(
             completion = client.chat.completions.create(
                 model=os.getenv("GROQ_MODEL", "llama-3.1-8b-instant"),
                 messages=[
-                    {"role": "system", "content": "You are a concise data analyst."},
+                    {"role": "system", "content": "You are a friendly, easy-to-understand data analyst. Explain things in simple everyday language. Avoid technical jargon. Be helpful and clear."},
                     {"role": "user", "content": prompt},
                 ],
-                temperature=0.2,
-                max_tokens=220,
+                temperature=0.3,
+                max_tokens=350,
             )
             answer = (completion.choices[0].message.content or "").strip()
             if answer:

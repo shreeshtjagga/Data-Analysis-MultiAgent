@@ -7,7 +7,7 @@ echo      DataPulse - Backend Dev Server (Live Logs)
 echo  ==============================================
 echo.
 
-:: Change to the project root
+:: Change to the project root (where this .bat lives)
 cd /d "%~dp0"
 
 :: ── Check .env file ─────────────────────────────────────────────────────
@@ -19,10 +19,7 @@ if not exist ".env" (
 )
 
 :: ── Virtual environment ─────────────────────────────────────────────────
-set "VENV_PY=.venv\Scripts\python.exe"
-set "VENV_PIP=.venv\Scripts\pip.exe"
-
-if not exist "%VENV_PY%" (
+if not exist ".venv\Scripts\python.exe" (
     echo  [1/3] Creating virtual environment .venv ...
     python -m venv .venv
     if errorlevel 1 (
@@ -35,13 +32,16 @@ if not exist "%VENV_PY%" (
     echo  [1/3] Virtual environment found.
 )
 
+:: ── Activate venv ───────────────────────────────────────────────────────
+call ".venv\Scripts\activate.bat"
+
 :: ── Dependencies ────────────────────────────────────────────────────────
 echo  [2/3] Updating dependencies...
-"%VENV_PIP%" install --upgrade pip --quiet
-"%VENV_PIP%" install -r requirements.txt --quiet
+python -m pip install --upgrade pip --quiet
+python -m pip install -r requirements.txt --quiet
 echo        Dependencies ready.
 
-:: ── Start FastAPI with LIVE console logs ───────────────────────────────
+:: ── Start FastAPI with LIVE console logs ────────────────────────────────
 echo  [3/3] Starting FastAPI server...
 echo.
 echo  ==============================================
@@ -50,7 +50,7 @@ echo  Press Ctrl+C to stop
 echo  ==============================================
 echo.
 
-"%VENV_PY%" -m uvicorn backend.api:app --reload --host 0.0.0.0 --port 8000
+python -m uvicorn backend.api:app --reload --host 0.0.0.0 --port 8000
 
 :: ── Only reaches here if server crashes immediately ─────────────────────
 if errorlevel 1 (

@@ -73,7 +73,7 @@ p, body { font-size: 15px; font-weight: 400; color: var(--text-muted); }
 .container {
   width: 100%;
   max-width: 100%;
-  margin: auto;
+  margin: 0 auto;
   padding: 32px 48px;
 }
 
@@ -84,8 +84,10 @@ p, body { font-size: 15px; font-weight: 400; color: var(--text-muted); }
 }
 
 .col-3 { grid-column: span 3; min-width: 0; }
+.col-4 { grid-column: span 4; min-width: 0; }
 .col-5 { grid-column: span 5; min-width: 0; }
 .col-7 { grid-column: span 7; min-width: 0; }
+.col-8 { grid-column: span 8; min-width: 0; }
 .col-9 { grid-column: span 9; min-width: 0; }
 
 /* Spacing Adjustments */
@@ -302,6 +304,39 @@ p, body { font-size: 15px; font-weight: 400; color: var(--text-muted); }
 @keyframes spin {
   from { transform: rotate(0deg); }
   to { transform: rotate(360deg); }
+}
+
+/* AI Hologram Animations */
+@keyframes hologramFloat {
+  0% { transform: translateY(0) scale(1); filter: drop-shadow(0 0 15px rgba(99,102,241,0.5)) hue-rotate(0deg); }
+  50% { transform: translateY(-15px) scale(1.02); filter: drop-shadow(0 0 35px rgba(99,102,241,0.8)) hue-rotate(15deg); }
+  100% { transform: translateY(0) scale(1); filter: drop-shadow(0 0 15px rgba(99,102,241,0.5)) hue-rotate(0deg); }
+}
+
+@keyframes glitchAnim {
+  0% { opacity: 0; clip-path: inset(0 0 100% 0); }
+  2% { opacity: 0.6; transform: skewX(-5deg) translateX(-4px); clip-path: inset(20% 0 60% 0); filter: hue-rotate(90deg) contrast(150%); }
+  4% { opacity: 0.8; transform: skewX(5deg) translateX(4px); clip-path: inset(60% 0 20% 0); filter: hue-rotate(-90deg) contrast(150%); }
+  6% { opacity: 0; transform: skewX(0) translateX(0); clip-path: inset(0 0 100% 0); filter: none; }
+  100% { opacity: 0; clip-path: inset(0 0 100% 0); }
+}
+
+.ai-hologram-layer {
+  animation: hologramFloat 6s ease-in-out infinite;
+  position: relative;
+  border-radius: 24px;
+}
+
+.ai-glitch-layer {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  border-radius: 24px;
+  mix-blend-mode: screen;
+  pointer-events: none;
+  animation: glitchAnim 4s infinite linear;
 }
 
 .animate-fade-in {
