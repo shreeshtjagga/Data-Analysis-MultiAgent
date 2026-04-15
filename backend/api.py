@@ -748,6 +748,7 @@ async def chat_with_analysis(
     top_outliers = sorted(outlier_counts.items(), key=lambda kv: kv[1], reverse=True)[:10]
     correlations = context.get("correlations") or slim_stats.get("strong_correlations") or []
     quality = context.get("dataQuality") or slim_stats.get("data_quality") or {}
+    charts = list(context.get("charts", {}).keys()) if isinstance(context.get("charts"), dict) else context.get("charts", [])
     outlier_summary = context.get("outlierSummary") or [
         {"column": col, "count": count} for col, count in top_outliers
     ]
@@ -756,10 +757,12 @@ async def chat_with_analysis(
         "You are a data analyst assistant. "
         "Answer clearly in 2-4 short sentences based only on provided context. "
         "Never claim data is missing if it exists in context. "
-        "If context is insufficient, say exactly which field is missing.\n\n"
+        "If context is insufficient, say exactly which field is missing.\n"
+        "If you are explaining or referencing a specific chart from the 'Available Charts' list, you MUST include the text `[CHART: <chart_name>]` in your response so the UI can render it. Do this ONLY if the user asks about a chart or if a specific chart perfectly answers their question.\n\n"
         f"File: {file_name}\n"
         f"Dataset: {profile.get('label', 'unknown')} ({profile.get('domain', 'general')})\n"
         f"Data Quality: {quality}\n"
+        f"Available Charts: {charts}\n"
         f"Outlier Counts: {outlier_counts}\n"
         f"Outlier Summary: {outlier_summary}\n"
         f"Correlations: {correlations}\n"
