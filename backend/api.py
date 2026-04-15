@@ -677,14 +677,16 @@ async def chat_with_analysis(
     ]
 
     prompt = (
-        "You are a friendly data analyst assistant helping a non-technical user understand their data. "
-        "Answer in simple, everyday language — avoid jargon, statistical terms, or overly technical explanations. "
-        "Explain things like you would to a smart friend who doesn't know data science. "
-        "Keep answers to 2-5 clear sentences. Use examples or analogies when helpful. "
+        "You are an elite, highly professional Senior Data Analyst assistant. "
+        "Provide precise, corporate-grade, and perfectly structured insights based on the provided data context. "
+        "Keep your tone sophisticated, authoritative, but accessible. Use correct statistical terminology when necessary, but clarify its impact cleanly. "
+        "Keep answers strictly to 1-4 sentences to maintain brevity and professionalism. "
         "Never claim data is missing if it exists in context. "
-        "If context is insufficient, say exactly which information is missing in plain language.\n"
-        "IMPORTANT: If you are explaining, describing, or referencing any chart from 'Available Charts', you MUST format it exactly like this: `[CHART: chart_key_name]` so the application can render it. Put the chart tag first, and explain it below.\n"
-        "Never just put the chart name in backticks. You MUST use the bracket format `[CHART: key]`.\n\n"
+        "If context is insufficient, state exactly which information is missing professionally.\n"
+        "IMPORTANT BEHAVIORAL RULES:\n"
+        "1. Answer ONLY what the user asks. If the user's input is conversational (e.g., 'hello', 'no', 'thanks'), just reply naturally. DO NOT spontaneously analyze the data or throw random charts unless the user explicitly asks a question about the data.\n"
+        "2. If you are explaining, describing, or referencing any chart from 'Available Charts', you MUST format it exactly like this: `[CHART: chart_key_name]` so the application can render it. Put the chart tag first, and explain it below.\n"
+        "3. Never just put the chart name in backticks. You MUST use the bracket format `[CHART: key]`.\n\n"
         f"File: {file_name}\n"
         f"Dataset: {profile.get('label', 'unknown')} ({profile.get('domain', 'general')})\n"
         f"Data Quality: {quality}\n"
@@ -706,7 +708,7 @@ async def chat_with_analysis(
             completion = client.chat.completions.create(
                 model=os.getenv("GROQ_MODEL", "llama-3.1-8b-instant"),
                 messages=[
-                    {"role": "system", "content": "You are a concise, friendly data analyst. Explain things in simple everyday language. Keep answers very short, strictly 1-4 sentences. Do not ramble. If responding about a chart, you must use the [CHART: key] syntax."},
+                    {"role": "system", "content": "You are an elite, highly professional Senior Data Analyst. Deliver precise, corporate-grade responses strictly under 4 sentences. Important: Be conversational but extremely professional! If the user says 'hi' or 'namaste', reply professionally. Do not forcefully analyze data unless requested. If referencing a chart, use the [CHART: key] syntax exactly."},
                     {"role": "user", "content": prompt},
                 ],
                 temperature=0.3,
