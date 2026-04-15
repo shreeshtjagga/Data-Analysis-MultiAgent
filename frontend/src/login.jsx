@@ -63,8 +63,7 @@ function GoogleAuthComponent({ onLogin, setError, setLoading, setTab }) {
         <div style={{ flex: 1, height: '1px', backgroundColor: 'var(--border-subtle)' }} />
       </div>
       <div style={{ marginBottom: '24px', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '16px' }}>
-        <span style={{ fontSize: '11px', fontWeight: 800, color: 'var(--text-muted)', letterSpacing: '0.2em', textTransform: 'uppercase' }}>Secure Authentication Protocols</span>
-        <div style={{ 
+        <div style={{
           borderRadius: "9px", 
           boxShadow: '0 0 35px rgba(99,102,241,0.6)',
           border: '1px solid rgba(99,102,241,0.4)',
@@ -418,13 +417,6 @@ export default function Login({ onLogin }) {
         {tab === "register" && (
           <>
             <RegisterForm onLogin={onLogin} setTab={setTab} />
-            <button
-              type="button"
-              onClick={goToForgot}
-              style={{ background: 'none', border: 'none', color: 'var(--primary-500)', cursor: 'pointer', fontSize: '13px', textAlign: 'left', padding: 0, marginTop: '12px' }}
-            >
-              Forgot your password?
-            </button>
           </>
         )}
         {tab === "forgot" && <ForgotPasswordForm onBackToLogin={goToLogin} />}

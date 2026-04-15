@@ -1,12 +1,26 @@
 import { useEffect, useRef } from 'react';
 
-export default function ParticleBackground({ noExclude = false }) {
+export default function ParticleBackground({
+  noExclude = false,
+  exclusionSelectors = [],
+  exclusionPadding = 12,
+}) {
   const canvasRef = useRef(null);
   const noExcludeRef = useRef(noExclude);
+  const exclusionSelectorsRef = useRef(exclusionSelectors);
+  const exclusionPaddingRef = useRef(exclusionPadding);
 
   useEffect(() => {
     noExcludeRef.current = noExclude;
   }, [noExclude]);
+
+  useEffect(() => {
+    exclusionSelectorsRef.current = exclusionSelectors;
+  }, [exclusionSelectors]);
+
+  useEffect(() => {
+    exclusionPaddingRef.current = exclusionPadding;
+  }, [exclusionPadding]);
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -26,24 +40,71 @@ export default function ParticleBackground({ noExclude = false }) {
     const resize = () => {
       canvas.width = window.innerWidth;
       canvas.height = window.innerHeight;
+      refreshExcludeRects();
     };
-    window.addEventListener('resize', resize);
-    resize();
+
+    let excludeRects = [];
 
     // Exclusion zone logic
-    const getExcludeZone = () => {
-      if (noExcludeRef.current) return { xMin: -1, xMax: -1, yMin: -1, yMax: -1 };
+    const getFallbackExcludeZone = () => {
       const centerX = canvas.width / 2;
       const centerY = canvas.height / 2;
       const padX = 300; // 600px total width
       const padY = 350; // 700px total height
-      return {
+      return [{
         xMin: centerX - padX,
         xMax: centerX + padX,
         yMin: centerY - padY,
-        yMax: centerY + padY
-      };
+        yMax: centerY + padY,
+      }];
     };
+
+    const refreshExcludeRects = () => {
+      if (noExcludeRef.current) {
+        excludeRects = [];
+        return;
+      }
+
+      const selectors = exclusionSelectorsRef.current || [];
+      const pad = Number(exclusionPaddingRef.current) || 0;
+
+      if (!selectors.length) {
+        excludeRects = getFallbackExcludeZone();
+        return;
+      }
+
+      const rects = [];
+      selectors.forEach((selector) => {
+        const nodes = document.querySelectorAll(selector);
+        nodes.forEach((node) => {
+          const rect = node.getBoundingClientRect();
+          if (rect.width <= 0 || rect.height <= 0) return;
+          rects.push({
+            xMin: Math.max(0, rect.left - pad),
+            xMax: Math.min(canvas.width, rect.right + pad),
+            yMin: Math.max(0, rect.top - pad),
+            yMax: Math.min(canvas.height, rect.bottom + pad),
+          });
+        });
+      });
+
+      excludeRects = rects.length ? rects : getFallbackExcludeZone();
+    };
+
+    const isInsideExclude = (x, y) => {
+      if (!excludeRects.length) return false;
+      for (const rect of excludeRects) {
+        if (x > rect.xMin && x < rect.xMax && y > rect.yMin && y < rect.yMax) {
+          return true;
+        }
+      }
+      return false;
+    };
+
+    window.addEventListener('resize', resize);
+    resize();
+
+    refreshExcludeRects();
 
     class Particle {
       constructor() {
@@ -51,16 +112,15 @@ export default function ParticleBackground({ noExclude = false }) {
       }
 
       reset() {
-        // Spawn outside center exclusion zone if possible
-        const zone = getExcludeZone();
+        // Spawn outside exclusion zone if possible
         let spawnedInRange = true;
         let attempts = 0;
         
-        while(spawnedInRange && attempts < 10) {
+        while (spawnedInRange && attempts < 12) {
           this.x = Math.random() * canvas.width;
           this.y = Math.random() * canvas.height;
-          
-          if (!(this.x > zone.xMin && this.x < zone.xMax && this.y > zone.yMin && this.y < zone.yMax)) {
+
+          if (!isInsideExclude(this.x, this.y)) {
             spawnedInRange = false;
           }
           attempts++;
@@ -75,9 +135,8 @@ export default function ParticleBackground({ noExclude = false }) {
         this.x += this.vx;
         this.y += this.vy;
 
-        const zone = getExcludeZone();
         // If entering exclusion zone, bounce back or loop
-        if (this.x > zone.xMin && this.x < zone.xMax && this.y > zone.yMin && this.y < zone.yMax) {
+        if (isInsideExclude(this.x, this.y)) {
           // Simplest: reverse velocity
           this.vx *= -1;
           this.vy *= -1;
@@ -105,9 +164,16 @@ export default function ParticleBackground({ noExclude = false }) {
         particles.push(new Particle());
     }
 
+    let frameCount = 0;
     const drawCanvas = () => {
       ctx.clearRect(0, 0, canvas.width, canvas.height);
       const { targetParticles, drawConnections } = getRuntimeConfig();
+      frameCount += 1;
+
+      // Refresh dynamic panel/tab exclusion rectangles periodically
+      if (frameCount % 30 === 0) {
+        refreshExcludeRects();
+      }
 
       if (particles.length < targetParticles) {
         for (let i = particles.length; i < targetParticles; i++) {
@@ -124,6 +190,9 @@ export default function ParticleBackground({ noExclude = false }) {
 
         if (drawConnections) {
           for (let j = i + 1; j < particles.length; j++) {
+            if (isInsideExclude(particles[i].x, particles[i].y) || isInsideExclude(particles[j].x, particles[j].y)) {
+              continue;
+            }
             const dx = particles[i].x - particles[j].x;
             const dy = particles[i].y - particles[j].y;
             const dist = Math.sqrt(dx * dx + dy * dy);

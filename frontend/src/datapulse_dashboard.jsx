@@ -12,12 +12,92 @@ const PLOTLY_DARK_LAYOUT = {
   title: { font: { color: "#FFFFFF", size: 14 } },
   xaxis: { gridcolor: "rgba(99,102,241,0.1)", zerolinecolor: "rgba(99,102,241,0.2)", tickfont: { color: "#FFFFFF" } },
   yaxis: { gridcolor: "rgba(99,102,241,0.1)", zerolinecolor: "rgba(99,102,241,0.2)", tickfont: { color: "#FFFFFF" } },
+  hoverlabel: {
+    bgcolor: "rgba(8,12,24,0.98)",
+    bordercolor: "rgba(99,102,241,0.85)",
+    font: { color: "#F8FAFC", size: 12 },
+  },
   colorway: PALETTE,
   autosize: true,
   margin: { l: 40, r: 20, t: 40, b: 30 },
 };
 
 const PLOTLY_CONFIG = { responsive: true, displayModeBar: false, displaylogo: false, modeBarButtonsToRemove: ["lasso2d", "select2d", "toggleSpikelines"] };
+
+function truncateLabel(value, max = 26) {
+  const text = String(value ?? "").trim();
+  if (text.length <= max) return text;
+  return `${text.slice(0, max - 1)}…`;
+}
+
+function cleanQuestionLabel(value) {
+  const raw = String(value ?? "").trim();
+  if (!raw) return "";
+  // Remove survey prefixes like "Q4 - " and leading punctuation artifacts.
+  let text = raw
+    .replace(/^Q\d+\s*[-:]*\s*/i, "")
+    .replace(/^[-\s.:]+/, "")
+    .trim();
+  // Keep labels concise and avoid trailing question mark in legends.
+  text = text.replace(/\?+$/, "").trim();
+  return text || raw;
+}
+
+function cleanAxisTitle(value) {
+  return truncateLabel(cleanQuestionLabel(value), 42);
+}
+
+function normalizeTraceData(data) {
+  return (Array.isArray(data) ? data : []).map((trace) => {
+    const next = { ...trace };
+    if (typeof next.name === "string") next.name = truncateLabel(cleanQuestionLabel(next.name), 24);
+    if (next.type === "pie") {
+      next.textinfo = next.textinfo || "percent+label";
+      next.textposition = next.textposition || "outside";
+      next.hole = typeof next.hole === "number" ? next.hole : 0.45;
+    }
+    return next;
+  });
+}
+
+function hasLongCategoryLabels(data) {
+  const samples = [];
+  (Array.isArray(data) ? data : []).forEach((trace) => {
+    if (Array.isArray(trace?.x)) samples.push(...trace.x.slice(0, 15));
+  });
+  return samples.some((v) => String(v ?? "").length > 14);
+}
+
+function getLegendConfig(traceCount, isMatrix) {
+  if (isMatrix || traceCount <= 1) {
+    return { showlegend: false, legend: {}, legendRows: 0 };
+  }
+  
+  const legendRows = Math.max(1, Math.ceil(traceCount / 4));
+  const legendYOffset = -0.14 - ((legendRows - 1) * 0.11);
+
+  return {
+    showlegend: true,
+    legendRows,
+    legend: {
+      orientation: "h",
+      yanchor: "top",
+      y: legendYOffset,
+      xanchor: "center",
+      x: 0.5,
+      font: { size: 11, color: "rgba(255,255,255,0.8)" },
+      tracegroupgap: 6,
+    },
+  };
+}
+
+function shouldHideLegend(data, traceCount) {
+  const traces = Array.isArray(data) ? data : [];
+  if (traceCount > 6) return true;
+  const barCount = traces.filter((t) => t?.type === "bar").length;
+  if (barCount >= 6) return true;
+  return false;
+}
 
 function ChartPanel({ result, PlotComponent }) {
   if (!PlotComponent) {
@@ -50,8 +130,20 @@ function ChartPanel({ result, PlotComponent }) {
       {entries.map(([key, fig], idx) => {
         const isMatrix = key.startsWith("scatter_matrix") || key.startsWith("heatmap") || key.includes("matrix");
         const isWide = isMatrix || key.startsWith("timeseries") || key.startsWith("line");
+        const traceCount = Array.isArray(fig.data) ? fig.data.length : 0;
+        const hasLongLabels = hasLongCategoryLabels(fig.data);
+        const { showlegend, legend, legendRows } = getLegendConfig(traceCount, isMatrix);
+        const hideLegend = shouldHideLegend(fig.data, traceCount);
+        const effectiveShowLegend = hideLegend ? false : showlegend;
         const gridSpan = isWide ? "span 12" : "span 6";
-        const chartHeight = isMatrix ? 600 : isWide ? 400 : 350;
+        const chartHeight = isMatrix ? 620 : isWide ? 500 : 450;
+        const normalizedData = normalizeTraceData(fig.data);
+        const margin = {
+          l: 60,
+          r: 24,
+          t: 70,
+          b: effectiveShowLegend ? (95 + (legendRows * 24)) : (hasLongLabels ? 90 : 68),
+        };
 
         return (
           <div
@@ -70,29 +162,53 @@ function ChartPanel({ result, PlotComponent }) {
             }}
           >
             <PlotComponent
-              data={fig.data}
+              data={normalizedData}
               layout={{
                 ...PLOTLY_DARK_LAYOUT,
                 ...fig.layout,
                 authorise : true,
                 title: { 
                   ...(fig.layout?.title || {}), 
-                  font: { color: "#FFFFFF", size: 16, weight: 'bold' } 
+                  text: truncateLabel(cleanQuestionLabel(fig.layout?.title?.text || fig.layout?.title || key.replaceAll("_", " ")), 85),
+                  font: { color: "#FFFFFF", size: 16, weight: 'bold' },
+                  x: 0.5,
+                  xanchor: "center",
                 },
                 paper_bgcolor: "rgba(0,0,0,0)",
                 plot_bgcolor: "rgba(0,0,0,0)",
                 font: { color: "#FFFFFF", family: "'Inter', sans-serif" },
+                hovermode: fig.layout?.hovermode || "closest",
+                hoverlabel: {
+                  ...PLOTLY_DARK_LAYOUT.hoverlabel,
+                  ...(fig.layout?.hoverlabel || {}),
+                },
                 height: chartHeight,
-                margin: { l: 50, r: 20, t: 60, b: 80 },
+                showlegend: effectiveShowLegend,
+                margin,
                 legend: {
                   ...(fig.layout?.legend || {}),
-                  orientation: "h",
-                  yanchor: "top",
-                  y: -0.15,
-                  xanchor: "center",
-                  x: 0.5,
-                  font: { size: 11, color: "rgba(255,255,255,0.7)" }
-                }
+                  ...legend,
+                },
+                xaxis: {
+                  ...(fig.layout?.xaxis || {}),
+                  title: {
+                    ...(fig.layout?.xaxis?.title || {}),
+                    text: cleanAxisTitle(fig.layout?.xaxis?.title?.text || fig.layout?.xaxis?.title || ""),
+                  },
+                  automargin: true,
+                  tickangle: hasLongLabels ? -28 : (fig.layout?.xaxis?.tickangle ?? 0),
+                  tickfont: { color: "#FFFFFF", size: 11 },
+                },
+                yaxis: {
+                  ...(fig.layout?.yaxis || {}),
+                  title: {
+                    ...(fig.layout?.yaxis?.title || {}),
+                    text: cleanAxisTitle(fig.layout?.yaxis?.title?.text || fig.layout?.yaxis?.title || ""),
+                  },
+                  automargin: true,
+                  tickfont: { color: "#FFFFFF", size: 11 },
+                },
+                uniformtext: { minsize: 10, mode: "hide" },
               }}
               config={PLOTLY_CONFIG}
               style={{ width: "100%", height: `${chartHeight}px` }}
@@ -108,6 +224,20 @@ const PRIMARY_TABS = ["overview", "charts", "insights"];
 const SECONDARY_TABS = ["data"];
 const MAX_CHAT_MESSAGES = 40;
 
+function inferDatasetType(result, fileName) {
+  const profile = result?.stats_summary?.dataset_profile || {};
+  const label = String(profile?.label || "").trim();
+  const domain = String(profile?.domain || "").trim();
+
+  if (label && label.toLowerCase() !== "unknown") return label;
+  if (domain) return `${domain} dataset`;
+
+  const lower = String(fileName || "").toLowerCase();
+  if (lower.endsWith(".csv")) return "tabular csv dataset";
+  if (lower.endsWith(".xlsx") || lower.endsWith(".xls")) return "tabular excel dataset";
+  return "structured dataset";
+}
+
 export default function DataPulse({ user, onLogout }) {
   const [PlotComponent, setPlotComponent] = useState(null);
   const [phase, setPhase] = useState("upload");
@@ -116,7 +246,6 @@ export default function DataPulse({ user, onLogout }) {
   const [agentLog, setAgentLog] = useState([]);
   const [analysisError, setAnalysisError] = useState("");
   const [isDragOver, setIsDragOver] = useState(false);
-  const [showAllFindings, setShowAllFindings] = useState(false);
   const [tab, setTab] = useState("overview");
   const [chatMsgs, setChatMsgs] = useState([]);
   const [historyStale, setHistoryStale] = useState(false);
@@ -378,6 +507,7 @@ export default function DataPulse({ user, onLogout }) {
 
   const chatStats = useMemo(() => result?.stats_summary || {}, [result?.stats_summary]);
   const chatInsights = useMemo(() => result?.insights || {}, [result?.insights]);
+  const datasetTypeLabel = useMemo(() => inferDatasetType(result, fileName), [result, fileName]);
 
   const chatContext = useMemo(() => {
     if (!chatStats) return null;
@@ -386,6 +516,8 @@ export default function DataPulse({ user, onLogout }) {
       .sort((a, b) => b.count - a.count).slice(0, 10);
     return {
       fileName,
+      datasetTypeLabel,
+      datasetProfile: chatStats?.dataset_profile || null,
       stats: chatStats,
       insights: chatInsights,
       outlierSummary,
@@ -393,7 +525,7 @@ export default function DataPulse({ user, onLogout }) {
       correlations: chatStats?.strong_correlations?.slice(0, 5),
       charts: result?.charts || {},
     };
-  }, [chatStats, chatInsights, fileName, result?.charts]);
+  }, [chatStats, chatInsights, fileName, result?.charts, datasetTypeLabel]);
 
   const sendChat = useCallback(async () => {
     const q = chatInput.trim();
@@ -488,7 +620,17 @@ export default function DataPulse({ user, onLogout }) {
   }, [numericColumns, outliersByColumn, statsFilter, statsSortKey, statsSortDirection]);
   return (
     <div style={{ height: '100vh', display: 'flex', flexDirection: 'column', position: 'relative', overflow: 'hidden' }}>
-      <ParticleBackground noExclude={phase === "done"} />
+      <ParticleBackground
+        noExclude={false}
+        exclusionSelectors={phase === "done"
+          ? [
+              ".col-4 > div:first-child",
+              ".col-4 .card",
+              ".panel-flat",
+            ]
+          : []}
+        exclusionPadding={14}
+      />
 
       {/* NAVBAR */}
       <div style={{ background: 'rgba(6, 9, 18, 0.90)', backdropFilter: 'blur(12px)', WebkitBackdropFilter: 'blur(12px)', padding: '16px 48px', borderBottom: '1px solid var(--border-subtle)', display: 'flex', justifyContent: 'space-between', alignItems: 'center', position: 'sticky', top: 0, zIndex: 100 }}>
@@ -509,84 +651,142 @@ export default function DataPulse({ user, onLogout }) {
         </div>
       </div>
 
-      <div className="container" style={{ flex: 1, display: 'flex', flexDirection: 'column', position: 'relative', zIndex: 1, paddingBottom: '32px', paddingTop: '24px', height: 'calc(100vh - 80px)', width: '100%', overflow: 'hidden' }}>
+      <div className="container" style={{ flex: 1, display: 'flex', flexDirection: 'column', position: 'relative', zIndex: 1, padding: 0, overflow: 'hidden' }}>
         {/* MAIN SECTION */}
         {phase === "upload" ? (
-          <div className="animate-fade-in" style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', textAlign: 'center', gap: '48px', padding: '40px 0', overflowY: 'auto' }}>
+          <div className="animate-fade-in" style={{ flex: 1, display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 'clamp(22px, 3vw, 48px)', alignItems: 'center', maxWidth: '1400px', margin: '0 auto', padding: 'clamp(22px, 3vw, 40px) clamp(20px, 4vw, 64px)', height: '100%', overflow: 'hidden' }}>
              
-             {/* Animated Welcome Section */}
-             <div style={{ animation: 'slideUp 0.8s cubic-bezier(0.2, 0.8, 0.2, 1)' }}>
-                <div style={{ display: 'inline-flex', alignItems: 'center', gap: '12px', padding: '6px 16px', background: 'rgba(99,102,241,0.1)', borderRadius: '100px', border: '1px solid rgba(99,102,241,0.2)', marginBottom: '24px', color: 'var(--primary-500)', fontSize: '13px', fontWeight: 600, letterSpacing: '0.1em', textTransform: 'uppercase' }}>
-                   <span style={{ width: '6px', height: '6px', background: 'var(--primary-500)', borderRadius: '50%', boxShadow: '0 0 10px var(--primary-500)' }} />
-                   System Ready
-                </div>
-                <h1 style={{ fontSize: '42px', marginBottom: '4px', letterSpacing: '-0.05em', lineHeight: 1, opacity: 0.9 }}>
-                   Welcome
-                </h1>
-                <h2 style={{ fontSize: '52px', color: 'var(--primary-500)', textShadow: '0 0 30px rgba(99,102,241,0.4)', marginBottom: '16px', marginTop: '0' }}>
-                   {user?.name || user?.email?.split('@')[0] || "Analyst"}
-                </h2>
-                <p style={{ fontSize: '18px', color: 'var(--text-muted)', maxWidth: '600px', margin: '0 auto', lineHeight: 1.6 }}>Ready to architect your data? Connect a datasheet to initialize multi-agent analysis.</p>
-             </div>
-
-             {/* Upload Box with Scanner Effect */}
-             <div style={{ position: 'relative', width: '100%', maxWidth: '540px' }}>
-                <div
-                  className={`upload-box ${isDragOver ? 'drag-over' : ''}`}
-                  onDrop={onDrop}
-                  onDragOver={(e) => e.preventDefault()}
-                  onDragEnter={onDragEnter}
-                  onDragLeave={onDragLeave}
-                  onClick={() => fileRef.current.click()}
-                  style={{ 
-                    padding: '80px 48px', 
-                    borderColor: isDragOver ? 'var(--primary-500)' : 'var(--border-subtle)', 
-                    background: 'rgba(13, 18, 32, 0.4)', 
-                    backdropFilter: 'blur(12px)',
-                    position: 'relative',
-                    overflow: 'hidden'
-                  }}
-                >
-                  {/* Subtle Scanner Line Animation */}
-                  <div style={{ position: 'absolute', top: 0, left: 0, right: 0, height: '2px', background: 'linear-gradient(90deg, transparent, var(--primary-500), transparent)', opacity: 0.3, animation: 'scannerSweep 3s infinite linear' }} />
+             {/* LEFT SIDE: AI Animated Visual */}
+             <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center' }}>
+               <div style={{ position: 'relative', width: '100%', maxWidth: '390px' }}>
+                  {/* Outer pulse ring */}
+                  <div style={{ position: 'absolute', inset: 0, borderRadius: '50%', background: 'var(--primary-500)', filter: 'blur(40px)', opacity: 0.05, animation: 'pulse 4s infinite' }} />
                   
-                  <div style={{ fontSize: '56px', color: 'var(--primary-500)', marginBottom: '24px', textShadow: '0 0 25px rgba(99,102,241,0.6)', transform: isDragOver ? 'scale(1.1)' : 'scale(1)', transition: 'transform 0.3s ease' }}>↑</div>
-                  <strong style={{ color: 'var(--text-main)', marginBottom: '8px', fontSize: '24px', fontFamily: 'Syne, sans-serif' }}>Select Data Engine</strong>
-                  <p className="caption" style={{ color: 'var(--text-muted)', fontSize: '15px' }}>Drag (.csv, .xlsx) anywhere to initialize</p>
-                  <input ref={fileRef} type="file" accept=".csv,.xlsx,.xls" style={{ display: "none" }} onChange={(e) => onFile(e.target.files[0])} />
-                </div>
-             </div>
-
-             {/* Feature Matrix Cards */}
-             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '20px', width: '100%', maxWidth: '900px', marginTop: '16px' }}>
-                {[
-                  { title: "Neural Logic", desc: "Multi-agent orchestration.", icon: "◈" },
-                  { title: "Deep Viz", desc: "Automated vector sets.", icon: "⬢" },
-                  { title: "Secure Vault", desc: "End-to-end encryption.", icon: "⊛" }
-                ].map((feat, i) => (
-                  <div key={feat.title} className="card" style={{ padding: '24px', textAlign: 'center', background: 'rgba(13, 18, 32, 0.25)', animation: `slideUp 0.8s cubic-bezier(0.2, 0.8, 0.2, 1) ${0.2 + i * 0.1}s both` }}>
-                    <div style={{ color: 'var(--primary-500)', fontSize: '20px', marginBottom: '12px' }}>{feat.icon}</div>
-                    <strong style={{ display: 'block', fontSize: '14px', color: 'var(--text-main)', marginBottom: '4px', textTransform: 'uppercase', letterSpacing: '1px' }}>{feat.title}</strong>
-                    <span style={{ fontSize: '12px', color: 'var(--text-muted)' }}>{feat.desc}</span>
+                  {/* The AI Image Hologram Container */}
+                  <div className="ai-hologram-layer" style={{ zIndex: 1 }}>
+                     <img 
+                        src="/ai_hologram.png" 
+                        alt="AI Matrix Core" 
+                        style={{ width: '100%', borderRadius: '24px', position: 'relative', zIndex: 2 }} 
+                     />
+                     <div 
+                        style={{ 
+                           position: 'absolute', 
+                           inset: 0, 
+                           borderRadius: '24px', 
+                           zIndex: 3, 
+                           pointerEvents: 'none', 
+                           boxShadow: 'inset 0 0 60px 15px #0A0F1C' 
+                        }} 
+                     />
                   </div>
-                ))}
+                </div>
              </div>
 
-             {/* System Pulse Footer */}
-             <div style={{ marginTop: 'auto', paddingTop: '32px', width: '100%', display: 'flex', justifyContent: 'center', gap: '32px', opacity: 0.5 }}>
-                <div style={{ fontSize: '11px', textTransform: 'uppercase', letterSpacing: '2px', display: 'flex', alignItems: 'center', gap: '8px' }}>
-                   <span style={{ width: '4px', height: '4px', background: 'var(--success)', borderRadius: '50%', animation: 'pulse 1.5s infinite' }} />
-                   Neural Nodes: 124 Active
-                </div>
-                <div style={{ fontSize: '11px', textTransform: 'uppercase', letterSpacing: '2px' }}>Encryption: SHA-2048</div>
-                <div style={{ fontSize: '11px', textTransform: 'uppercase', letterSpacing: '2px' }}>Latency: 14ms</div>
+             {/* RIGHT SIDE: Upload Logic */}
+             <div style={{ display: 'flex', flexDirection: 'column', justifyContent: 'center', alignItems: 'center', gap: '24px' }}>
+              <div style={{ animation: 'slideUp 0.8s cubic-bezier(0.2, 0.8, 0.2, 1)', textAlign: 'center', width: '100%' }}>
+                <div style={{ display: 'inline-flex', alignItems: 'center', gap: '12px', padding: '6px 16px', background: 'rgba(99,102,241,0.1)', borderRadius: '100px', border: '1px solid rgba(99,102,241,0.2)', marginBottom: '16px', color: 'var(--primary-500)', fontSize: '13px', fontWeight: 600, letterSpacing: '0.1em', textTransform: 'uppercase', marginInline: 'auto' }}>
+                     <span style={{ width: '6px', height: '6px', background: 'var(--primary-500)', borderRadius: '50%', boxShadow: '0 0 10px var(--primary-500)' }} />
+                     System Ready
+                  </div>
+                  <h1 style={{ fontSize: 'clamp(34px, 4vw, 42px)', margin: '0 0 4px 0', letterSpacing: '-0.02em', lineHeight: 1, color: 'var(--text-main)', opacity: 0.9, fontFamily: "'Inter', sans-serif", fontWeight: 700 }}>
+                     Welcome
+                  </h1>
+                  <h2 style={{ fontSize: 'clamp(38px, 4.6vw, 48px)', margin: '0 0 16px 0', color: 'var(--primary-500)', textShadow: '0 0 20px rgba(99,102,241,0.3)', lineHeight: 1, fontFamily: "'Inter', sans-serif", fontWeight: 700 }}>
+                     {user?.name || user?.email?.split('@')[0] || "Analyst"}
+                  </h2>
+                  <p style={{ fontSize: '16px', color: 'var(--text-muted)', lineHeight: 1.6, margin: 0 }}>
+                    Ready to architect your data? Connect a datasheet to initialize multi-agent analysis.
+                  </p>
+               </div>
+
+               {/* Upload Box */}
+               <div style={{ position: 'relative', width: '100%' }}>
+                  <div
+                    className={`upload-box ${isDragOver ? 'drag-over' : ''}`}
+                    onDrop={onDrop}
+                    onDragOver={(e) => e.preventDefault()}
+                    onDragEnter={onDragEnter}
+                    onDragLeave={onDragLeave}
+                    onClick={() => fileRef.current.click()}
+                    style={{ 
+                      padding: '50px 32px', 
+                      borderColor: isDragOver ? 'var(--primary-500)' : 'var(--border-subtle)', 
+                      background: 'rgba(13, 18, 32, 0.4)', 
+                      backdropFilter: 'blur(12px)',
+                      position: 'relative',
+                      overflow: 'hidden',
+                      textAlign: 'center',
+                      borderRadius: '16px'
+                    }}
+                  >
+                    <div style={{ fontSize: '48px', color: 'var(--primary-500)', marginBottom: '16px', textShadow: '0 0 25px rgba(99,102,241,0.6)', transform: isDragOver ? 'scale(1.1)' : 'scale(1)', transition: 'transform 0.3s ease' }}>↑</div>
+                    <strong style={{ color: 'var(--text-main)', fontSize: '20px', fontFamily: "'Syne', sans-serif", display: 'block', marginBottom: '8px' }}>Select Data Engine</strong>
+                    <p className="caption" style={{ color: 'var(--text-muted)', fontSize: '13px', margin: 0 }}>Drag (.csv, .xlsx) anywhere to initialize</p>
+                    <input ref={fileRef} type="file" accept=".csv,.xlsx,.xls" style={{ display: "none" }} onChange={(e) => onFile(e.target.files[0])} />
+                  </div>
+               </div>
+
+               {/* Metrics */}
+               <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '16px', marginTop: '8px' }}>
+                  {[
+                    { title: "Neural Logic", desc: "Multi-agent orchestration.", icon: "◈" },
+                    { title: "Deep Viz", desc: "Automated vector sets.", icon: "⬢" },
+                    { title: "Secure Vault", desc: "End-to-end encryption.", icon: "⊛" }
+                  ].map((feat, i) => (
+                    <div key={feat.title} className="card" style={{ padding: '16px', textAlign: 'center', background: 'rgba(13, 18, 32, 0.25)', animation: `slideUp 0.8s cubic-bezier(0.2, 0.8, 0.2, 1) ${0.2 + i * 0.1}s both` }}>
+                      <div style={{ color: 'var(--primary-500)', fontSize: '18px', marginBottom: '8px' }}>{feat.icon}</div>
+                      <strong style={{ display: 'block', fontSize: '12px', color: 'var(--text-main)', marginBottom: '2px', textTransform: 'uppercase', letterSpacing: '1px' }}>{feat.title}</strong>
+                      <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>{feat.desc}</span>
+                    </div>
+                  ))}
+               </div>
              </div>
+          </div>
+        ) : phase === "analyzing" || analysisError ? (
+          <div className="animate-fade-in" style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', textAlign: 'center', maxWidth: '800px', margin: '0 auto', height: '100%', width: '100%' }}>
+            {analysisError ? (
+                <div className="card flex-col align-center justify-center animate-fade-in" style={{ padding: '60px', textAlign: 'center', border: '1px solid rgba(239,68,68,0.2)', background: 'rgba(13,18,32,0.6)', width: '100%' }}>
+                  <div style={{ fontSize: '56px', color: 'var(--error)', marginBottom: '24px' }}>⚠</div>
+                  <h3 style={{ color: 'var(--text-main)', marginBottom: '12px', fontSize: '24px' }}>Analysis Protocol Interrupted</h3>
+                  <p style={{ color: 'var(--error)', fontSize: '15px', maxWidth: '500px', marginBottom: '32px', margin: '0 auto 32px auto', lineHeight: 1.6 }}>{analysisError}</p>
+                  <button className="btn-primary" style={{ padding: '12px 32px', fontSize: '15px', margin: '0 auto' }} onClick={() => { setPhase("upload"); setAnalysisError(""); }}>Upload New Dataset</button>
+                </div>
+            ) : (
+                <div style={{ width: '100%', maxWidth: '600px', display: 'flex', flexDirection: 'column', alignItems: 'center' }}>
+                  {/* Dynamic Animation */}
+                  <div style={{ position: 'relative', width: '120px', height: '120px', marginBottom: '40px', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                    <div style={{ position: 'absolute', inset: 0, borderRadius: '50%', border: '2px solid rgba(99,102,241,0.2)', borderTop: '2px solid var(--primary-500)', animation: 'spin 1.5s linear infinite' }} />
+                    <div style={{ position: 'absolute', inset: '15px', borderRadius: '50%', border: '2px solid rgba(16,185,129,0.2)', borderBottom: '2px solid var(--success)', animation: 'spin 2s linear infinite reverse' }} />
+                    <div style={{ fontSize: '32px', color: 'var(--primary-500)', animation: 'pulse 2s infinite' }}>◈</div>
+                  </div>
+                  
+                  <h2 style={{ fontSize: '28px', color: 'var(--text-main)', marginBottom: '12px', letterSpacing: '0.05em' }}>Analyzing Dataset</h2>
+                  
+                  {/* Agent Logs Component */}
+                  <div style={{ width: '100%', background: 'rgba(13,18,32,0.8)', border: '1px solid var(--border-subtle)', borderRadius: '16px', padding: '24px', position: 'relative', overflow: 'hidden' }}>
+                    <div className="progress-container" style={{ marginBottom: '20px', height: '4px', background: 'rgba(255,255,255,0.05)' }}>
+                      <div className="progress-bar animate-pulse" style={{ width: '65%', background: 'linear-gradient(90deg, var(--primary-600), var(--info))' }} />
+                    </div>
+                    
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', minHeight: '60px', justifyContent: 'center' }}>
+                      <span style={{ fontSize: '12px', color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '2px' }}>Active Agent Node</span>
+                      <strong style={{ fontSize: '16px', color: 'var(--primary-500)', fontFamily: "'Outfit', monospace", textShadow: '0 0 10px rgba(99,102,241,0.3)' }}>
+                        {agentLog[agentLog.length - 1]?.msg || "Orchestrating Neural Paths..."}
+                      </strong>
+                    </div>
+                  </div>
+                  
+                  <p style={{ marginTop: '24px', fontSize: '14px', color: 'var(--text-muted)', opacity: 0.8 }}>Data transparency protocols engaged. Preparing visualizations...</p>
+                </div>
+            )}
           </div>
         ) : (
           <div className="grid-12 animate-fade-in" style={{ alignItems: 'start', width: '100%', flex: 1, overflow: 'hidden', height: '100%' }}>
             
-            {/* LEFT 3 (Chat & Status) */}
-            <div className="col-3 flex-col gap-24" style={{ height: '100%', overflowY: 'auto', paddingRight: '12px' }}>
+            {/* LEFT 4 (Chat & Status) */}
+            <div className="col-4 flex-col gap-24" style={{ height: '100%', overflowY: 'auto', paddingRight: '12px' }}>
                <div
                     onClick={() => fileRef.current?.click()}
                     style={{
@@ -622,34 +822,38 @@ export default function DataPulse({ user, onLogout }) {
                {/* File Info */}
                {fileName && (
                 <div className="card" style={{ padding: '20px' }}>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                     <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
                       <div style={{ padding: '8px', background: 'rgba(99,102,241,0.1)', borderRadius: '8px', fontSize: '14px', border: '1px solid rgba(99,102,241,0.2)', color: 'var(--primary-500)' }}>📄</div>
                       <strong style={{ fontSize: '14px', color: 'var(--text-main)' }}>{fileName}</strong>
                     </div>
-                    {phase === "done" && <span className="data-pill success">Verified ⬢</span>}
+                    {phase === "done" && (
+                      <span
+                        className="data-pill"
+                        style={{
+                          color: '#7dd3fc',
+                          borderColor: 'rgba(6,182,212,0.35)',
+                          background: 'rgba(6,182,212,0.1)'
+                        }}
+                      >
+                        {datasetTypeLabel}
+                      </span>
+                    )}
                   </div>
-                  
-                  {phase === "analyzing" && (
-                    <div className="flex-col gap-8">
-                      <div className="progress-container">
-                        <div className="progress-bar animate-pulse" style={{ width: result ? '100%' : '65%', background: analysisError ? 'var(--error)' : 'var(--primary-500)' }} />
-                      </div>
-                      <div style={{ fontSize: '12px', color: 'var(--primary-500)', fontFamily: "'Outfit', monospace", textTransform: 'uppercase' }}>
-                        {analysisError ? <span className="text-error">{analysisError}</span> : agentLog[agentLog.length - 1] || "Orchestrating..."}
-                      </div>
-                    </div>
-                  )}
                 </div>
               )}
 
               {/* Chat Box (only if done) */}
               {phase === "done" && result && (
-                <div className="card flex-col gap-16" style={{ padding: '20px' }}>
+                <div className="card flex-col gap-16" style={{ padding: '20px', flex: 1, display: 'flex', overflow: 'hidden' }}>
                   <strong style={{ fontSize: '14px', color: 'var(--text-main)', fontFamily: 'Syne, sans-serif' }}>Analyst Advisor</strong>
-                  <div ref={chatContainerRef} style={{ minHeight: '200px', maxHeight: '380px', flex: 1, overflowY: "auto", display: "flex", flexDirection: "column", gap: "12px", background: 'var(--bg-input)', padding: '16px', borderRadius: '12px', border: '1px solid var(--border-subtle)' }}>
+                  <div ref={chatContainerRef} style={{ flex: 1, overflowY: "auto", display: "flex", flexDirection: "column", gap: "12px", background: 'var(--bg-input)', padding: '16px', borderRadius: '12px', border: '1px solid var(--border-subtle)' }}>
                      {chatMsgs.length === 0 ? (
-                       <div style={{ margin: 'auto', textAlign: 'center', fontSize: '13px', color: 'var(--text-muted)' }}>Establish a query connection with your data.</div>
+                       <div style={{ margin: 'auto', textAlign: 'center', display: 'flex', flexDirection: 'column', gap: '10px', maxWidth: '310px', background: 'linear-gradient(180deg, rgba(99,102,241,0.08), rgba(6,9,18,0.05))', border: '1px solid rgba(99,102,241,0.2)', borderRadius: '12px', padding: '16px 18px' }}>
+                         <strong style={{ fontSize: '16px', color: 'var(--text-main)', fontFamily: "'Syne', sans-serif", letterSpacing: '0.02em' }}>I am your Data Analyst.</strong>
+                         <p style={{ fontSize: '13px', color: '#cbd5e1', lineHeight: 1.55, fontFamily: "'Inter', sans-serif" }}>Feel free to ask me any questions about your data.</p>
+                         <p style={{ fontSize: '12px', color: 'var(--text-muted)', lineHeight: 1.5 }}>Dataset type: <span style={{ color: '#7dd3fc' }}>{datasetTypeLabel}</span></p>
+                       </div>
                      ) : chatMsgs.map((m, i) => (
                        <div 
                         key={i} 
@@ -682,8 +886,19 @@ export default function DataPulse({ user, onLogout }) {
                                return PlotComponent ? (
                                  <div key={pIdx} style={{ margin: '16px 0', border: '1px solid rgba(99,102,241,0.2)', borderRadius: '12px', overflow: 'hidden', padding: '12px', background: 'rgba(0,0,0,0.3)', width: '100%' }}>
                                    <PlotComponent
-                                     data={data}
-                                     layout={{ ...PLOTLY_DARK_LAYOUT, ...layout, height: 280, margin: {l: 40, r: 20, t: 40, b: 40}, title: { ...(layout.title || {}), font: { size: 14, color: '#fff', weight: 'bold' }, y: 0.95, yanchor: 'top' }, legend: { orientation: "h", yanchor: "top", y: -0.2, xanchor: "center", x: 0.5, font: { size: 10, color: "rgba(255,255,255,0.7)" } } }}
+                                     data={data.map(t => ({ ...t, textfont: { color: "#FFFFFF" } }))}
+                                     layout={{ 
+                                       ...PLOTLY_DARK_LAYOUT, 
+                                       ...layout, 
+                                       paper_bgcolor: "rgba(0,0,0,0)",
+                                       plot_bgcolor: "rgba(0,0,0,0)",
+                                       font: { color: "#FFFFFF", family: "'Inter', sans-serif" },
+                                       hoverlabel: { bgcolor: "rgba(8,12,24,0.98)", font: { color: "#F8FAFC", size: 12 }, bordercolor: "rgba(99,102,241,0.85)" },
+                                       height: 280, 
+                                       margin: {l: 40, r: 20, t: 40, b: 40}, 
+                                       title: { ...(layout.title || {}), font: { size: 14, color: '#fff', weight: 'bold' }, y: 0.95, yanchor: 'top' }, 
+                                       legend: { orientation: "h", yanchor: "top", y: -0.2, xanchor: "center", x: 0.5, font: { size: 10, color: "rgba(255,255,255,0.7)" } } 
+                                     }}
                                      config={PLOTLY_CONFIG}
                                      style={{ width: "100%", height: "280px" }}
                                    />
@@ -719,26 +934,12 @@ export default function DataPulse({ user, onLogout }) {
             </div>
 
             {/* RIGHT (Results / Loading) */}
-            <div className="col-9" style={{ height: '100%', overflowY: 'auto', paddingRight: '12px', paddingBottom: '32px' }}>
-              {analysisError ? (
-                <div className="card flex-col align-center justify-center animate-fade-in" style={{ minHeight: '500px', textAlign: 'center', border: '1px solid rgba(239,68,68,0.2)' }}>
-                  <div style={{ fontSize: '48px', color: 'var(--error)', marginBottom: '16px' }}>⚠</div>
-                  <h3 style={{ color: 'var(--text-main)', marginBottom: '8px' }}>Analysis Protocol Interrupted</h3>
-                  <p style={{ color: 'var(--error)', fontSize: '14px', maxWidth: '400px', marginBottom: '24px' }}>{analysisError}</p>
-                  <button className="btn-primary" onClick={() => { setPhase("upload"); setAnalysisError(""); }}>Reconnect Array</button>
-                </div>
-              ) : phase === "analyzing" ? (
-                <div style={{ minHeight: '500px', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center' }} className="animate-fade-in">
-                    <div style={{ width: '44px', height: '44px', border: '3px solid rgba(99,102,241,0.2)', borderTop: '3px solid var(--primary-500)', borderRadius: '50%', animation: 'spin 0.9s linear infinite', marginBottom: '24px', boxShadow: '0 0 20px rgba(99,102,241,0.3)' }} />
-                    <strong style={{ fontSize: '18px', color: 'var(--text-main)', marginBottom: '8px', fontFamily: "'Syne', sans-serif" }}>Processing Array...</strong>
-                    <p style={{ fontSize: '14px', color: 'var(--primary-500)', fontFamily: "'Outfit', monospace" }}>{agentLog[agentLog.length - 1]?.msg || "Extracting signatures..."}</p>
-                </div>
-              ) : !result ? (
+            <div className="col-8" style={{ height: '100%', overflowY: 'auto', paddingRight: '12px', paddingBottom: '32px', display: 'flex', flexDirection: 'column' }}>
+              {!result ? (
                  <div className="card animate-fade-in" style={{ minHeight: '500px', display: 'flex', alignItems: 'center', justifyContent: 'center', width: '100%' }}>
-                   <p style={{ color: 'var(--text-muted)' }}>Synchronizing data array... Standby.</p>
+                   <p style={{ color: 'var(--text-muted)' }}>Synchronizing data... Standby.</p>
                  </div>
               ) : (
-
               <div className="panel-flat flex-col gap-24 animate-fade-in">
                 <div style={{ display: 'flex', borderBottom: '1px solid var(--border-subtle)', gap: '16px', paddingBottom: '12px' }}>
                   {PRIMARY_TABS.map(t => <button key={t} onClick={() => setTab(t)} style={{ background: 'none', border: 'none', color: tab === t ? 'var(--text-main)' : 'var(--text-muted)', fontWeight: tab === t ? 600 : 500, fontSize: '14px', cursor: 'pointer', borderBottom: tab === t ? '2px solid var(--primary-500)' : 'none', paddingBottom: '12px', marginBottom: '-13px', textTransform: 'capitalize', letterSpacing: '0.05em' }}>{t}</button>)}
@@ -762,17 +963,12 @@ export default function DataPulse({ user, onLogout }) {
                        ))}
                      </div>
                      <div style={{ padding: '20px', background: 'var(--bg-input)', borderRadius: '12px', border: '1px solid var(--border-subtle)' }}>
-                       <strong style={{ fontSize: '15px', display: 'block', marginBottom: '16px', color: 'var(--text-main)', fontFamily: "'Syne', sans-serif" }}>Detected Vectors</strong>
-                       {(showAllFindings ? findings : findings.slice(0, 5)).map((f, i) => (
+                       <strong style={{ fontSize: '15px', display: 'block', marginBottom: '16px', color: 'var(--text-main)', fontFamily: "'Syne', sans-serif" }}>Data Info</strong>
+                       {findings.map((f, i) => (
                           <div key={i} style={{ fontSize: '15px', color: 'var(--text-muted)', marginBottom: '12px', display: 'flex', gap: '12px', alignItems: 'center' }}>
                             <div style={{ width: '6px', height: '6px', background: 'var(--primary-500)', borderRadius: '50%', boxShadow: '0 0 10px var(--primary-500)' }} /> {f}
                           </div>
                         ))}
-                        {findings.length > 5 && (
-                          <button onClick={() => setShowAllFindings(v => !v)} style={{ background: 'none', border: 'none', color: 'var(--primary-500)', cursor: 'pointer', fontSize: '13px', fontWeight: 600, textAlign: 'left', padding: '4px 0', marginTop: '4px' }}>
-                            {showAllFindings ? "Show less" : `+ ${findings.length - 5} more findings`}
-                          </button>
-                        )}
                      </div>
                    </div>
                 )}
@@ -781,14 +977,38 @@ export default function DataPulse({ user, onLogout }) {
                 
                 {tab === "insights" && (
                   <div className="flex-col gap-24">
+                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '16px' }}>
+                      <div style={{ padding: '18px', borderRadius: '12px', border: '1px solid var(--border-subtle)', background: 'var(--bg-input)' }}>
+                        <strong style={{ fontSize: '12px', color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.08em' }}>Strong Correlations</strong>
+                        <div style={{ marginTop: '8px', fontSize: '26px', color: 'var(--text-main)', fontFamily: "'Syne', sans-serif" }}>{(stats?.strong_correlations || []).length}</div>
+                      </div>
+                      <div style={{ padding: '18px', borderRadius: '12px', border: '1px solid var(--border-subtle)', background: 'var(--bg-input)' }}>
+                        <strong style={{ fontSize: '12px', color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.08em' }}>Columns With Outliers</strong>
+                        <div style={{ marginTop: '8px', fontSize: '26px', color: 'var(--text-main)', fontFamily: "'Syne', sans-serif" }}>{outlierCols.length}</div>
+                      </div>
+                      <div style={{ padding: '18px', borderRadius: '12px', border: '1px solid var(--border-subtle)', background: 'var(--bg-input)' }}>
+                        <strong style={{ fontSize: '12px', color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.08em' }}>Data Completeness</strong>
+                        <div style={{ marginTop: '8px', fontSize: '26px', color: 'var(--text-main)', fontFamily: "'Syne', sans-serif" }}>{formatPercent(dq.completeness || 100)}</div>
+                      </div>
+                    </div>
+
                     <div style={{ padding: '20px', background: 'var(--bg-input)', borderRadius: '12px', border: '1px solid var(--border-subtle)' }}>
-                       <strong style={{ fontSize: '15px', display: 'block', marginBottom: '16px', color: 'var(--text-main)', fontFamily: "'Syne', sans-serif" }}>Actionable Protocols</strong>
-                       {recommendations.map((r, i) => (
-                          <div key={i} style={{ fontSize: '15px', color: 'var(--text-muted)', marginBottom: '12px', display: 'flex', gap: '12px' }}>
-                            <span style={{ color: 'var(--primary-500)', fontSize: '18px' }}>⇥</span> {r}
-                          </div>
-                       ))}
-                     </div>
+                      <strong style={{ fontSize: '15px', display: 'block', marginBottom: '14px', color: 'var(--text-main)', fontFamily: "'Syne', sans-serif" }}>Key Insights</strong>
+                      {findings.length ? findings.map((f, i) => (
+                        <div key={`ins-${i}`} style={{ fontSize: '14px', color: 'var(--text-muted)', marginBottom: '10px', display: 'flex', gap: '10px', lineHeight: 1.5 }}>
+                          <span style={{ color: 'var(--info)' }}>•</span>{f}
+                        </div>
+                      )) : <div style={{ fontSize: '14px', color: 'var(--text-muted)' }}>No insights available for this dataset.</div>}
+                    </div>
+
+                    <div style={{ padding: '20px', background: 'var(--bg-input)', borderRadius: '12px', border: '1px solid var(--border-subtle)' }}>
+                      <strong style={{ fontSize: '15px', display: 'block', marginBottom: '14px', color: 'var(--text-main)', fontFamily: "'Syne', sans-serif" }}>Recommended Actions</strong>
+                      {recommendations.length ? recommendations.map((r, i) => (
+                        <div key={`rec-${i}`} style={{ fontSize: '14px', color: 'var(--text-muted)', marginBottom: '10px', display: 'flex', gap: '10px', lineHeight: 1.5 }}>
+                          <span style={{ color: 'var(--primary-500)' }}>⇥</span>{r}
+                        </div>
+                      )) : <div style={{ fontSize: '14px', color: 'var(--text-muted)' }}>No recommendations were generated.</div>}
+                    </div>
                   </div>
                 )}
                 

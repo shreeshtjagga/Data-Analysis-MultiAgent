@@ -3,7 +3,6 @@
 import logging
 import os
 import ssl
-from contextlib import asynccontextmanager
 from datetime import datetime
 from urllib.parse import urlparse, urlunparse
 
@@ -179,19 +178,6 @@ class AnalysisMetadata(Base):
 
     analysis = relationship("AnalysisHistory", back_populates="metadata_row")
 
-
-
-@asynccontextmanager
-async def get_session():
-    session = AsyncSessionLocal()
-    try:
-        yield session
-        await session.commit()
-    except Exception:
-        await session.rollback()
-        raise
-    finally:
-        await session.close()
 
 
 async def get_db() -> AsyncSession:
