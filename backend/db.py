@@ -4,7 +4,7 @@ import logging
 import os
 import ssl
 from datetime import datetime
-from urllib.parse import urlparse, urlunparse
+from urllib.parse import urlparse, urlunparse, parse_qs, urlencode
 
 from dotenv import load_dotenv
 
@@ -19,6 +19,28 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_asyn
 from sqlalchemy.orm import DeclarativeBase, relationship
 
 logger = logging.getLogger(__name__)
+
+
+def _strip_unsupported_params_from_url(database_url: str) -> str:
+    """Remove asyncpg-incompatible parameters from database URL."""
+    parsed = urlparse(database_url)
+    if not parsed.query:
+        return database_url
+    
+    # Parse query parameters
+    params = parse_qs(parsed.query, keep_blank_values=True)
+    
+    # Remove parameters that asyncpg doesn't support
+    unsupported_params = {'sslmode', 'channel_binding', 'gssencmode'}
+    for param in unsupported_params:
+        params.pop(param, None)
+    
+    # Reconstruct query string
+    new_query = urlencode(params, doseq=True)
+    
+    # Reconstruct URL
+    new_parsed = parsed._replace(query=new_query)
+    return urlunparse(new_parsed)
 
 
 def _running_in_container() -> bool:
@@ -68,6 +90,7 @@ if DATABASE_URL.startswith("postgresql://") or DATABASE_URL.startswith("postgres
     DATABASE_URL = DATABASE_URL.replace("postgresql://", "postgresql+asyncpg://", 1)
 
 DATABASE_URL = _rewrite_local_dev_db_host(DATABASE_URL)
+DATABASE_URL = _strip_unsupported_params_from_url(DATABASE_URL)
 
 
 _db_ssl = os.getenv("DB_SSL", "false").lower() == "true"
