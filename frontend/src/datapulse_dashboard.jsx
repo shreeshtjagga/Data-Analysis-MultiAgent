@@ -2,6 +2,7 @@ import { useState, useRef, useCallback, useEffect, useMemo } from "react";
 import jsPDF from "jspdf";
 import { apiAnalyze, apiChat, apiHistory, apiHistoryAnalysis, apiDeleteAnalysis } from "./api.js";
 import ParticleBackground from "./ParticleBackground.jsx";
+import GlobeCanvas from "./GlobeCanvas.jsx";
 
 const PALETTE = ["#6366f1", "#10b981", "#f59e0b", "#06b6d4", "#ef4444", "#a855f7", "#34d399", "#f472b6"];
 
@@ -803,22 +804,8 @@ export default function DataPulse({ user, onLogout }) {
                   <div style={{ position: 'absolute', inset: 0, borderRadius: '50%', background: 'var(--primary-500)', filter: 'blur(40px)', opacity: 0.05, animation: 'pulse 4s infinite' }} />
                   
                   {/* The AI Image Hologram Container */}
-                  <div className="ai-hologram-layer" style={{ zIndex: 1 }}>
-                     <img 
-                        src="/ai_hologram.png" 
-                        alt="AI Matrix Core" 
-                        style={{ width: '100%', borderRadius: '24px', position: 'relative', zIndex: 2 }} 
-                     />
-                     <div 
-                        style={{ 
-                           position: 'absolute', 
-                           inset: 0, 
-                           borderRadius: '24px', 
-                           zIndex: 3, 
-                           pointerEvents: 'none', 
-                           boxShadow: 'inset 0 0 60px 15px #0A0F1C' 
-                        }} 
-                     />
+                  <div className="ai-hologram-layer" style={{ zIndex: 1, display: 'flex', justifyContent: 'center' }}>
+                    <GlobeCanvas size={390} />
                   </div>
                 </div>
              </div>
@@ -862,7 +849,7 @@ export default function DataPulse({ user, onLogout }) {
                     }}
                   >
                     <div style={{ fontSize: '48px', color: 'var(--primary-500)', marginBottom: '16px', textShadow: '0 0 25px rgba(99,102,241,0.6)', transform: isDragOver ? 'scale(1.1)' : 'scale(1)', transition: 'transform 0.3s ease' }}>↑</div>
-                    <strong style={{ color: 'var(--text-main)', fontSize: '20px', fontFamily: "'Syne', sans-serif", display: 'block', marginBottom: '8px' }}>Select Data Engine</strong>
+                    <strong style={{ color: 'var(--text-main)', fontSize: '20px', fontFamily: "'Syne', sans-serif", display: 'block', marginBottom: '8px' }}>Select Data Set</strong>
                     <p className="caption" style={{ color: 'var(--text-muted)', fontSize: '13px', margin: 0 }}>Drag (.csv, .xlsx) anywhere to initialize</p>
                     <input ref={fileRef} type="file" accept=".csv,.xlsx,.xls" style={{ display: "none" }} onChange={(e) => onFile(e.target.files[0])} />
                   </div>
