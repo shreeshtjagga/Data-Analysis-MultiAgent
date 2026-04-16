@@ -35,6 +35,168 @@ _TS_MAX_POINTS      = 500
 _OLS_MAX_ROWS       = 3_000
 
 
+def _chart_family(key: str) -> str:
+    if key.startswith("histogram_"):
+        return "histogram"
+    if key.startswith("bar_"):
+        return "bar"
+    if key.startswith("bar_mean"):
+        return "bar"
+    if key.startswith("line_"):
+        return "line"
+    if key.startswith("heatmap"):
+        return "heatmap"
+    if key.startswith("box_"):
+        return "box"
+    if key.startswith("scatter"):
+        return "scatter"
+    if key.startswith("violin_"):
+        return "violin"
+    if key.startswith("likert_"):
+        return "bar"
+    return "other"
+
+
+def _safe_len(values) -> int:
+    try:
+        if values is None:
+            return 0
+        return int(np.size(values))
+    except Exception:
+        return 0
+
+
+def _unique_count(values) -> int:
+    try:
+        if values is None:
+            return 0
+        arr = np.array(values).ravel()
+        if arr.size == 0:
+            return 0
+        return int(pd.Series(arr).dropna().nunique())
+    except Exception:
+        return 0
+
+
+def _to_list(values) -> list:
+    """Safely convert trace arrays/sequences to a plain list without boolean checks."""
+    try:
+        if values is None:
+            return []
+        if isinstance(values, list):
+            return values
+        if isinstance(values, tuple):
+            return list(values)
+        if isinstance(values, np.ndarray):
+            return values.ravel().tolist()
+        # Plotly often uses array-like containers that are list()-compatible.
+        return list(values)
+    except Exception:
+        return []
+
+
+def _has_chart_signal(key: str, fig: go.Figure) -> bool:
+    if not fig or not getattr(fig, "data", None):
+        return False
+
+    family = _chart_family(key)
+    traces = [t for t in fig.data if t is not None]
+    if not traces:
+        return False
+
+    if family == "line":
+        x_vals = []
+        y_vals = []
+        for t in traces:
+            x_vals.extend(_to_list(getattr(t, "x", None)))
+            y_vals.extend(_to_list(getattr(t, "y", None)))
+        return (_safe_len(x_vals) >= 12 and _unique_count(x_vals) >= 6 and _unique_count(y_vals) >= 4)
+
+    if family == "histogram":
+        vals = _to_list(getattr(traces[0], "x", None))
+        if not vals:
+            vals = _to_list(getattr(traces[0], "y", None))
+        return _safe_len(vals) >= 25 and _unique_count(vals) >= 6
+
+    if family == "bar":
+        cats = _to_list(getattr(traces[0], "x", None))
+        nums = _to_list(getattr(traces[0], "y", None))
+        if _safe_len(cats) == 0:
+            cats = _to_list(getattr(traces[0], "y", None))
+            nums = _to_list(getattr(traces[0], "x", None))
+        return _safe_len(cats) >= 2 and _unique_count(cats) >= 2 and _safe_len(nums) >= 2
+
+    if family == "heatmap":
+        z = getattr(traces[0], "z", None)
+        try:
+            arr = np.array(z)
+            return arr.ndim == 2 and arr.shape[0] >= 2 and arr.shape[1] >= 2
+        except Exception:
+            return False
+
+    if family == "box":
+        y_vals = []
+        for t in traces:
+            y_vals.extend(_to_list(getattr(t, "y", None)))
+        return _safe_len(y_vals) >= 20 and _unique_count(y_vals) >= 5
+
+    # Generic fallback for other chart families.
+    return any(_safe_len(getattr(t, axis, None)) > 0 for t in traces for axis in ("x", "y", "z", "values"))
+
+
+def _chart_signal_score(key: str, fig: go.Figure) -> float:
+    family = _chart_family(key)
+    base = {
+        "heatmap": 95.0,
+        "line": 88.0,
+        "scatter": 86.0,
+        "box": 82.0,
+        "violin": 80.0,
+        "histogram": 76.0,
+        "bar": 72.0,
+        "other": 60.0,
+    }.get(family, 60.0)
+
+    points = 0
+    variation = 0
+    for t in fig.data:
+        points += max(_safe_len(getattr(t, "x", None)), _safe_len(getattr(t, "y", None)), _safe_len(getattr(t, "z", None)))
+        variation += max(_unique_count(getattr(t, "x", None)), _unique_count(getattr(t, "y", None)))
+
+    return round(base + min(points / 120.0, 16.0) + min(variation, 14.0), 1)
+
+
+def _enforce_family_limits(primary: list["ScoredChart"], fallback: list["ScoredChart"]) -> list["ScoredChart"]:
+    max_per_family = {
+        "heatmap": 1,
+        "line": 1,
+        "box": 1,
+        "histogram": 1,
+        "bar": 2,
+        "scatter": 1,
+        "violin": 1,
+        "other": 1,
+    }
+    selected: list[ScoredChart] = []
+    used_per_family: dict[str, int] = {}
+    used_keys: set[str] = set()
+
+    for candidate in primary + fallback:
+        if candidate.key in used_keys:
+            continue
+        fam = _chart_family(candidate.key)
+        used = used_per_family.get(fam, 0)
+        if used >= max_per_family.get(fam, 1):
+            continue
+        selected.append(candidate)
+        used_keys.add(candidate.key)
+        used_per_family[fam] = used + 1
+        if len(selected) >= MAX_OUTPUT_CHARTS:
+            break
+
+    return selected
+
+
 @dataclass
 class ScoredChart:
     key:    str
@@ -633,80 +795,241 @@ def _llm_select_charts(candidates: list[ScoredChart], stats: dict) -> list[Score
 
 
 # ── Orchestrator ────────────────────────────────────────────────────────────
+def _build_line_if_datetime(df: pd.DataFrame, date_cols: list[str], num_cols: list[str]) -> dict:
+    charts: dict[str, go.Figure] = {}
+    if not date_cols or not num_cols:
+        return charts
+
+    best_date = max(date_cols, key=lambda c: (_completeness(df[c]), df[c].nunique(dropna=True)))
+    if _completeness(df[best_date]) < 0.70:
+        return charts
+
+    ranked_nums = sorted(
+        num_cols,
+        key=lambda c: (_completeness(df[c]), float(df[c].var(skipna=True) or 0.0)),
+        reverse=True,
+    )
+    selected_nums = ranked_nums[:4]
+    if not selected_nums:
+        return charts
+
+    candidate_df = df[[best_date] + selected_nums].dropna(subset=[best_date]).copy()
+    if candidate_df.empty or candidate_df[best_date].nunique(dropna=True) < 6:
+        return charts
+
+    plot_df = _resample_timeseries(candidate_df.sort_values(best_date), best_date, selected_nums, _TS_MAX_POINTS)
+    if plot_df[best_date].nunique(dropna=True) < 6:
+        return charts
+    long_df = plot_df.melt(id_vars=best_date, var_name="Series", value_name="Value")
+    fig = px.line(
+        long_df,
+        x=best_date,
+        y="Value",
+        color="Series",
+        title=f"Trends Over Time by {best_date}",
+        markers=(len(plot_df) <= 80),
+    )
+    charts[f"line_{best_date}"] = _style(fig, 500)
+    return charts
+
+
+def _build_correlation_heatmap(df: pd.DataFrame, num_cols: list[str]) -> dict:
+    charts: dict[str, go.Figure] = {}
+    if len(num_cols) < 3:
+        return charts
+
+    # Skip unreadable heatmaps when coordinate labels are excessively long.
+    label_lengths = [len(str(col)) for col in num_cols]
+    max_label_len = max(label_lengths) if label_lengths else 0
+    avg_label_len = float(np.mean(label_lengths)) if label_lengths else 0.0
+    if max_label_len > 45 or (len(num_cols) >= 7 and avg_label_len > 24):
+        logger.info(
+            "Skipping correlation heatmap: labels too long (max=%d, avg=%.1f, cols=%d)",
+            max_label_len,
+            avg_label_len,
+            len(num_cols),
+        )
+        return charts
+
+    sample_df = df[num_cols].sample(min(len(df), 5000), random_state=42) if len(df) > 5000 else df[num_cols]
+    corr = sample_df.corr().round(2)
+    fig = px.imshow(
+        corr,
+        text_auto=True,
+        title="Correlation Heatmap",
+        color_continuous_scale="RdBu_r",
+        zmin=-1,
+        zmax=1,
+    )
+    charts["heatmap_correlation"] = _style(fig, max(420, min(620, 220 + 45 * len(num_cols))))
+    return charts
+
+
+def _build_histograms(df: pd.DataFrame, num_cols: list[str]) -> dict:
+    charts: dict[str, go.Figure] = {}
+    # Keep candidates focused: top-variance numeric columns are usually most informative.
+    ranked = sorted(
+        num_cols,
+        key=lambda c: (_completeness(df[c]), float(df[c].var(skipna=True) or 0.0)),
+        reverse=True,
+    )[:4]
+    for col in ranked:
+        non_null = int(df[col].notna().sum())
+        if non_null < 5:
+            continue
+        nbins = _optimal_nbins(non_null)
+        plot_df = _sample(df[[col]].dropna(), _HIST_MAX_ROWS)
+        fig = px.histogram(plot_df, x=col, nbins=nbins, title=f"Distribution of {col}")
+        charts[f"histogram_{col}"] = _style(fig, 430)
+    return charts
+
+
+def _build_categorical_bars(df: pd.DataFrame, cat_cols: list[str]) -> dict:
+    charts: dict[str, go.Figure] = {}
+    for col in cat_cols:
+        nunique = int(df[col].nunique(dropna=True))
+        if not (2 <= nunique < 20):
+            continue
+        vc = df[col].fillna("(Missing)").astype(str).value_counts().reset_index()
+        vc.columns = [col, "count"]
+        vc = vc.head(20)
+        horizontal = nunique > 8
+        if horizontal:
+            fig = px.bar(vc, y=col, x="count", orientation="h", title=f"Frequency of {col}", color=col)
+        else:
+            fig = px.bar(vc, x=col, y="count", title=f"Frequency of {col}", color=col)
+            fig.update_layout(xaxis_tickangle=-25, xaxis_automargin=True)
+        fig.update_layout(showlegend=False)
+        charts[f"bar_{col}"] = _style(fig, 430)
+    return charts
+
+
+def _build_boxplot_by_category(df: pd.DataFrame, cat_cols: list[str], num_cols: list[str]) -> dict:
+    charts: dict[str, go.Figure] = {}
+    if not cat_cols or not num_cols:
+        return charts
+
+    eligible_cats = [c for c in cat_cols if 2 <= int(df[c].nunique(dropna=True)) <= 20 and _completeness(df[c]) >= 0.6]
+    if not eligible_cats:
+        return charts
+
+    cat_col = max(eligible_cats, key=lambda c: (_completeness(df[c]), -df[c].nunique(dropna=True)))
+    num_col = max(num_cols, key=lambda c: (_completeness(df[c]), float(df[c].var(skipna=True) or 0.0)))
+    plot_df = _sample(df[[cat_col, num_col]].dropna(), _HIST_MAX_ROWS, stratify_col=cat_col)
+    if plot_df.empty:
+        return charts
+
+    fig = px.box(
+        plot_df,
+        x=cat_col,
+        y=num_col,
+        color=cat_col,
+        points=False,
+        title=f"{num_col} by {cat_col}",
+    )
+    fig.update_layout(showlegend=False, xaxis_tickangle=-25, xaxis_automargin=True)
+    charts[f"box_{num_col}_by_{cat_col}"] = _style(fig, 470)
+    return charts
+
+
 def _select_charts(df: pd.DataFrame, stats: dict) -> dict:
-    # Respect columns excluded by the architect (mostly-null, constant, high-cardinality IDs)
     excluded = {e["column"] for e in stats.get("excluded_columns", [])}
-    all_num_raw = [col for col in df.select_dtypes(include=np.number).columns
-                   if not _is_likely_id(df, col) and col not in excluded]
-    cat_num = [col for col in all_num_raw if _is_categorical_numeric(col, df[col])]
-    all_num = [col for col in all_num_raw if col not in cat_num]
-    # Split into true numeric vs Likert/rating scales
-    likert_cols  = [c for c in all_num if _is_likert(df[c])]
-    num_cols     = [c for c in all_num if not _is_likert(df[c])]
-    cat_cols     = [col for col in _str_cols(df)
-                    if not _is_likely_id(df, col) and col not in excluded]
-    # Add numeric-coded categoricals to categorical pool
-    cat_cols += [col for col in cat_num if col not in cat_cols]
-    date_cols    = df.select_dtypes(include="datetime").columns.tolist()
+
+    all_numeric = [
+        col
+        for col in df.select_dtypes(include=np.number).columns
+        if col not in excluded and not _is_likely_id(df, col)
+    ]
+    cat_num = [col for col in all_numeric if _is_categorical_numeric(col, df[col])]
+    num_cols = [col for col in all_numeric if col not in cat_num]
+
+    cat_cols = [col for col in _str_cols(df) if col not in excluded and not _is_likely_id(df, col)]
+    cat_cols.extend([col for col in cat_num if col not in cat_cols])
+
+    date_cols = [col for col in df.select_dtypes(include="datetime").columns if col not in excluded]
 
     logger.info(
-        "Column inventory — numeric: %d | likert: %d | categorical: %d | datetime: %d | excluded: %d",
-        len(num_cols), len(likert_cols), len(cat_cols), len(date_cols), len(excluded)
+        "Rule-based visualizer inventory - numeric: %d | categorical: %d | datetime: %d | excluded: %d",
+        len(num_cols), len(cat_cols), len(date_cols), len(excluded),
     )
 
+    charts: dict[str, go.Figure] = {}
+    extra_scored_candidates: list[ScoredChart] = []
+
+    # Base profiling charts.
+    charts.update(_build_line_if_datetime(df, date_cols, num_cols))
+    if len(stats.get("strong_correlations", [])) > 0 or len(num_cols) >= 5:
+        charts.update(_build_correlation_heatmap(df, num_cols))
+    charts.update(_build_histograms(df, num_cols))
+    charts.update(_build_categorical_bars(df, cat_cols))
+    charts.update(_build_boxplot_by_category(df, cat_cols, num_cols))
+
+    # Advanced, dataset-specific charts for variety and deeper insight.
+    scatter_chart, _ = _try_scatter(df, num_cols, cat_cols, stats)
+    if scatter_chart is not None:
+        extra_scored_candidates.append(scatter_chart)
+
+    mean_bar_chart = _try_bar_mean(df, cat_cols, num_cols, set())
+    if mean_bar_chart is not None:
+        extra_scored_candidates.append(mean_bar_chart)
+
+    violin_or_hist_chart = _try_violin_or_histogram(df, num_cols, cat_cols, stats, set())
+    if violin_or_hist_chart is not None:
+        extra_scored_candidates.append(violin_or_hist_chart)
+
+    likert_chart = _try_likert_bars(df, [c for c in num_cols if _is_likert(df[c])])
+    if likert_chart is not None:
+        extra_scored_candidates.append(likert_chart)
+
+    if not charts and len(df.columns) >= 2:
+        fallback = px.bar(df.head(30), x=df.columns[0], y=df.columns[1], title=f"{df.columns[1]} by {df.columns[0]}")
+        charts["fallback"] = _style(fallback, 430)
+
     candidates: list[ScoredChart] = []
-    used: set = set()
+    dropped_no_signal: list[str] = []
+    for key, fig in charts.items():
+        if not _has_chart_signal(key, fig):
+            dropped_no_signal.append(key)
+            continue
+        candidates.append(
+            ScoredChart(
+                key=key,
+                fig=fig,
+                score=_chart_signal_score(key, fig),
+                reason=f"family={_chart_family(key)}",
+            )
+        )
 
-    def _add(result: Optional[ScoredChart], consumed: set = frozenset()):
-        if result is not None:
-            candidates.append(result)
-            used.update(consumed)
+    for extra in extra_scored_candidates:
+        if not _has_chart_signal(extra.key, extra.fig):
+            dropped_no_signal.append(extra.key)
+            continue
+        extra.score = max(extra.score, _chart_signal_score(extra.key, extra.fig))
+        candidates.append(extra)
 
-    ts, ts_cols = _try_timeseries(df, date_cols, num_cols)
-    _add(ts, ts_cols)
+    if dropped_no_signal:
+        logger.info("Dropped %d low-signal charts: %s", len(dropped_no_signal), dropped_no_signal)
 
-    sc, sc_cols = _try_scatter(df, num_cols, cat_cols, stats)
-    _add(sc, sc_cols)
+    if not candidates:
+        logger.info("No high-signal charts available after filtering")
+        return {}
 
-    _add(_try_likert_bars(df, likert_cols))
-    _add(_try_scatter_matrix(df, num_cols, used, stats))
-    _add(_try_bar_mean(df, cat_cols, num_cols, used))
-    _add(_try_heatmap(df, num_cols, stats, used))
-    _add(_try_violin_or_histogram(df, num_cols, cat_cols, stats, used))
-    _add(_try_donut(df, cat_cols, used))
-    _add(_try_bar_counts(df, cat_cols, used))
-    _add(_try_boxplot(df, num_cols, used))
+    llm_selected = _llm_select_charts(candidates, stats)
+    heur_selected = sorted(candidates, key=lambda c: c.score, reverse=True)
 
-    if not candidates and len(df.columns) >= 2:
-        fig = px.bar(df.head(30), x=df.columns[0], y=df.columns[1],
-                     title=f"{df.columns[1]} by {df.columns[0]}")
-        candidates.append(ScoredChart("fallback", _style(fig), 12.0))
-
-    def _base_type(key: str) -> str:
-        for prefix in ("histogram_", "bar_counts_", "violin_"):
-            if key.startswith(prefix):
-                return prefix.rstrip("_")
-        return key
-
-    # Filter out exact duplicate chart types to ensure variety before handing off
-    seen = set()
-    unique = []
-    for chart in sorted(candidates, key=lambda c: c.score, reverse=True):
-        t = _base_type(chart.key)
-        if t not in seen:
-            seen.add(t)
-            unique.append(chart)
-
-    selected = _llm_select_charts(unique, stats)
-    
-    logger.info("Selected %d improved dashboard charts: %s",
-                len(selected), [(c.key, c.score) for c in selected])
-    return {c.key: c.fig for c in selected}
+    curated = _enforce_family_limits(llm_selected, heur_selected)
+    logger.info(
+        "Generated %d candidates, curated to %d professional charts: %s",
+        len(candidates),
+        len(curated),
+        [(c.key, c.score) for c in curated],
+    )
+    return {c.key: c.fig for c in curated}
 
 
 # ── Entry point ─────────────────────────────────────────────────────────────
 def run(state: AnalysisState) -> AnalysisState:
-    logger.info("🚀 ENHANCED VISUALIZER v2.0 (Dashboard mode) LOADED — ID filter FIXED!")
+    logger.info("ENHANCED VISUALIZER v2.0 (rule-based charting) loaded")
     state.current_agent = "visualizer"
 
     if state.clean_df is None or state.clean_df.empty:
