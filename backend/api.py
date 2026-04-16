@@ -1,13 +1,11 @@
 
 import io
-import csv
 import asyncio
 import logging
 import os
 import json
-import zipfile
 from contextlib import asynccontextmanager
-from typing import Annotated, Optional
+from typing import Annotated
 
 import pandas as pd
 from fastapi import Depends, FastAPI, File, HTTPException, UploadFile, status, Request, Response, Query
@@ -44,6 +42,7 @@ from .auth import (
 from .core.constants import APP_VERSION, PIPELINE_VERSION
 from .core.graph import run_pipeline
 from .core.logging_config import configure_logging
+from .core.upload_parsing import read_csv_with_fallback, validate_upload_magic
 from .core.utils import sanitize_floats, truncate_stats_for_llm
 from .db import get_db, init_db
 from .models.schemas import (
@@ -76,7 +75,7 @@ MAX_ANALYZE_ROWS = int(os.getenv("MAX_ANALYZE_ROWS", "15000")) # Lowered to 15K 
 MAX_ANALYZE_COLUMNS = int(os.getenv("MAX_ANALYZE_COLUMNS", "150"))
 MAX_EXCEL_SHEETS = int(os.getenv("MAX_EXCEL_SHEETS", "5"))
 MAX_QUESTION_CHARS = int(os.getenv("CHAT_MAX_QUESTION_CHARS", "1200"))
-MAX_CONTEXT_BYTES = int(os.getenv("CHAT_MAX_CONTEXT_BYTES", str(128 * 1024)))
+MAX_CONTEXT_BYTES = int(os.getenv("CHAT_MAX_CONTEXT_BYTES", str(2 * 1024 * 1024)))  # 2 MB context limit
 READ_CHUNK_BYTES = 1024 * 1024
 CHAT_RATE_LIMIT = int(os.getenv("CHAT_RATE_LIMIT", "10"))
 CHAT_RATE_WINDOW = int(os.getenv("CHAT_RATE_WINDOW_SECONDS", "60"))
@@ -84,116 +83,6 @@ CHAT_RATE_WINDOW = int(os.getenv("CHAT_RATE_WINDOW_SECONDS", "60"))
 
 _raw_origins = os.getenv("CORS_ORIGINS", "http://localhost:5173,http://localhost:3000")
 origins = [o.strip() for o in _raw_origins.split(",") if o.strip()]
-
-
-def _looks_like_csv(file_bytes: bytes) -> bool:
-    sample = file_bytes[:16384]
-    if not sample:
-        return False
-
-    text: Optional[str] = None
-    for encoding in ("utf-8-sig", "utf-16", "utf-16-le", "utf-16-be", "latin-1"):
-        try:
-            text = sample.decode(encoding)
-            break
-        except UnicodeDecodeError:
-            continue
-
-    if text is None:
-        return False
-
-    lines = [line for line in text.splitlines() if line.strip()]
-    if len(lines) < 1:
-        return False
-
-    sniff_sample = "\n".join(lines[:10])
-    try:
-        csv.Sniffer().sniff(sniff_sample)
-        return True
-    except csv.Error:
-        return any(delim in lines[0] for delim in (",", ";", "\t", "|"))
-
-
-def _validate_upload_magic(parsed_ext: str, file_bytes: bytes) -> None:
-    if parsed_ext == "csv":
-        if not _looks_like_csv(file_bytes):
-            raise HTTPException(status_code=400, detail="Invalid CSV content")
-        return
-
-    if parsed_ext == "xlsx":
-        if not zipfile.is_zipfile(io.BytesIO(file_bytes)):
-            raise HTTPException(status_code=400, detail="Invalid XLSX file signature")
-        return
-
-    if parsed_ext == "xls":
-        if not file_bytes.startswith(b"\xD0\xCF\x11\xE0\xA1\xB1\x1A\xE1"):
-            raise HTTPException(status_code=400, detail="Invalid XLS file signature")
-        return
-
-    raise HTTPException(status_code=400, detail="Unsupported file type")
-
-
-def _detect_csv_delimiter(file_bytes: bytes) -> Optional[str]:
-    sample = file_bytes[:16384]
-    for encoding in ("utf-8-sig", "utf-8", "latin-1"):
-        try:
-            text = sample.decode(encoding)
-            break
-        except UnicodeDecodeError:
-            text = None
-    if not text:
-        return None
-
-    lines = [line for line in text.splitlines() if line.strip()]
-    if not lines:
-        return None
-
-    sniff_sample = "\n".join(lines[:20])
-    try:
-        dialect = csv.Sniffer().sniff(sniff_sample, delimiters=[",", ";", "\t", "|"])
-        return dialect.delimiter
-    except csv.Error:
-        return None
-
-
-def _read_csv_with_fallback(file_bytes: bytes) -> pd.DataFrame:
-    delimiter = _detect_csv_delimiter(file_bytes)
-
-    attempts = []
-    encodings = ["utf-8-sig", "utf-8", "utf-16", "latin-1"]
-    for encoding in encodings:
-        if delimiter:
-            attempts.append({"engine": "python", "sep": delimiter, "encoding": encoding})
-        attempts.append({"engine": "python", "sep": None, "encoding": encoding})
-    attempts.append({})
-
-    errors = []
-    for csv_kwargs in attempts:
-        try:
-            header_df = pd.read_csv(io.BytesIO(file_bytes), nrows=0, **csv_kwargs)
-            if header_df.shape[1] == 0:
-                errors.append("No columns detected in CSV header")
-                continue
-            if header_df.shape[1] > MAX_ANALYZE_COLUMNS:
-                raise HTTPException(
-                    status_code=413,
-                    detail=f"Dataset has {header_df.shape[1]} columns. Maximum allowed is {MAX_ANALYZE_COLUMNS}.",
-                )
-
-            return pd.read_csv(
-                io.BytesIO(file_bytes),
-                nrows=MAX_ANALYZE_ROWS + 1,
-                **csv_kwargs,
-            )
-        except HTTPException:
-            raise
-        except Exception as exc:
-            errors.append(str(exc))
-
-    first_error = errors[0] if errors else "Unknown CSV parse error"
-    raise HTTPException(status_code=422, detail=f"Could not parse file: {first_error}")
-
-
 
 
 @asynccontextmanager
@@ -509,7 +398,7 @@ async def analyze(
     if len(file_bytes) == 0:
         raise HTTPException(status_code=400, detail="Uploaded file is empty")
 
-    _validate_upload_magic(parsed_ext, file_bytes)
+    validate_upload_magic(parsed_ext, file_bytes)
 
     file_hash = compute_file_hash(file_bytes, filename)
 
@@ -532,7 +421,11 @@ async def analyze(
 
     try:
         if parsed_ext == "csv":
-            df = _read_csv_with_fallback(file_bytes)
+            df = read_csv_with_fallback(
+                file_bytes,
+                max_analyze_rows=MAX_ANALYZE_ROWS,
+                max_analyze_columns=MAX_ANALYZE_COLUMNS,
+            )
         else:
             if parsed_ext == "xlsx":
                 from openpyxl import load_workbook
@@ -746,18 +639,56 @@ async def chat_with_analysis(
     top_outliers = sorted(outlier_counts.items(), key=lambda kv: kv[1], reverse=True)[:10]
     correlations = context.get("correlations") or slim_stats.get("strong_correlations") or []
     quality = context.get("dataQuality") or slim_stats.get("data_quality") or {}
+    
+    # Extract structural summaries of charts so the LLM understands exactly what data is inside them
+    charts_data = context.get("charts", {})
+    charts_summary = {}
+    if isinstance(charts_data, dict):
+        for k, v in charts_data.items():
+            try:
+                c = json.loads(v) if isinstance(v, str) else v
+                details = []
+                for trace in c.get("data", []):
+                    ttype = trace.get("type", "unknown")
+                    if ttype in ("pie", "pie"):
+                        labels = trace.get("labels") or trace.get("x") or []
+                        values = trace.get("values") or trace.get("y") or []
+                        if isinstance(labels, list) and isinstance(values, list):
+                            pairs = [f"{l}: {val}" for l, val in zip(labels[:10], values[:10])]
+                            details.append(f"Pie Breakdown: {', '.join(pairs)}")
+                    elif ttype in ("bar", "scatter", "violin", "box"):
+                        x = (trace.get("x") or [])[:8]
+                        y = (trace.get("y") or [])[:8]
+                        details.append(f"{ttype.capitalize()} Data: X={x}, Y={y}")
+                    else:
+                        details.append(f"{ttype} chart")
+                title = c.get("layout", {}).get("title", {}).get("text", k) if isinstance(c.get("layout", {}).get("title"), dict) else k
+                charts_summary[k] = f"Title '{title}' - " + " | ".join(details)
+            except Exception as e:
+                import traceback
+                print("CHART EXCEPTION:", k, traceback.format_exc())
+                charts_summary[k] = f"Visual chart (metadata only)"
+    else:
+        charts_summary = charts_data
     outlier_summary = context.get("outlierSummary") or [
         {"column": col, "count": count} for col, count in top_outliers
     ]
 
     prompt = (
-        "You are a data analyst assistant. "
-        "Answer clearly in 2-4 short sentences based only on provided context. "
+        "You are an elite, highly professional Senior Data Analyst assistant. "
+        "Provide precise, corporate-grade, and perfectly structured insights based on the provided data context. "
+        "Keep your tone sophisticated, authoritative, but accessible. Use correct statistical terminology when necessary, but clarify its impact cleanly. "
+        "Keep answers strictly to 1-4 sentences to maintain brevity and professionalism. "
         "Never claim data is missing if it exists in context. "
-        "If context is insufficient, say exactly which field is missing.\n\n"
+        "If context is insufficient, state exactly which information is missing professionally.\n"
+        "IMPORTANT BEHAVIORAL RULES:\n"
+        "1. Answer ONLY what the user asks. If the user's input is conversational (e.g., 'hello', 'no', 'thanks'), just reply naturally. DO NOT spontaneously analyze the data or throw random charts unless the user explicitly asks a question about the data.\n"
+        "2. If you are explaining, describing, or referencing any chart from 'Available Charts', you MUST format it exactly like this: `[CHART: chart_key_name]` so the application can render it. Put the chart tag first, and explain it below.\n"
+        "3. Never just put the chart name in backticks. You MUST use the bracket format `[CHART: key]`.\n\n"
         f"File: {file_name}\n"
         f"Dataset: {profile.get('label', 'unknown')} ({profile.get('domain', 'general')})\n"
         f"Data Quality: {quality}\n"
+        f"Available Charts & Data Summaries: {charts_summary}\n"
         f"Outlier Counts: {outlier_counts}\n"
         f"Outlier Summary: {outlier_summary}\n"
         f"Correlations: {correlations}\n"
@@ -775,11 +706,11 @@ async def chat_with_analysis(
             completion = client.chat.completions.create(
                 model=os.getenv("GROQ_MODEL", "llama-3.1-8b-instant"),
                 messages=[
-                    {"role": "system", "content": "You are a concise data analyst."},
+                    {"role": "system", "content": "You are an elite, highly professional Senior Data Analyst. Deliver precise, corporate-grade responses strictly under 4 sentences. Important: Be conversational but extremely professional! If the user says 'hi' or 'namaste', reply professionally. Do not forcefully analyze data unless requested. If referencing a chart, use the [CHART: key] syntax exactly."},
                     {"role": "user", "content": prompt},
                 ],
-                temperature=0.2,
-                max_tokens=220,
+                temperature=0.3,
+                max_tokens=350,
             )
             answer = (completion.choices[0].message.content or "").strip()
             if answer:

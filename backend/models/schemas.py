@@ -107,6 +107,16 @@ class TokenResponse(BaseModel):
     user: UserResponse
 
 
+class AnalysisMetadata(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    file_name: str
+    file_size: Optional[int] = None
+    row_count: Optional[int] = None
+    column_count: Optional[int] = None
+    completeness: Optional[float] = None
+
+
 class AnalysisHistoryList(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 

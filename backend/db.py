@@ -2,6 +2,7 @@ import logging
 import os
 import ssl
 from datetime import datetime
+from urllib.parse import urlparse, urlunparse, parse_qs, urlencode
 
 from dotenv import load_dotenv
 
@@ -20,6 +21,64 @@ from .core.utils import rewrite_local_dev_host
 logger = logging.getLogger(__name__)
 
 
+def _strip_unsupported_params_from_url(database_url: str) -> str:
+    """Remove asyncpg-incompatible parameters from database URL."""
+    parsed = urlparse(database_url)
+    if not parsed.query:
+        return database_url
+    
+    # Parse query parameters
+    params = parse_qs(parsed.query, keep_blank_values=True)
+    
+    # Remove parameters that asyncpg doesn't support
+    unsupported_params = {'sslmode', 'channel_binding', 'gssencmode'}
+    for param in unsupported_params:
+        params.pop(param, None)
+    
+    # Reconstruct query string
+    new_query = urlencode(params, doseq=True)
+    
+    # Reconstruct URL
+    new_parsed = parsed._replace(query=new_query)
+    return urlunparse(new_parsed)
+
+
+def _running_in_container() -> bool:
+    return (
+        os.getenv("RUNNING_IN_DOCKER", "false").lower() == "true"
+        or os.path.exists("/.dockerenv")
+    )
+
+
+def _rewrite_local_dev_db_host(database_url: str) -> str:
+    """Map Docker-compose DB hostname to localhost for non-container dev runs."""
+    app_env = os.getenv("APP_ENV", "production")
+    if app_env != "development" or _running_in_container():
+        return database_url
+
+    parsed = urlparse(database_url)
+    if parsed.hostname != "db":
+        return database_url
+
+    netloc = parsed.netloc
+    if "@" in netloc:
+        auth, host_port = netloc.rsplit("@", 1)
+        if host_port.startswith("db:"):
+            netloc = f"{auth}@localhost:{host_port.split(':', 1)[1]}"
+        elif host_port == "db":
+            netloc = f"{auth}@localhost"
+    else:
+        if netloc.startswith("db:"):
+            netloc = f"localhost:{netloc.split(':', 1)[1]}"
+        elif netloc == "db":
+            netloc = "localhost"
+
+    rewritten = urlunparse(parsed._replace(netloc=netloc))
+    logger.warning("DATABASE_URL host 'db' detected in local dev; using localhost instead")
+    return rewritten
+
+
+
 DATABASE_URL = os.getenv(
     "DATABASE_URL",
     "postgresql+asyncpg://datapulse:datapulse_secret@localhost:5432/datapulse",
@@ -29,7 +88,8 @@ if DATABASE_URL.startswith("postgresql://") or DATABASE_URL.startswith("postgres
     DATABASE_URL = DATABASE_URL.replace("postgres://", "postgresql+asyncpg://", 1)
     DATABASE_URL = DATABASE_URL.replace("postgresql://", "postgresql+asyncpg://", 1)
 
-DATABASE_URL = rewrite_local_dev_host(DATABASE_URL, service_name="db")
+DATABASE_URL = _rewrite_local_dev_db_host(DATABASE_URL)
+DATABASE_URL = _strip_unsupported_params_from_url(DATABASE_URL)
 
 
 _db_ssl = os.getenv("DB_SSL", "false").lower() == "true"
@@ -139,6 +199,7 @@ class AnalysisMetadata(Base):
     analyzed_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
 
     analysis = relationship("AnalysisHistory", back_populates="metadata_row")
+
 
 
 async def get_db() -> AsyncSession:
