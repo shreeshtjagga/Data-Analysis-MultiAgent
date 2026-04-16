@@ -227,8 +227,12 @@ async def login_user(db: AsyncSession, email: str, password: str) -> dict:
     result = await db.execute(select(User).where(func.lower(User.email) == normalized_email))
     user: Optional[User] = result.scalar_one_or_none()
 
-    if user is None or not verify_password(password, user.password_hash):
-        logger.warning("Failed login attempt for: %s", normalized_email)
+    if user is None:
+        logger.warning("FAILED LOGIN: User not found for email: %s", normalized_email)
+        return {"success": False, "message": "Invalid email or password"}
+    
+    if not verify_password(password, user.password_hash):
+        logger.warning("FAILED LOGIN: Password mismatch for user_id: %d (%s)", user.id, normalized_email)
         return {"success": False, "message": "Invalid email or password"}
 
     token = create_access_token(user.id, user.email)
