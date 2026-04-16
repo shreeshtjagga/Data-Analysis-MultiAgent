@@ -376,18 +376,6 @@ export default function Login({ onLogin }) {
   return (
     <div style={{ height: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '24px', position: 'relative', overflowY: 'auto' }}>
       <ParticleBackground />
-      
-      {/* FORCE SYNC BANNER */}
-      <div style={{
-        position: 'fixed', top: 0, left: 0, right: 0, height: '40px',
-        background: 'linear-gradient(90deg, #ef4444, #6366f1)',
-        color: 'white', display: 'flex', alignItems: 'center', justifyContent: 'center',
-        zIndex: 9999, fontWeight: 800, fontSize: '12px', letterSpacing: '0.1em',
-        boxShadow: '0 2px 10px rgba(0,0,0,0.5)'
-      }}>
-        [ SYSTEM SYNCED: VERSION 2.1.0-FIX-PORT-5174 ]
-      </div>
-
       <div className="animate-fade-in" style={{ width: '100%', maxWidth: '550px', position: 'relative', zIndex: 1, backgroundColor: 'transparent', boxShadow: 'none', border: 'none', padding: '0' }}>
         
         <div style={{ textAlign: 'center', marginBottom: '32px' }}>

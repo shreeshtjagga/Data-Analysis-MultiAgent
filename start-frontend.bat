@@ -47,13 +47,13 @@ if errorlevel 1 (
     exit /b 1
 )
 
-echo  [2/2] Starting Vite on http://localhost:5174 (FORCE SYNC)
+echo  [2/2] Starting Vite on http://localhost:5173 (FORCE SYNC)
 echo.
 echo        Make sure the backend is also running (start-backend.bat).
 echo        Press Ctrl+C to stop the dev server.
 echo.
 
-call npx vite --port 5174 --force --clearScreen false
+call npx vite --port 5173 --force --clearScreen false
 
 if errorlevel 1 (
     echo.
