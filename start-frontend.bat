@@ -33,6 +33,13 @@ if not exist ".env" (
 
 :: ── Install dependencies (skips if node_modules is up to date) ─────
 echo  [1/2] Checking Node dependencies ...
+
+:: FORCE CLEAR VITE CACHE
+if exist "node_modules\.vite" (
+    echo  [SYNC] Clearing Vite internal cache ...
+    rd /s /q "node_modules\.vite"
+)
+
 call npm install
 if errorlevel 1 (
     echo  [ERROR] npm install failed. Check your internet connection.
@@ -40,14 +47,13 @@ if errorlevel 1 (
     exit /b 1
 )
 
-:: ── Start Vite dev server ──────────────────────────────────────────
-echo  [2/2] Starting Vite on http://localhost:5173
+echo  [2/2] Starting Vite on http://localhost:5173 (FORCE SYNC)
 echo.
 echo        Make sure the backend is also running (start-backend.bat).
 echo        Press Ctrl+C to stop the dev server.
 echo.
 
-call npm run dev
+call npx vite --port 5173 --force --clearScreen false
 
 if errorlevel 1 (
     echo.
