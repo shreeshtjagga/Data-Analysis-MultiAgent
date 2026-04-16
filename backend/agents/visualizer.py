@@ -276,14 +276,16 @@ def _sample(df: pd.DataFrame, max_rows: int, stratify_col: Optional[str] = None)
         return df
     if stratify_col and stratify_col in df.columns:
         try:
-            return (
-                df.groupby(stratify_col, group_keys=False)
-                .apply(lambda g: g.sample(
-                    min(len(g), max(1, int(max_rows * len(g) / len(df)))),
-                    random_state=42,
-                ))
-                .reset_index(drop=True)
-            )
+            sampled_idx = []
+            for name, group in df.groupby(stratify_col):
+                n_sample = min(len(group), max(1, int(max_rows * len(group) / len(df))))
+                sampled_idx.extend(group.sample(n_sample, random_state=42).index)
+            
+            sampled_df = df.loc[sampled_idx]
+            if len(sampled_df) > max_rows:
+                sampled_df = sampled_df.sample(max_rows, random_state=42)
+                
+            return sampled_df.reset_index(drop=True)
         except Exception:
             pass
     return df.sample(max_rows, random_state=42).reset_index(drop=True)
