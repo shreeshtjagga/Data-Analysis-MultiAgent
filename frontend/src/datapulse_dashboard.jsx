@@ -99,6 +99,254 @@ function shouldHideLegend(data, traceCount) {
   return false;
 }
 
+// ─── Chart info helpers ────────────────────────────────────────────────────
+
+function inferChartType(key, traces) {
+  const k = key.toLowerCase();
+  const primaryType = (traces[0]?.type || "").toLowerCase();
+
+  if (k.includes("scatter_matrix") || k.includes("splom")) return "Scatter Matrix";
+  if (k.includes("heatmap") || primaryType === "heatmap") return "Heatmap";
+  if (k.includes("timeseries") || k.includes("time_series")) return "Time Series";
+  if (k.includes("line") || primaryType === "scatter") return "Line Chart";
+  if (k.includes("bar") || primaryType === "bar") return "Bar Chart";
+  if (k.includes("pie") || primaryType === "pie") return "Pie Chart";
+  if (k.includes("donut") || (primaryType === "pie" && traces[0]?.hole > 0)) return "Donut Chart";
+  if (k.includes("histogram") || primaryType === "histogram") return "Histogram";
+  if (k.includes("box") || primaryType === "box") return "Box Plot";
+  if (k.includes("violin") || primaryType === "violin") return "Violin Plot";
+  if (k.includes("scatter") || primaryType === "scatter") return "Scatter Plot";
+  if (k.includes("funnel") || primaryType === "funnel") return "Funnel Chart";
+  if (k.includes("treemap") || primaryType === "treemap") return "Treemap";
+  if (k.includes("sunburst") || primaryType === "sunburst") return "Sunburst Chart";
+  if (primaryType) return primaryType.charAt(0).toUpperCase() + primaryType.slice(1) + " Chart";
+  return "Chart";
+}
+
+const CHART_TYPE_DESCRIPTIONS = {
+  "Scatter Matrix":  "Displays pairwise relationships between multiple numeric variables simultaneously, making it easy to spot correlations and clusters across the full dataset.",
+  "Heatmap":         "Uses color intensity to encode values across a two-dimensional grid, revealing patterns, correlations, or concentrations at a glance.",
+  "Time Series":     "Plots data points over a continuous time axis to reveal trends, seasonality, anomalies, and long-term momentum in time-ordered data.",
+  "Line Chart":      "Connects data points with lines to illustrate trends and changes across a continuous axis, ideal for comparing trajectories over time or categories.",
+  "Bar Chart":       "Compares discrete categories using rectangular bars, making it straightforward to rank, compare magnitudes, or track grouped values.",
+  "Pie Chart":       "Shows the proportional share of each category as a slice of the whole, emphasizing part-to-whole relationships.",
+  "Donut Chart":     "Like a pie chart but with a hollow center — ideal for highlighting individual segment proportions while keeping the design clean.",
+  "Histogram":       "Groups continuous numeric values into bins to reveal the underlying frequency distribution, shape, spread, and skewness of the data.",
+  "Box Plot":        "Summarises the distribution of a variable via its median, quartiles, and outliers, letting you compare spread and skewness across groups.",
+  "Violin Plot":     "Combines a box plot with a probability density curve to show the full distribution shape, including multi-modality.",
+  "Scatter Plot":    "Plots individual data points on two axes to reveal correlations, clusters, and outliers between two numeric variables.",
+  "Funnel Chart":    "Tracks the progressive reduction of data through stages, commonly used for conversion or pipeline analysis.",
+  "Treemap":         "Encodes hierarchical data as nested rectangles sized by value, making it easy to compare proportions within categories.",
+  "Sunburst Chart":  "Shows hierarchical data as concentric rings, enabling drill-down into multi-level category relationships.",
+};
+
+function getChartDescription(chartType) {
+  return CHART_TYPE_DESCRIPTIONS[chartType] || "Visualises patterns and relationships present in the dataset.";
+}
+
+function deriveChartInsights(key, fig, chartType) {
+  const traces = Array.isArray(fig.data) ? fig.data : [];
+  const layout = fig.layout || {};
+  const titleRaw = typeof layout.title === "string" ? layout.title : (layout.title?.text || "");
+  const title = cleanQuestionLabel(titleRaw) || key.replaceAll("_", " ");
+  const insights = [];
+
+  // Number of series / groups
+  const seriesCount = traces.length;
+  if (seriesCount > 1) {
+    insights.push(`Compares ${seriesCount} data series — look for the series with the highest values or most distinct trend.`);
+  }
+
+  // Axis labels as context clues
+  const xTitle = layout.xaxis?.title?.text || layout.xaxis?.title || "";
+  const yTitle = layout.yaxis?.title?.text || layout.yaxis?.title || "";
+  if (xTitle && yTitle) {
+    insights.push(`The X-axis represents "${cleanAxisTitle(xTitle)}" and the Y-axis represents "${cleanAxisTitle(yTitle)}" — focus on extreme values at either end.`);
+  } else if (xTitle) {
+    insights.push(`The horizontal axis shows "${cleanAxisTitle(xTitle)}" — scan for the tallest or most prominent category.`);
+  }
+
+  // Chart-type specific insights
+  if (chartType === "Heatmap" || chartType === "Scatter Matrix") {
+    insights.push("Cells with intense color indicate strong relationships. Look for diagonal symmetry in correlation heatmaps.");
+    insights.push("Clusters of similar color suggest groups of correlated or co-occurring variables.");
+  } else if (chartType === "Time Series" || chartType === "Line Chart") {
+    insights.push("Follow the slope — a rising line signals growth while a falling line signals decline.");
+    insights.push("Sharp peaks or troughs mark anomalies or events worth investigating.");
+  } else if (chartType === "Bar Chart") {
+    insights.push("The tallest bar represents the dominant category — compare it against the average to assess how much it stands out.");
+    insights.push("Look for bars significantly shorter than the rest, as they may indicate underperforming segments.");
+  } else if (chartType === "Pie Chart" || chartType === "Donut Chart") {
+    insights.push("The largest slice dominates — consider whether a single category is disproportionately large.");
+    insights.push("Very thin slices may be candidates to group into an 'Other' category for clarity.");
+  } else if (chartType === "Histogram") {
+    insights.push("The peak of the histogram (mode) shows the most common value range in the dataset.");
+    insights.push("A long tail to the right or left indicates skewness and the presence of outliers.");
+  } else if (chartType === "Box Plot" || chartType === "Violin Plot") {
+    insights.push("Points plotted beyond the whiskers are statistical outliers — investigate them individually.");
+    insights.push("A wide interquartile range (IQR) indicates high variability within the group.");
+  } else if (chartType === "Scatter Plot") {
+    insights.push("A clear diagonal pattern suggests a strong correlation between the two variables.");
+    insights.push("Isolated points far from the main cluster are potential outliers worth reviewing.");
+  }
+
+  // Fallback if nothing added
+  if (insights.length === 0) {
+    insights.push(`This chart visualises "${title}" — focus on the peaks, clusters, or segments that stand out most.`);
+    insights.push("Compare values across categories or time points to identify trends and exceptions.");
+  }
+
+  return insights.slice(0, 4); // Cap at 4 bullet points
+}
+
+// ─── Single flippable chart card ───────────────────────────────────────────
+
+function ChartFlipCard({
+  chartKey, fig, idx, isMatrix, isWide, gridSpan, chartHeight,
+  normalizedData, effectiveShowLegend, margin, legend, hasLongLabels,
+  PlotComponent, insights,
+}) {
+  const [flipped, setFlipped] = useState(false);
+  const traces = Array.isArray(fig.data) ? fig.data : [];
+  const layout = fig.layout || {};
+
+  const chartType = inferChartType(chartKey, traces);
+  const description = getChartDescription(chartType);
+  const chartInsights = deriveChartInsights(chartKey, fig, chartType);
+  const titleRaw = typeof layout.title === "string" ? layout.title : (layout.title?.text || "");
+  const displayTitle = truncateLabel(cleanQuestionLabel(titleRaw) || chartKey.replaceAll("_", " "), 80);
+
+  // back face min-height must match the rendered chart height
+  const containerHeight = chartHeight + 48; // 24px padding top + bottom
+
+  return (
+    <div
+      style={{
+        gridColumn: gridSpan,
+        minWidth: 0,
+        height: `${containerHeight}px`,
+        animation: 'fadeIn 0.35s cubic-bezier(0.2, 0.8, 0.2, 1) both',
+        animationDelay: `${idx * 90}ms`,
+      }}
+      className={`chart-flip-wrapper${flipped ? ' flipped' : ''}`}
+    >
+      <div className="chart-flip-inner" style={{ height: `${containerHeight}px` }}>
+
+        {/* ── FRONT FACE ── */}
+        <div className="chart-flip-front" style={{ padding: '24px', height: `${containerHeight}px` }}>
+          {/* Info toggle button */}
+          <button
+            className="chart-info-btn"
+            title="Chart insights"
+            onClick={() => setFlipped(true)}
+            aria-label="Show chart information"
+          >
+            ℹ
+          </button>
+
+          <PlotComponent
+            data={normalizedData}
+            layout={{
+              ...PLOTLY_DARK_LAYOUT,
+              ...layout,
+              authorise: true,
+              title: {
+                ...(layout?.title || {}),
+                text: truncateLabel(cleanQuestionLabel(layout?.title?.text || layout?.title || chartKey.replaceAll("_", " ")), 85),
+                font: { color: "#FFFFFF", size: 16, weight: 'bold' },
+                x: 0.5,
+                xanchor: "center",
+              },
+              paper_bgcolor: "rgba(0,0,0,0)",
+              plot_bgcolor: "rgba(0,0,0,0)",
+              font: { color: "#FFFFFF", family: "'Inter', sans-serif" },
+              hovermode: layout?.hovermode || "closest",
+              hoverlabel: {
+                ...PLOTLY_DARK_LAYOUT.hoverlabel,
+                ...(layout?.hoverlabel || {}),
+              },
+              height: chartHeight,
+              showlegend: effectiveShowLegend,
+              margin,
+              legend: {
+                ...(layout?.legend || {}),
+                ...legend,
+              },
+              xaxis: {
+                ...(layout?.xaxis || {}),
+                title: {
+                  ...(layout?.xaxis?.title || {}),
+                  text: cleanAxisTitle(layout?.xaxis?.title?.text || layout?.xaxis?.title || ""),
+                },
+                automargin: true,
+                tickangle: hasLongLabels ? -28 : (layout?.xaxis?.tickangle ?? 0),
+                tickfont: { color: "#FFFFFF", size: 11 },
+              },
+              yaxis: {
+                ...(layout?.yaxis || {}),
+                title: {
+                  ...(layout?.yaxis?.title || {}),
+                  text: cleanAxisTitle(layout?.yaxis?.title?.text || layout?.yaxis?.title || ""),
+                },
+                automargin: true,
+                tickfont: { color: "#FFFFFF", size: 11 },
+              },
+              uniformtext: { minsize: 10, mode: "hide" },
+            }}
+            config={PLOTLY_CONFIG}
+            style={{ width: "100%", height: `${chartHeight}px` }}
+          />
+        </div>
+
+        {/* ── BACK FACE ── */}
+        <div className="chart-flip-back" style={{ height: `${containerHeight}px` }}>
+          {/* Close button */}
+          <button
+            className="chart-info-btn"
+            title="Back to chart"
+            onClick={() => setFlipped(false)}
+            aria-label="Close chart information"
+            style={{ fontSize: '16px' }}
+          >
+            ✕
+          </button>
+
+          {/* Chart type badge */}
+          <div className="chart-back-badge">
+            <span style={{ fontSize: '13px' }}>📊</span>
+            {chartType}
+          </div>
+
+          {/* Chart title */}
+          <div className="chart-back-title">{displayTitle}</div>
+
+          {/* Divider */}
+          <div className="chart-back-divider" />
+
+          {/* What the chart conveys */}
+          <div className="chart-back-section-label">What this chart shows</div>
+          <p className="chart-back-description">{description}</p>
+
+          {/* Divider */}
+          <div className="chart-back-divider" />
+
+          {/* Data insights */}
+          <div className="chart-back-section-label">Key insights to look for</div>
+          {chartInsights.map((insight, i) => (
+            <div key={i} className="chart-back-insight-item">
+              <div className="chart-back-insight-dot" />
+              <span>{insight}</span>
+            </div>
+          ))}
+        </div>
+
+      </div>
+    </div>
+  );
+}
+
+// ─── ChartPanel ────────────────────────────────────────────────────────────
+
 function ChartPanel({ result, PlotComponent }) {
   if (!PlotComponent) {
     return (
@@ -146,74 +394,23 @@ function ChartPanel({ result, PlotComponent }) {
         };
 
         return (
-          <div
+          <ChartFlipCard
             key={key}
-            style={{
-              gridColumn: gridSpan,
-              minWidth: 0, 
-              padding: '24px',
-              backgroundColor: 'rgba(13, 18, 32, 0.7)',
-              backdropFilter: 'blur(8px)',
-              borderRadius: '14px',
-              border: '1px solid var(--border-subtle)',
-              boxShadow: 'var(--shadow-card)',
-              animation: 'fadeIn 0.35s cubic-bezier(0.2, 0.8, 0.2, 1) both',
-              animationDelay: `${idx * 90}ms`,
-            }}
-          >
-            <PlotComponent
-              data={normalizedData}
-              layout={{
-                ...PLOTLY_DARK_LAYOUT,
-                ...fig.layout,
-                authorise : true,
-                title: { 
-                  ...(fig.layout?.title || {}), 
-                  text: truncateLabel(cleanQuestionLabel(fig.layout?.title?.text || fig.layout?.title || key.replaceAll("_", " ")), 85),
-                  font: { color: "#FFFFFF", size: 16, weight: 'bold' },
-                  x: 0.5,
-                  xanchor: "center",
-                },
-                paper_bgcolor: "rgba(0,0,0,0)",
-                plot_bgcolor: "rgba(0,0,0,0)",
-                font: { color: "#FFFFFF", family: "'Inter', sans-serif" },
-                hovermode: fig.layout?.hovermode || "closest",
-                hoverlabel: {
-                  ...PLOTLY_DARK_LAYOUT.hoverlabel,
-                  ...(fig.layout?.hoverlabel || {}),
-                },
-                height: chartHeight,
-                showlegend: effectiveShowLegend,
-                margin,
-                legend: {
-                  ...(fig.layout?.legend || {}),
-                  ...legend,
-                },
-                xaxis: {
-                  ...(fig.layout?.xaxis || {}),
-                  title: {
-                    ...(fig.layout?.xaxis?.title || {}),
-                    text: cleanAxisTitle(fig.layout?.xaxis?.title?.text || fig.layout?.xaxis?.title || ""),
-                  },
-                  automargin: true,
-                  tickangle: hasLongLabels ? -28 : (fig.layout?.xaxis?.tickangle ?? 0),
-                  tickfont: { color: "#FFFFFF", size: 11 },
-                },
-                yaxis: {
-                  ...(fig.layout?.yaxis || {}),
-                  title: {
-                    ...(fig.layout?.yaxis?.title || {}),
-                    text: cleanAxisTitle(fig.layout?.yaxis?.title?.text || fig.layout?.yaxis?.title || ""),
-                  },
-                  automargin: true,
-                  tickfont: { color: "#FFFFFF", size: 11 },
-                },
-                uniformtext: { minsize: 10, mode: "hide" },
-              }}
-              config={PLOTLY_CONFIG}
-              style={{ width: "100%", height: `${chartHeight}px` }}
-            />
-          </div>
+            chartKey={key}
+            fig={fig}
+            idx={idx}
+            isMatrix={isMatrix}
+            isWide={isWide}
+            gridSpan={gridSpan}
+            chartHeight={chartHeight}
+            normalizedData={normalizedData}
+            effectiveShowLegend={effectiveShowLegend}
+            margin={margin}
+            legend={legend}
+            hasLongLabels={hasLongLabels}
+            PlotComponent={PlotComponent}
+            insights={result?.insights || {}}
+          />
         );
       })}
     </div>

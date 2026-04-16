@@ -29,7 +29,7 @@ class UserRegister(BaseModel):
     @classmethod
     def email_must_be_deliverable(cls, v: str) -> str:
         try:
-            info = validate_email(str(v).strip(), check_deliverability=True)
+            info = validate_email(str(v).strip(), check_deliverability=False)
             return info.normalized.lower()
         except EmailNotValidError as exc:
             raise ValueError(str(exc)) from exc
