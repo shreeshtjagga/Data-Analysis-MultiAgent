@@ -432,49 +432,223 @@ export default function DataPulse({ user, onLogout }) {
   }
 };
 
-  const exportPDF = useCallback(() => {
+  const exportPDF = useCallback(async () => {
     if (!result) return;
-    const insights = result?.insights || {};
-    const doc = new jsPDF();
-    doc.setFont("helvetica", "bold");
-    doc.setFontSize(22);
-    doc.setTextColor(99, 102, 241);
-    doc.text("DATA PULSE — Analysis Report", 20, 25);
     
-    doc.setFontSize(11);
-    doc.setTextColor(148, 163, 184);
-    doc.setFont("helvetica", "normal");
-    doc.text(`Origin: ${fileName}`, 20, 35);
-    doc.text(`Generated: ${new Date().toLocaleString()}`, 20, 42);
+    try {
+      const { default: Plotly } = await import("plotly.js-dist-min");
+      
+      // Initialize Landscape A4
+      const doc = new jsPDF("l", "mm", "a4");
+      const pageWidth = doc.internal.pageSize.getWidth();  // ~297mm
+      const pageHeight = doc.internal.pageSize.getHeight(); // ~210mm
+      
+      // 0. Background Color (Pale Teal/Cream)
+      doc.setFillColor(236, 244, 243);
+      doc.rect(0, 0, pageWidth, pageHeight, 'F');
 
-    let y = 60;
-    if (insights?.headline) {
+      const margin = 12;
+
+      // 1. TITLE
+      doc.setFont("times", "bold"); // Serif font for dashboard title
+      doc.setFontSize(22);
+      doc.setTextColor(34, 49, 63); // Dark slate
+      const displayTitle = fileName ? `${fileName.replace(/\.[^/.]+$/, "")} Dashboard` : "Analytics Dashboard";
+      doc.text(truncateLabel(displayTitle, 45), margin, 20);
+      
+      // DataPulse Watermark
+      doc.setFont("helvetica", "bolditalic");
+      doc.setFontSize(14);
+      doc.setTextColor(180, 200, 195);
+      doc.text("DataPulse", pageWidth - margin - 20, margin + 4);
+      
+      // 2. SUBTITLE / HEADLINE
+      const insights = result.insights || {};
+      let headlineText = "Data processed successfully via automated AI analysis.";
+      if (insights.headline) {
+         headlineText = typeof insights.headline === 'object' ? String(insights.headline.text || "") : String(insights.headline);
+      }
+      
       doc.setFont("helvetica", "bold");
-      doc.setTextColor(15, 23, 42); // Dark for body readability
-      doc.text("EXECUTIVE SUMMARY", 20, y);
-      y += 10;
+      doc.setFontSize(11); // Bold explicit heading
+      doc.setTextColor(30, 40, 40);
+      doc.text("Executive Summary", margin, 26);
+      
       doc.setFont("helvetica", "normal");
-      const headTxt = String(insights.headline);
-      const lines = doc.splitTextToSize(headTxt, 170);
-      doc.text(lines, 20, y);
-      y += lines.length * 7 + 15;
-    }
+      doc.setFontSize(10);
+      doc.setTextColor(40, 40, 40);
+      const splitSubtitle = doc.splitTextToSize(headlineText, pageWidth - margin * 2 - 20);
+      doc.text(splitSubtitle, margin, 31);
 
-    if (insights?.findings) {
-      doc.setFont("helvetica", "bold");
-      doc.text("DETECTED VECTORS (FINDINGS)", 20, y);
-      y += 10;
-      doc.setFont("helvetica", "normal");
-      insights.findings.forEach(f => {
-        const lines = doc.splitTextToSize(`• ${f}`, 170);
-        if (y > 270) { doc.addPage(); y = 20; }
-        doc.text(lines, 20, y);
-        y += lines.length * 7 + 5;
-      });
-    }
+      // 3. TOP METRICS ROW (Business Insights)
+      const stats = result.stats_summary || {};
+      const findingsList = [];
+      if (insights.findings && Array.isArray(insights.findings)) {
+         insights.findings.forEach(f => {
+            findingsList.push(typeof f === 'object' ? String(f.text || f.message || "") : String(f));
+         });
+      }
+      if (insights.recommendations && Array.isArray(insights.recommendations)) {
+         insights.recommendations.forEach(f => {
+            findingsList.push(typeof f === 'object' ? String(f.text || f.message || "") : String(f));
+         });
+      }
+      
+      const topFinding = findingsList.length > 0 ? findingsList[0] : "Data processed and structured successfully.";
+      const secondFinding = findingsList.length > 1 ? findingsList[1] : `Analyzed ${stats.row_count || 0} rows across ${stats.column_count || 0} variables.`;
 
-    doc.save(`DataPulse_Report_${new Date().getTime()}.pdf`);
-  }, [result]);
+      let metricY = 41;
+      const numMetrics = 3;
+      const metricBoxWidth = (pageWidth - margin * 2 - 20) / numMetrics;
+      
+      for (let i = 0; i < numMetrics; i++) {
+         const mX = margin + i * (metricBoxWidth + 10);
+         
+         // Label
+         doc.setFont("helvetica", "bold");
+         doc.setFontSize(10);
+         doc.setTextColor(30, 50, 50);
+         const label = i === 0 ? "Strategic Insight" : (i === 1 ? "Key Finding" : "Dataset Scope");
+         doc.text(label, mX, metricY);
+         
+         // Value
+         doc.setFont("helvetica", "normal");
+         doc.setFontSize(10);
+         doc.setTextColor(20, 30, 30);
+         let valStr = "";
+         if (i === 0) valStr = topFinding;
+         else if (i === 1) valStr = secondFinding;
+         else valStr = `${(stats.row_count || 0).toLocaleString()} records processed accurately.`;
+         
+         const splitVal = doc.splitTextToSize(valStr, metricBoxWidth);
+         doc.text(splitVal, mX, metricY + 6);
+      }
+
+      // 4. CHARTS GRID
+      const charts = result.charts || {};
+      const chartKeys = Object.keys(charts);
+      
+      if (chartKeys.length > 0) {
+        const totalCharts = Math.min(chartKeys.length, 6);
+        let cols = 3;
+        if (totalCharts <= 4) cols = 2;
+        if (totalCharts === 1) cols = 1;
+        
+        const gap = 12;
+        const availableWidth = pageWidth - margin * 2;
+        const chartBoxWidth = (availableWidth - gap * (cols - 1)) / cols;
+        
+        const startY = 62; // Shifted down to accommodate standalone Executive Summary
+        const availableHeight = pageHeight - startY - margin;
+        const totalRows = Math.ceil(totalCharts / cols);
+        const yGap = 12;
+        const chartBoxHeight = totalRows > 1 ? (availableHeight - yGap) / totalRows : Math.min(availableHeight, 100);
+
+        for (let i = 0; i < totalCharts; i++) {
+          const key = chartKeys[i];
+          const fig = charts[key];
+          if (!fig || !fig.data) continue;
+
+          try {
+             // Calculate positions
+             let col = i % cols;
+             let row = Math.floor(i / cols);
+             
+             let boxX = margin + col * (chartBoxWidth + gap);
+             
+             // Center bottom row if exactly 3 charts (2 top, 1 bottom)
+             if (totalCharts === 3 && i === 2) {
+                 boxX = margin + (availableWidth / 2) - (chartBoxWidth / 2);
+             }
+             // Center bottom row if exactly 5 charts (3 top, 2 bottom)
+             if (totalCharts === 5 && i >= 3) {
+                 // For 5 charts, cols=3. The bottom row has 2 charts.
+                 // The width of 2 charts + 1 gap is (2*chartBoxWidth + gap).
+                 const bottomRowWidth = (2 * chartBoxWidth) + gap;
+                 const startOff = margin + (availableWidth - bottomRowWidth) / 2;
+                 const bottomCol = i - 3;
+                 boxX = startOff + bottomCol * (chartBoxWidth + gap);
+             }
+             
+             const boxY = startY + row * (chartBoxHeight + yGap);
+
+             // Draw White Rounded Container
+             doc.setFillColor(255, 255, 255);
+             doc.setDrawColor(200, 215, 215);
+             doc.roundedRect(boxX, boxY, chartBoxWidth, chartBoxHeight, 3, 3, 'FD');
+
+             // Draw Dark Title Pill Overlapping Top
+             const pillWidth = chartBoxWidth * 0.95;
+             const pillX = boxX + (chartBoxWidth - pillWidth) / 2;
+             const pillY = boxY - 3;
+             const pillHeight = 6;
+             doc.setFillColor(4, 59, 72); // dark teal
+             doc.roundedRect(pillX, pillY, pillWidth, pillHeight, 2, 2, 'F');
+             
+             // Pill Text Cleansing
+             let baseTitle = key;
+             if (fig.layout && fig.layout.title) {
+                 baseTitle = typeof fig.layout.title === 'string' ? fig.layout.title : (fig.layout.title.text || key.replaceAll("_", " "));
+             }
+             let strippedTitle = baseTitle.replace(/^(timeseries|scatter|bar\s?counts?|frequency\s?of|composition\s?of|donut|pie|line|heatmap)(?:\s+multi)?[\s-:]*/gi, "").trim() || baseTitle;
+             // Remove instances of "Q10 - ", "Q4 - " anywhere in the title
+             strippedTitle = strippedTitle.replace(/\bQ\d+\s*[-:]*\s*/gi, "").trim() || strippedTitle;
+             // Remove aggregation suffixes e.g., "(agg to 16 pts)" and trailing question marks
+             strippedTitle = strippedTitle.replace(/\(agg[^)]+\)/gi, "").replace(/\?+$/, "").trim() || strippedTitle;
+             
+             doc.setFontSize(7.5); // Reduced slightly for better fit
+             doc.setTextColor(255, 255, 255);
+             doc.setFont("helvetica", "bold");
+             const titleStr = strippedTitle.charAt(0).toUpperCase() + strippedTitle.slice(1);
+             const trTitle = titleStr.length > 60 ? titleStr.slice(0, 57) + '...' : titleStr;
+             doc.text(trTitle, boxX + chartBoxWidth / 2, pillY + 4.0, { align: 'center' });
+
+             // Prepare Plotly Configuration for Light Mode
+             const pdfLayout = {
+               ...fig.layout,
+               paper_bgcolor: "rgba(0,0,0,0)",
+               plot_bgcolor: "rgba(0,0,0,0)",
+               font: { color: "#333333", family: "Helvetica", size: 14 }, 
+               xaxis: {
+                  ...fig.layout.xaxis,
+                  tickfont: { color: "#555555", size: 13 },
+                  title: { ...(fig.layout.xaxis?.title || {}), font: { color: "#333333", size: 15 } }
+               },
+               yaxis: {
+                  ...fig.layout.yaxis,
+                  tickfont: { color: "#555555", size: 13 },
+                  title: { ...(fig.layout.yaxis?.title || {}), font: { color: "#333333", size: 15 } }
+               },
+               width: 450,
+               height: 320,
+               showlegend: false,
+               margin: { l: 45, r: 25, t: 20, b: 45 }, 
+               title: null // Title is handled by pdf pill
+             };
+
+             // Generate Image with retuned resolution ratio
+             const imgData = await Plotly.toImage(
+                { data: fig.data, layout: pdfLayout }, 
+                { format: 'png', width: 450, height: 320, scale: 3 }
+             );
+
+             // Add Image to Box
+             doc.addImage(imgData, 'PNG', boxX + 2, boxY + 4, chartBoxWidth - 4, chartBoxHeight - 8);
+
+          } catch (chartErr) {
+             console.warn(`Skipped chart ${key}`, chartErr);
+          }
+        }
+      }
+
+      const cleanFileName = fileName.replace(/\.[^/.]+$/, "");
+      doc.save(`${cleanFileName}_Dashboard.pdf`);
+      
+    } catch (err) {
+      console.error("PDF Generation Error:", err);
+      alert("Failed to compile PDF document. Please try again.");
+    }
+  }, [result, fileName]);
 
   const downloadCleanedData = useCallback(() => {
     if (!result || !result.clean_df || result.clean_df.length === 0) return;
