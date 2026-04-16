@@ -7,10 +7,10 @@ echo      DataPulse - Backend Dev Server (Live Logs)
 echo  ==============================================
 echo.
 
-:: Change to the project root (where this .bat lives)
+REM Change to the project root (where this .bat lives)
 cd /d "%~dp0"
 
-:: ── Check .env file ─────────────────────────────────────────────────────
+REM Check .env file
 if not exist ".env" (
     echo  [ERROR] .env file not found!
     echo          Copy .env.example to .env and configure your Google OAuth keys.
@@ -18,7 +18,7 @@ if not exist ".env" (
     exit /b 1
 )
 
-:: ── Virtual environment ─────────────────────────────────────────────────
+REM Virtual environment
 if not exist ".venv\Scripts\python.exe" (
     echo  [1/3] Creating virtual environment .venv ...
     python -m venv .venv
@@ -32,17 +32,17 @@ if not exist ".venv\Scripts\python.exe" (
     echo  [1/3] Virtual environment found.
 )
 
-:: ── Activate venv ───────────────────────────────────────────────────────
+REM Activate venv
 call ".venv\Scripts\activate.bat"
 
-:: ── Dependencies ────────────────────────────────────────────────────────
+REM Dependencies
 echo  [2/3] Updating dependencies...
 python -m pip install --upgrade pip --quiet
 python -m pip install greenlet==3.1.1 --prefer-binary --quiet
 python -m pip install -r requirements.txt --prefer-binary
 echo        Dependencies ready.
 
-:: ── Start FastAPI with LIVE console logs ────────────────────────────────
+REM Start FastAPI with live console logs
 echo  [3/3] Starting FastAPI server...
 echo.
 echo  ==============================================
@@ -53,7 +53,7 @@ echo.
 
 python -m uvicorn backend.api:app --reload --host 0.0.0.0 --port 8000
 
-:: ── Only reaches here if server crashes immediately ─────────────────────
+REM Only reaches here if server crashes immediately
 if errorlevel 1 (
     echo.
     echo  [ERROR] Server failed to start!

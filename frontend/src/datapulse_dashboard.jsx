@@ -1217,15 +1217,15 @@ export default function DataPulse({ user, onLogout }) {
             {historyLoading ? <div style={{ color: 'var(--primary-500)' }}>Syncing history...</div> : (
               (Array.isArray(history) ? history.length : 0) === 0 ? <div style={{ color: 'var(--text-muted)' }}>No recorded sessions found.</div> : (
                 (Array.isArray(history) ? history : []).map(item => (
-                  <div key={item.analysis_id} className="card" style={{ padding: '16px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', cursor: 'pointer', border: historySelectLoading === item.analysis_id ? '1px solid var(--primary-500)' : '1px solid var(--border-subtle)' }} onClick={() => loadHistoryItem(item)}>
-                    <div className="flex-col gap-4">
-                      <strong style={{ fontSize: '14px', color: 'var(--text-main)', display: 'block' }}>{item.file_name}</strong>
+                  <div key={item.analysis_id} className="card" style={{ padding: '16px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '10px', cursor: 'pointer', border: historySelectLoading === item.analysis_id ? '1px solid var(--primary-500)' : '1px solid var(--border-subtle)' }} onClick={() => loadHistoryItem(item)}>
+                    <div className="flex-col gap-4" style={{ flex: 1, minWidth: 0 }}>
+                      <strong style={{ fontSize: '14px', color: 'var(--text-main)', display: 'block', lineHeight: 1.35, overflowWrap: 'anywhere', wordBreak: 'break-word' }}>{item.file_name}</strong>
                       <span className="caption">{new Date(item.analyzed_at).toLocaleDateString()} • {item.row_count} rows</span>
                     </div>
                     <button 
                       onClick={(e) => { e.stopPropagation(); deleteItem(item.analysis_id); }} 
                       disabled={deleteLoading === item.analysis_id}
-                      style={{ background: 'none', border: 'none', color: 'var(--text-muted)', cursor: 'pointer', padding: '8px', fontSize: '24px' }}
+                      style={{ background: 'none', border: 'none', color: 'var(--text-muted)', cursor: 'pointer', padding: '8px', fontSize: '24px', flexShrink: 0, alignSelf: 'center' }}
                     >
                       {deleteLoading === item.analysis_id ? "..." : "🗑"}
                     </button>
