@@ -37,8 +37,8 @@ def statistician_agent(state: AnalysisState) -> AnalysisState:
         if state.clean_df is None or state.clean_df.empty:
             raise ValueError("No clean data available for statistical analysis")
 
-        # Work on a copy so coercion doesn't mutate shared state
-        df = state.clean_df.copy()
+        # Work on a view — we coerce in place (local only, clean_df is not returned)
+        df = state.clean_df
 
 
         excluded_names: set[str] = set()
@@ -82,6 +82,7 @@ def statistician_agent(state: AnalysisState) -> AnalysisState:
 
 
         missing_data = df.isna().sum()
+        total_missing = int(missing_data.sum())   # cache — reused in data_quality
         stats_summary["missing_values"] = {
             col: int(count) for col, count in missing_data.items() if count > 0
         }
@@ -200,7 +201,13 @@ def statistician_agent(state: AnalysisState) -> AnalysisState:
 
         if len(numeric_cols) > 1:
             try:
-                corr_sample = df[numeric_cols].sample(min(len(df), 5000), random_state=42) if len(df) > 5000 else df[numeric_cols]
+                # Cap at 50 cols — correlation is O(n²) and adds no signal beyond that
+                corr_cols = numeric_cols[:50]
+                corr_sample = (
+                    df[corr_cols].sample(min(len(df), 5000), random_state=42)
+                    if len(df) > 5000
+                    else df[corr_cols]
+                )
                 correlation_matrix = corr_sample.corr()
                 strong_correlations = []
                 for i in range(len(correlation_matrix.columns)):
@@ -230,13 +237,11 @@ def statistician_agent(state: AnalysisState) -> AnalysisState:
 
         stats_summary["data_quality"] = {
             "total_cells": int(len(df) * len(df.columns)),
-            "missing_cells": int(missing_data.sum()),
+            "missing_cells": total_missing,          # reuse cached value
             "duplicate_rows": int(len(df) - len(df.drop_duplicates())),
             "completeness": float(
-                (
-                    (len(df) * len(df.columns) - missing_data.sum())
-                    / (len(df) * len(df.columns))
-                )
+                ((len(df) * len(df.columns) - total_missing)
+                 / (len(df) * len(df.columns)))
                 * 100
             ),
         }

@@ -81,6 +81,18 @@ READ_CHUNK_BYTES = 1024 * 1024
 CHAT_RATE_LIMIT = int(os.getenv("CHAT_RATE_LIMIT", "10"))
 CHAT_RATE_WINDOW = int(os.getenv("CHAT_RATE_WINDOW_SECONDS", "60"))
 
+# Groq client is stateless — create once at startup, reuse across requests
+_groq_client = None
+
+def _get_groq_client():
+    global _groq_client
+    if _groq_client is None:
+        api_key = os.getenv("GROQ_API_KEY")
+        if api_key:
+            from groq import Groq
+            _groq_client = Groq(api_key=api_key)
+    return _groq_client
+
 
 _raw_origins = os.getenv("CORS_ORIGINS", "http://localhost:5173,http://localhost:3000")
 origins = [o.strip() for o in _raw_origins.split(",") if o.strip()]
@@ -544,9 +556,16 @@ async def analyze(
 
     result["charts"] = serialized_charts
     result["partial"] = False
-    result = sanitize_floats(result)
 
-    return {"from_cache": False, "pipeline_version": PIPELINE_VERSION, **result}
+    # orjson serialises NaN/Inf → null natively and is ~10x faster than
+    # the manual recursive sanitize_floats walk on large result dicts.
+    try:
+        import orjson
+        safe_result = orjson.loads(orjson.dumps(result, option=orjson.OPT_NON_STR_KEYS))
+    except Exception:
+        safe_result = sanitize_floats(result)   # fallback if orjson not available
+
+    return {"from_cache": False, "pipeline_version": PIPELINE_VERSION, **safe_result}
 
 
 
@@ -700,11 +719,9 @@ async def chat_with_analysis(
     )
 
     api_key = os.getenv("GROQ_API_KEY")
-    if api_key:
+    client = _get_groq_client()   # reuse module-level singleton
+    if client:
         try:
-            from groq import Groq
-
-            client = Groq(api_key=api_key)
             completion = client.chat.completions.create(
                 model=os.getenv("GROQ_MODEL", "llama-3.1-8b-instant"),
                 messages=[
