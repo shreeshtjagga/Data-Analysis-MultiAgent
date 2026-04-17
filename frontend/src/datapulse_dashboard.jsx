@@ -238,7 +238,7 @@ function ChartFlipCard({
           {/* Info toggle button */}
           <button
             className="chart-info-btn"
-            title="Chart insights"
+            data-tooltip="Chart Insights"
             onClick={() => setFlipped(true)}
             aria-label="Show chart information"
           >
@@ -304,10 +304,9 @@ function ChartFlipCard({
           {/* Close button */}
           <button
             className="chart-info-btn"
-            title="Back to chart"
+            data-tooltip="Back to Chart"
             onClick={() => setFlipped(false)}
             aria-label="Close chart information"
-            style={{ fontSize: '16px' }}
           >
             ✕
           </button>
@@ -1054,14 +1053,38 @@ export default function DataPulse({ user, onLogout }) {
                {/* Metrics */}
                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '16px', marginTop: '8px' }}>
                   {[
-                    { title: "Neural Logic", desc: "Multi-agent orchestration.", icon: "◈" },
-                    { title: "Deep Viz", desc: "Automated vector sets.", icon: "⬢" },
-                    { title: "Secure Vault", desc: "End-to-end encryption.", icon: "⊛" }
+                    { 
+                      title: "Private & Secure", 
+                      desc: "Datasets are fully encrypted, instantly analyzed, and completely purged.", 
+                      icon: (
+                        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                          <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"></path>
+                        </svg>
+                      ) 
+                    },
+                    { 
+                      title: "Automated Insights", 
+                      desc: "Multi-agent profiling instantly uncovers core trends and outliers.", 
+                      icon: (
+                        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                          <polyline points="22 12 18 12 15 21 9 3 6 12 2 12"></polyline>
+                        </svg>
+                      ) 
+                    },
+                    { 
+                      title: "Dynamic Charts", 
+                      desc: "Interactive, sleek visualizations mapped directly from your schema.", 
+                      icon: (
+                        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                          <path d="M3 3v18h18"></path><path d="M18 17V9"></path><path d="M13 17V5"></path><path d="M8 17v-3"></path>
+                        </svg>
+                      ) 
+                    }
                   ].map((feat, i) => (
-                    <div key={feat.title} className="card" style={{ padding: '16px', textAlign: 'center', background: 'rgba(13, 18, 32, 0.25)', animation: `slideUp 0.8s cubic-bezier(0.2, 0.8, 0.2, 1) ${0.2 + i * 0.1}s both` }}>
-                      <div style={{ color: 'var(--primary-500)', fontSize: '18px', marginBottom: '8px' }}>{feat.icon}</div>
-                      <strong style={{ display: 'block', fontSize: '12px', color: 'var(--text-main)', marginBottom: '2px', textTransform: 'uppercase', letterSpacing: '1px' }}>{feat.title}</strong>
-                      <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>{feat.desc}</span>
+                    <div key={feat.title} className="card" style={{ padding: '18px 22px', textAlign: 'center', background: 'rgba(13, 18, 32, 0.4)', animation: `slideUp 0.8s cubic-bezier(0.2, 0.8, 0.2, 1) ${0.2 + i * 0.1}s both`, display: 'flex', flexDirection: 'column', alignItems: 'center' }}>
+                      <div style={{ color: 'var(--primary-500)', marginBottom: '10px', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>{feat.icon}</div>
+                      <strong style={{ display: 'block', fontSize: '13px', color: 'var(--text-main)', marginBottom: '4px', textTransform: 'uppercase', letterSpacing: '0.05em' }}>{feat.title}</strong>
+                      <span style={{ fontSize: '12px', color: 'var(--text-muted)', lineHeight: '1.4' }}>{feat.desc}</span>
                     </div>
                   ))}
                </div>
