@@ -121,8 +121,8 @@ export default function GlobeCanvas({ size = 390 }) {
 
     // Cache gradient objects — never recreate each frame
     const bgGrad = ctx.createRadialGradient(cx, cy, baseRadius, cx, cy, baseRadius * 1.06);
-    bgGrad.addColorStop(0, "rgba(40,150,255,0.075)");
-    bgGrad.addColorStop(0.5, "rgba(40,150,255,0.02)");
+    bgGrad.addColorStop(0, "rgba(40,150,255,0.035)");
+    bgGrad.addColorStop(0.5, "rgba(40,150,255,0.01)");
     bgGrad.addColorStop(1, "rgba(0,0,0,0)");
 
     const sphereGrad = ctx.createRadialGradient(cx, cy, baseRadius * 0.85, cx, cy, baseRadius);
