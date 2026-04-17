@@ -18,11 +18,48 @@ export default defineConfig({
   build: {
     outDir: "dist",
     sourcemap: false,
+    // Target modern browsers — skips legacy polyfills, smaller output
+    target: "es2020",
+    // Inline assets < 4 KB directly into HTML (saves network round trips)
+    assetsInlineLimit: 4096,
+    cssCodeSplit: true,
+    minify: "terser",
+    terserOptions: {
+      compress: {
+        drop_console: true,   // strip console.log in production builds
+        drop_debugger: true,
+        passes: 2,
+      },
+    },
     rollupOptions: {
       output: {
-        manualChunks: {
-          vendor: ["react", "react-dom", "react-router-dom"],
-          plotly: ["plotly.js-dist-min"],
+        // Granular chunks so browsers cache each library independently
+        manualChunks(id) {
+          if (
+            id.includes("node_modules/react/") ||
+            id.includes("node_modules/react-dom/") ||
+            id.includes("node_modules/react-router-dom/")
+          ) {
+            return "react-core";
+          }
+          if (id.includes("node_modules/plotly")) {
+            return "plotly";
+          }
+          if (
+            id.includes("node_modules/three") ||
+            id.includes("node_modules/@react-three")
+          ) {
+            return "three";
+          }
+          if (
+            id.includes("node_modules/@react-oauth") ||
+            id.includes("node_modules/jwt-decode")
+          ) {
+            return "auth";
+          }
+          if (id.includes("node_modules/")) {
+            return "vendor";
+          }
         },
       },
     },

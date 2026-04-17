@@ -329,22 +329,22 @@ async def get_analysis_by_id(
 async def delete_analysis(
     db: AsyncSession, user_id: int, analysis_id: int
 ) -> dict:
-    result = await db.execute(
-        select(AnalysisHistory).where(
+    # Single DELETE … RETURNING — no extra SELECT round-trip needed.
+    del_result = await db.execute(
+        delete(AnalysisHistory)
+        .where(
             AnalysisHistory.id == analysis_id,
             AnalysisHistory.user_id == user_id,
         )
+        .returning(AnalysisHistory.file_hash)
     )
-    row: Optional[AnalysisHistory] = result.scalar_one_or_none()
+    file_hash: Optional[str] = del_result.scalar_one_or_none()
 
-    if row is None:
+    if file_hash is None:
+        await db.rollback()
         return {"success": False, "message": "Analysis not found or access denied"}
 
-    file_hash = row.file_hash
-    await db.delete(row)
-    await db.flush()
     await db.commit()
-
 
     cache_key = redis_cache.analysis_key(user_id, file_hash)
     await redis_cache.delete(cache_key)

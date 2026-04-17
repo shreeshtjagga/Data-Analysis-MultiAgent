@@ -104,9 +104,12 @@ if _db_ssl:
 engine = create_async_engine(
     DATABASE_URL,
     echo=os.getenv("APP_ENV", "production") == "development",
-    pool_pre_ping=True,
-    pool_size=5,
-    max_overflow=10,
+    # Neon pgbouncer pooler works best with a small pool.
+    pool_pre_ping=True,        # Must be True for Neon serverless to catch aggressively dropped idle connections
+    pool_size=3,
+    max_overflow=5,
+    pool_recycle=300,          # recycle connections every 5 min to avoid stale sockets
+    pool_timeout=30,           # raise immediately if no connection available in 30 s
     connect_args=_connect_args,
 )
 

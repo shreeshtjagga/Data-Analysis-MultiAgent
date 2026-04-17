@@ -351,6 +351,9 @@ def _build_ranked_bar(df: pd.DataFrame, x_col: str, y_col: str,
         return None
     if not pd.api.types.is_numeric_dtype(df[y_col]):
         return None
+    # x_col must NOT be the same numeric column as y_col
+    if x_col == y_col:
+        return None
     comp = min(_completeness(df[x_col]), _completeness(df[y_col]))
     if comp < 0.40:
         return None
@@ -358,13 +361,17 @@ def _build_ranked_bar(df: pd.DataFrame, x_col: str, y_col: str,
     if agg == "auto":
         agg = "sum" if _should_sum(y_col, df[y_col]) else "mean"
 
-    grouped = (
-        df.groupby(x_col, observed=True)[y_col]
-        .agg(agg)
-        .reset_index()
-        .sort_values(y_col, ascending=False)
-        .head(top_n)
-    )
+    try:
+        grouped = (
+            df.groupby(x_col, observed=True)[y_col]
+            .agg(agg)
+            .reset_index()
+            .dropna(subset=[y_col])
+            .sort_values(y_col, ascending=False)
+            .head(top_n)
+        )
+    except Exception:
+        return None
     if grouped.empty or grouped[y_col].isna().all():
         return None
 
@@ -394,6 +401,8 @@ def _build_grouped_bar(df: pd.DataFrame, cat_col: str, num_col: str,
     """Grouped/aggregated bar: category × numeric metric."""
     if cat_col not in df.columns or num_col not in df.columns:
         return None
+    if cat_col == num_col:
+        return None
     if not pd.api.types.is_numeric_dtype(df[num_col]):
         return None
     n_cats = df[cat_col].nunique(dropna=True)
@@ -407,12 +416,16 @@ def _build_grouped_bar(df: pd.DataFrame, cat_col: str, num_col: str,
         agg = "sum" if _should_sum(num_col, df[num_col]) else "mean"
 
     color_col_use = color_col if color_col and color_col in df.columns else cat_col
-    grouped = (
-        df.groupby(cat_col, observed=True)[num_col]
-        .agg(agg)
-        .reset_index()
-        .sort_values(num_col, ascending=False)
-    )
+    try:
+        grouped = (
+            df.groupby(cat_col, observed=True)[num_col]
+            .agg(agg)
+            .reset_index()
+            .dropna(subset=[num_col])
+            .sort_values(num_col, ascending=False)
+        )
+    except Exception:
+        return None
     if grouped.empty:
         return None
 
@@ -465,6 +478,8 @@ def _build_scatter(df: pd.DataFrame, x_col: str, y_col: str,
     """Scatter with OLS trendline."""
     if x_col not in df.columns or y_col not in df.columns:
         return None
+    if x_col == y_col:
+        return None  # identical columns — useless scatter
     if not (pd.api.types.is_numeric_dtype(df[x_col]) and
             pd.api.types.is_numeric_dtype(df[y_col])):
         return None
@@ -472,7 +487,11 @@ def _build_scatter(df: pd.DataFrame, x_col: str, y_col: str,
     if len(pair) < 10:
         return None
 
-    r = float(pair.corr().iloc[0, 1])
+    try:
+        r_val = pair.corr().iloc[0, 1]
+        r = float(r_val) if pd.notna(r_val) else 0.0
+    except Exception:
+        r = 0.0
     comp = min(_completeness(df[x_col]), _completeness(df[y_col]))
     color_use = (color_col if color_col and color_col in df.columns
                  and df[color_col].nunique() <= 10 else None)
@@ -492,6 +511,8 @@ def _build_line(df: pd.DataFrame, date_col: str, num_cols: list[str],
     """Time-series line chart."""
     if date_col not in df.columns or not num_cols:
         return None
+    # Exclude date_col from value columns if accidentally included
+    num_cols = [c for c in num_cols if c != date_col]
     valid_nums = [c for c in num_cols
                   if c in df.columns and pd.api.types.is_numeric_dtype(df[c])
                   and _completeness(df[c]) >= 0.60]
@@ -535,6 +556,10 @@ def _build_heatmap(df: pd.DataFrame, num_cols: list[str],
     cols = eligible[:12]
     sample = df[cols].sample(min(len(df), 5000), random_state=42) if len(df) > 5000 else df[cols]
     corr = sample.corr().round(2)
+    # Drop all-NaN rows/cols (constant columns produce NaN correlation)
+    corr = corr.dropna(axis=0, how="all").dropna(axis=1, how="all")
+    if corr.empty or corr.shape[0] < 2:
+        return None
     chart_title = title or "Correlation Heatmap"
     fig = px.imshow(corr, text_auto=True, title=chart_title,
                     color_continuous_scale="RdBu_r", zmin=-1, zmax=1)
@@ -609,7 +634,10 @@ def _build_donut(df: pd.DataFrame, cat_col: str, title: str = "") -> Optional[Ch
 
     counts = df[cat_col].value_counts().reset_index()
     counts.columns = [cat_col, "count"]
-    chart_title = title or f"Composition of {cat_col}"
+    # Always auto-generate title from the column name, not from any LLM-supplied
+    # title — the LLM tends to pass a category *value* (e.g. "Iris-setosa") as
+    # the title instead of the column name, which is misleading.
+    chart_title = f"Composition of {cat_col}"
     fig = px.pie(counts, names=cat_col, values="count",
                  title=chart_title, hole=0.42)
     fig.update_traces(textposition="outside", textinfo="percent+label")
@@ -755,7 +783,20 @@ def _execute_plan(df: pd.DataFrame, plan: list[dict], cols: dict) -> list[Chart]
                 chart = _build_histogram(df, y, log_scale=log_, title=ttl)
 
         elif ct == "scatter" and x and y:
-            chart = _build_scatter(df, x, y, color_col=col, title=ttl)
+            # Ensure both are numeric; if LLM mixes cat+num, swap them
+            x_num = x in df.columns and pd.api.types.is_numeric_dtype(df[x])
+            y_num = y in df.columns and pd.api.types.is_numeric_dtype(df[y])
+            if x_num and y_num:
+                chart = _build_scatter(df, x, y, color_col=col, title=ttl)
+            elif not x_num and y_num:
+                # x is categorical — find best numeric fallback for x
+                x_fallback = next((c for c in cols["num"] if c != y), None)
+                if x_fallback:
+                    chart = _build_scatter(df, x_fallback, y, color_col=x if x in df.columns else col, title=ttl)
+            elif x_num and not y_num:
+                y_fallback = next((c for c in cols["num"] if c != x), None)
+                if y_fallback:
+                    chart = _build_scatter(df, x, y_fallback, color_col=y if y in df.columns else col, title=ttl)
 
         elif ct == "line" and x:
             val_cols = [y] if y else cols["num"]
@@ -779,7 +820,23 @@ def _execute_plan(df: pd.DataFrame, plan: list[dict], cols: dict) -> list[Chart]
                 chart = _build_box(df, cc, nc, title=ttl)
 
         elif ct in ("donut", "pie") and x:
-            chart = _build_donut(df, x, title=ttl)
+            # Validate that x is an actual column — LLM sometimes passes a
+            # category *value* (e.g. "Iris-setosa") instead of a column name.
+            # If x is not a column, try to find the first eligible cat column.
+            if x not in df.columns:
+                x_fallback = next(
+                    (c for c in cols["cat"] if 2 <= df[c].nunique(dropna=True) <= 8),
+                    None,
+                )
+                if x_fallback:
+                    logger.debug(
+                        "LLM donut x=%r is not a column — falling back to %r", x, x_fallback
+                    )
+                    x = x_fallback
+                else:
+                    logger.debug("LLM donut x=%r is not a column and no fallback found", x)
+                    continue
+            chart = _build_donut(df, x)
 
         elif ct == "likert_bar":
             chart = _build_likert_bar(df, cols["likert"], title=ttl)
@@ -1027,14 +1084,16 @@ def _chart_summary_for_llm(chart: Chart, df: pd.DataFrame) -> dict:
         trace_previews = []
         for t in fig.data[:2]:  # summarise first 2 traces
             t_info = {"type": t.type}
+            # IMPORTANT: check each attribute separately — don't let loop variable
+            # shadow; we need the value of whichever attr is non-None.
             for attr in ("x", "y", "values", "labels"):
                 val = getattr(t, attr, None)
-            if val is not None:
-                try:
-                    lst = list(val)[:6]
-                    t_info[attr] = lst
-                except Exception:
-                    pass
+                if val is not None:
+                    try:
+                        lst = list(val)[:6]
+                        t_info[attr] = lst
+                    except Exception:
+                        pass
             trace_previews.append(t_info)
         summary["data_preview"] = trace_previews
     except Exception:
@@ -1060,8 +1119,10 @@ def _llm_evaluate_charts(
     if not api_key or len(charts) == 0:
         return charts
 
-    planner_model = os.getenv("GROQ_PLANNER_MODEL",
-                               os.getenv("GROQ_MODEL", "llama-3.3-70b-versatile"))
+    planner_model = os.getenv(
+        "GROQ_PLANNER_MODEL",
+        os.getenv("GROQ_MODEL", "llama-3.1-8b-instant"),  # fast model for planning
+    )
 
     chart_summaries = [_chart_summary_for_llm(c, df) for c in charts]
 
@@ -1183,44 +1244,49 @@ def _select_charts(df: pd.DataFrame, stats: dict) -> dict[str, go.Figure]:
     cols = _classify(df, excluded)
 
     logger.info(
-        "[AGENTIC] Column inventory — numeric: %d | cat: %d | date: %d | likert: %d",
+        "[VIZ] Column inventory — numeric: %d | cat: %d | date: %d | likert: %d",
         len(cols["num"]), len(cols["cat"]), len(cols["date"]), len(cols["likert"]),
     )
 
-    # ── PHASE 1: LLM plans what charts to build ────────────────────────────
-    logger.info("[AGENTIC] Phase 1: LLM chart planning...")
+    # ── PHASE 1: LLM plans what charts to build (fast 8B model) ───────────
+    logger.info("[VIZ] Phase 1: LLM chart planning...")
     plan = _llm_plan_charts(df, cols, stats)
     llm_charts: list[Chart] = []
     if plan:
         llm_charts = _execute_plan(df, plan, cols)
-        logger.info("[AGENTIC] Phase 1 done — %d LLM-planned charts built", len(llm_charts))
+        logger.info("[VIZ] Phase 1 done — %d LLM-planned charts built", len(llm_charts))
     else:
-        logger.info("[AGENTIC] Phase 1 skipped (no API key or LLM failed)")
+        logger.info("[VIZ] Phase 1 skipped (no API key or LLM failed)")
 
-    # ── PHASE 2: Heuristic plan always runs (supplement + fallback) ────────
-    logger.info("[AGENTIC] Phase 2: Heuristic chart generation...")
+    # ── PHASE 2: Heuristic always runs — supplement + guaranteed fallback ──
+    logger.info("[VIZ] Phase 2: Heuristic chart generation...")
     heuristic_charts = _heuristic_plan(df, cols, stats)
-    logger.info("[AGENTIC] Phase 2 done — %d heuristic charts built", len(heuristic_charts))
+    logger.info("[VIZ] Phase 2 done — %d heuristic charts built", len(heuristic_charts))
 
-    # Merge: LLM charts lead, heuristic fills uncovered ground
+    # Merge: LLM charts lead, heuristic fills anything not covered
     llm_keys = {c.key for c in llm_charts}
     all_charts = llm_charts + [c for c in heuristic_charts if c.key not in llm_keys]
 
+    # ── SAFETY NET: if nothing was built at all, force at least one chart ──
     if not all_charts:
-        logger.warning("[AGENTIC] No charts generated — bare fallback")
-        if len(df.columns) >= 2:
-            c0, c1 = df.columns[0], df.columns[1]
-            fb = _build_freq_bar(df, c0) or _build_histogram(df, c1)
-            if fb:
+        logger.warning("[VIZ] No charts generated — bare fallback")
+        for col in df.columns:
+            fb = _build_freq_bar(df, col) or _build_histogram(df, col)
+            if fb and _chart_has_signal(fb):
                 all_charts = [fb]
+                break
 
-    # ── PHASE 3: LLM evaluates built charts & self-corrects (agentic loop) ─
-    logger.info("[AGENTIC] Phase 3: LLM evaluating %d charts...", len(all_charts))
-    refined_charts = _llm_evaluate_charts(all_charts, df, cols, stats)
-    logger.info("[AGENTIC] Phase 3 done — %d charts after evaluation", len(refined_charts))
+    # ── PHASE 3: Final dedup + score-ranked selection ──────────────────────
+    # (Phase-3 LLM evaluation removed — it added ~15s latency and could
+    #  drop all charts with no recovery path. Heuristic scoring is reliable.)
+    result = _deduplicate_and_select(all_charts)
 
-    # ── PHASE 4: Final dedup + selection ──────────────────────────────────
-    return _deduplicate_and_select(refined_charts)
+    # Last resort: if dedup somehow returned empty, use heuristic charts as-is
+    if not result and heuristic_charts:
+        logger.warning("[VIZ] dedup returned empty — using top heuristic chart")
+        result = {heuristic_charts[0].key: heuristic_charts[0].fig}
+
+    return result
 
 
 # ═══════════════════════════════════════════════════════════════════════════

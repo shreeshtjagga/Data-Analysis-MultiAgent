@@ -2,6 +2,7 @@ import { useState, useRef, useCallback, useEffect, useMemo } from "react";
 import jsPDF from "jspdf";
 import { apiAnalyze, apiChat, apiHistory, apiHistoryAnalysis, apiDeleteAnalysis } from "./api.js";
 import ParticleBackground from "./ParticleBackground.jsx";
+import GlobeCanvas from "./GlobeCanvas.jsx";
 
 const PALETTE = ["#6366f1", "#10b981", "#f59e0b", "#06b6d4", "#ef4444", "#a855f7", "#34d399", "#f472b6"];
 
@@ -237,7 +238,7 @@ function ChartFlipCard({
           {/* Info toggle button */}
           <button
             className="chart-info-btn"
-            title="Chart insights"
+            data-tooltip="Chart Insights"
             onClick={() => setFlipped(true)}
             aria-label="Show chart information"
           >
@@ -303,17 +304,15 @@ function ChartFlipCard({
           {/* Close button */}
           <button
             className="chart-info-btn"
-            title="Back to chart"
+            data-tooltip="Back to Chart"
             onClick={() => setFlipped(false)}
             aria-label="Close chart information"
-            style={{ fontSize: '16px' }}
           >
             ✕
           </button>
 
           {/* Chart type badge */}
           <div className="chart-back-badge">
-            <span style={{ fontSize: '13px' }}>📊</span>
             {chartType}
           </div>
 
@@ -935,7 +934,7 @@ export default function DataPulse({ user, onLogout }) {
     return [String(value)];
   };
   const findings = toTextList(insights?.findings);
-  const recommendations = toTextList(insights?.recommendations);
+  const dataInfo = toTextList(insights?.data_info);
   const headline = (() => {
     const value = insights?.headline;
     if (value == null) return "";
@@ -997,25 +996,11 @@ export default function DataPulse({ user, onLogout }) {
              <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center' }}>
                <div style={{ position: 'relative', width: '100%', maxWidth: '390px' }}>
                   {/* Outer pulse ring */}
-                  <div style={{ position: 'absolute', inset: 0, borderRadius: '50%', background: 'var(--primary-500)', filter: 'blur(40px)', opacity: 0.05, animation: 'pulse 4s infinite' }} />
+                  <div style={{ position: 'absolute', inset: 0, borderRadius: '50%', background: 'var(--primary-500)', filter: 'blur(20px)', opacity: 0.015, animation: 'pulse 4s infinite' }} />
                   
                   {/* The AI Image Hologram Container */}
-                  <div className="ai-hologram-layer" style={{ zIndex: 1 }}>
-                     <img 
-                        src="/ai_hologram.png" 
-                        alt="AI Matrix Core" 
-                        style={{ width: '100%', borderRadius: '24px', position: 'relative', zIndex: 2 }} 
-                     />
-                     <div 
-                        style={{ 
-                           position: 'absolute', 
-                           inset: 0, 
-                           borderRadius: '24px', 
-                           zIndex: 3, 
-                           pointerEvents: 'none', 
-                           boxShadow: 'inset 0 0 60px 15px #0A0F1C' 
-                        }} 
-                     />
+                  <div className="ai-hologram-layer" style={{ zIndex: 1, display: 'flex', justifyContent: 'center' }}>
+                    <GlobeCanvas size={390} />
                   </div>
                 </div>
              </div>
@@ -1059,7 +1044,7 @@ export default function DataPulse({ user, onLogout }) {
                     }}
                   >
                     <div style={{ fontSize: '48px', color: 'var(--primary-500)', marginBottom: '16px', textShadow: '0 0 25px rgba(99,102,241,0.6)', transform: isDragOver ? 'scale(1.1)' : 'scale(1)', transition: 'transform 0.3s ease' }}>↑</div>
-                    <strong style={{ color: 'var(--text-main)', fontSize: '20px', fontFamily: "'Syne', sans-serif", display: 'block', marginBottom: '8px' }}>Select Data Engine</strong>
+                    <strong style={{ color: 'var(--text-main)', fontSize: '20px', fontFamily: "'Syne', sans-serif", display: 'block', marginBottom: '8px' }}>Select Data Set</strong>
                     <p className="caption" style={{ color: 'var(--text-muted)', fontSize: '13px', margin: 0 }}>Drag (.csv, .xlsx) anywhere to initialize</p>
                     <input ref={fileRef} type="file" accept=".csv,.xlsx,.xls" style={{ display: "none" }} onChange={(e) => onFile(e.target.files[0])} />
                   </div>
@@ -1068,14 +1053,38 @@ export default function DataPulse({ user, onLogout }) {
                {/* Metrics */}
                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '16px', marginTop: '8px' }}>
                   {[
-                    { title: "Neural Logic", desc: "Multi-agent orchestration.", icon: "◈" },
-                    { title: "Deep Viz", desc: "Automated vector sets.", icon: "⬢" },
-                    { title: "Secure Vault", desc: "End-to-end encryption.", icon: "⊛" }
+                    { 
+                      title: "Private & Secure", 
+                      desc: "Datasets are fully encrypted, instantly analyzed, and completely purged.", 
+                      icon: (
+                        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                          <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"></path>
+                        </svg>
+                      ) 
+                    },
+                    { 
+                      title: "Automated Insights", 
+                      desc: "Multi-agent profiling instantly uncovers core trends and outliers.", 
+                      icon: (
+                        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                          <polyline points="22 12 18 12 15 21 9 3 6 12 2 12"></polyline>
+                        </svg>
+                      ) 
+                    },
+                    { 
+                      title: "Dynamic Charts", 
+                      desc: "Interactive, sleek visualizations mapped directly from your schema.", 
+                      icon: (
+                        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                          <path d="M3 3v18h18"></path><path d="M18 17V9"></path><path d="M13 17V5"></path><path d="M8 17v-3"></path>
+                        </svg>
+                      ) 
+                    }
                   ].map((feat, i) => (
-                    <div key={feat.title} className="card" style={{ padding: '16px', textAlign: 'center', background: 'rgba(13, 18, 32, 0.25)', animation: `slideUp 0.8s cubic-bezier(0.2, 0.8, 0.2, 1) ${0.2 + i * 0.1}s both` }}>
-                      <div style={{ color: 'var(--primary-500)', fontSize: '18px', marginBottom: '8px' }}>{feat.icon}</div>
-                      <strong style={{ display: 'block', fontSize: '12px', color: 'var(--text-main)', marginBottom: '2px', textTransform: 'uppercase', letterSpacing: '1px' }}>{feat.title}</strong>
-                      <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>{feat.desc}</span>
+                    <div key={feat.title} className="card" style={{ padding: '18px 22px', textAlign: 'center', background: 'rgba(13, 18, 32, 0.4)', animation: `slideUp 0.8s cubic-bezier(0.2, 0.8, 0.2, 1) ${0.2 + i * 0.1}s both`, display: 'flex', flexDirection: 'column', alignItems: 'center' }}>
+                      <div style={{ color: 'var(--primary-500)', marginBottom: '10px', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>{feat.icon}</div>
+                      <strong style={{ display: 'block', fontSize: '13px', color: 'var(--text-main)', marginBottom: '4px', textTransform: 'uppercase', letterSpacing: '0.05em' }}>{feat.title}</strong>
+                      <span style={{ fontSize: '12px', color: 'var(--text-muted)', lineHeight: '1.4' }}>{feat.desc}</span>
                     </div>
                   ))}
                </div>
@@ -1103,14 +1112,20 @@ export default function DataPulse({ user, onLogout }) {
                   
                   {/* Agent Logs Component */}
                   <div style={{ width: '100%', background: 'rgba(13,18,32,0.8)', border: '1px solid var(--border-subtle)', borderRadius: '16px', padding: '24px', position: 'relative', overflow: 'hidden' }}>
-                    <div className="progress-container" style={{ marginBottom: '20px', height: '4px', background: 'rgba(255,255,255,0.05)' }}>
-                      <div className="progress-bar animate-pulse" style={{ width: '65%', background: 'linear-gradient(90deg, var(--primary-600), var(--info))' }} />
+                    <style>{`
+                      @keyframes progressScan {
+                        0% { transform: translateX(-100%); }
+                        100% { transform: translateX(200%); }
+                      }
+                    `}</style>
+                    <div className="progress-container" style={{ marginBottom: '20px', height: '4px', background: 'rgba(255,255,255,0.05)', borderRadius: '2px', overflow: 'hidden' }}>
+                      <div style={{ width: '50%', height: '100%', background: 'linear-gradient(90deg, transparent, var(--primary-600), var(--info), transparent)', animation: 'progressScan 1.5s infinite linear' }} />
                     </div>
                     
                     <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', minHeight: '60px', justifyContent: 'center' }}>
                       <span style={{ fontSize: '12px', color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '2px' }}>Active Agent Node</span>
                       <strong style={{ fontSize: '16px', color: 'var(--primary-500)', fontFamily: "'Outfit', monospace", textShadow: '0 0 10px rgba(99,102,241,0.3)' }}>
-                        {agentLog[agentLog.length - 1]?.msg || "Orchestrating Neural Paths..."}
+                        {agentLog[agentLog.length - 1] || "Initializing AI Agents..."}
                       </strong>
                     </div>
                   </div>
@@ -1286,7 +1301,7 @@ export default function DataPulse({ user, onLogout }) {
                    <div className="flex-col gap-24">
                      {headline && (
                        <div style={{ padding: '20px', background: 'rgba(99,102,241,0.05)', borderRadius: '12px', borderLeft: '4px solid var(--primary-500)' }}>
-                         <strong style={{ fontSize: '12px', color: 'var(--primary-500)', textTransform: 'uppercase', display: 'block', marginBottom: '8px', letterSpacing: '0.1em' }}>Executive Matrix</strong>
+                         <strong style={{ fontSize: '12px', color: 'var(--primary-500)', textTransform: 'uppercase', display: 'block', marginBottom: '8px', letterSpacing: '0.1em' }}>Executive Summary</strong>
                          <p style={{ fontSize: '15px', color: 'var(--text-main)' }}>{headline}</p>
                        </div>
                      )}
@@ -1294,15 +1309,15 @@ export default function DataPulse({ user, onLogout }) {
                        {keyMetrics.map(m => (
                          <div key={m.label} style={{ padding: '20px', border: '1px solid var(--border-subtle)', borderRadius: '12px', background: 'var(--bg-input)' }}>
                            <strong style={{ fontSize: '12px', color: 'var(--text-muted)', display: 'block', marginBottom: '8px', textTransform: 'uppercase', letterSpacing: '0.05em' }}>{m.label}</strong>
-                           <span style={{ fontSize: '28px', fontFamily: "'Syne', sans-serif", fontWeight: 800, color: 'var(--text-main)', textShadow: '0 0 15px rgba(255,255,255,0.1)' }}>{m.val}</span>
+                           <span style={{ fontSize: '32px', fontFamily: "'Inter', sans-serif", fontWeight: 700, color: 'var(--text-main)', textShadow: '0 0 15px rgba(255,255,255,0.1)' }}>{m.val}</span>
                          </div>
                        ))}
                      </div>
                      <div style={{ padding: '20px', background: 'var(--bg-input)', borderRadius: '12px', border: '1px solid var(--border-subtle)' }}>
                        <strong style={{ fontSize: '15px', display: 'block', marginBottom: '16px', color: 'var(--text-main)', fontFamily: "'Syne', sans-serif" }}>Data Info</strong>
-                       {findings.map((f, i) => (
+                       {(dataInfo.length ? dataInfo : findings).map((f, i) => (
                           <div key={i} style={{ fontSize: '15px', color: 'var(--text-muted)', marginBottom: '12px', display: 'flex', gap: '12px', alignItems: 'center' }}>
-                            <div style={{ width: '6px', height: '6px', background: 'var(--primary-500)', borderRadius: '50%', boxShadow: '0 0 10px var(--primary-500)' }} /> {f}
+                            <div style={{ width: '6px', height: '6px', background: 'var(--primary-500)', borderRadius: '50%', boxShadow: '0 0 10px var(--primary-500)', flexShrink: 0 }} /> {f}
                           </div>
                         ))}
                      </div>
@@ -1316,15 +1331,15 @@ export default function DataPulse({ user, onLogout }) {
                     <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '16px' }}>
                       <div style={{ padding: '18px', borderRadius: '12px', border: '1px solid var(--border-subtle)', background: 'var(--bg-input)' }}>
                         <strong style={{ fontSize: '12px', color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.08em' }}>Strong Correlations</strong>
-                        <div style={{ marginTop: '8px', fontSize: '26px', color: 'var(--text-main)', fontFamily: "'Syne', sans-serif" }}>{(stats?.strong_correlations || []).length}</div>
+                        <div style={{ marginTop: '8px', fontSize: '28px', fontWeight: 700, color: 'var(--text-main)', fontFamily: "'Inter', sans-serif" }}>{(stats?.strong_correlations || []).length}</div>
                       </div>
                       <div style={{ padding: '18px', borderRadius: '12px', border: '1px solid var(--border-subtle)', background: 'var(--bg-input)' }}>
                         <strong style={{ fontSize: '12px', color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.08em' }}>Columns With Outliers</strong>
-                        <div style={{ marginTop: '8px', fontSize: '26px', color: 'var(--text-main)', fontFamily: "'Syne', sans-serif" }}>{outlierCols.length}</div>
+                        <div style={{ marginTop: '8px', fontSize: '28px', fontWeight: 700, color: 'var(--text-main)', fontFamily: "'Inter', sans-serif" }}>{outlierCols.length}</div>
                       </div>
                       <div style={{ padding: '18px', borderRadius: '12px', border: '1px solid var(--border-subtle)', background: 'var(--bg-input)' }}>
                         <strong style={{ fontSize: '12px', color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.08em' }}>Data Completeness</strong>
-                        <div style={{ marginTop: '8px', fontSize: '26px', color: 'var(--text-main)', fontFamily: "'Syne', sans-serif" }}>{formatPercent(dq.completeness || 100)}</div>
+                        <div style={{ marginTop: '8px', fontSize: '28px', fontWeight: 700, color: 'var(--text-main)', fontFamily: "'Inter', sans-serif" }}>{formatPercent(dq.completeness || 100)}</div>
                       </div>
                     </div>
 
@@ -1332,18 +1347,9 @@ export default function DataPulse({ user, onLogout }) {
                       <strong style={{ fontSize: '15px', display: 'block', marginBottom: '14px', color: 'var(--text-main)', fontFamily: "'Syne', sans-serif" }}>Key Insights</strong>
                       {findings.length ? findings.map((f, i) => (
                         <div key={`ins-${i}`} style={{ fontSize: '14px', color: 'var(--text-muted)', marginBottom: '10px', display: 'flex', gap: '10px', lineHeight: 1.5 }}>
-                          <span style={{ color: 'var(--info)' }}>•</span>{f}
+                          <span style={{ color: 'var(--info)', flexShrink: 0 }}>•</span>{f}
                         </div>
                       )) : <div style={{ fontSize: '14px', color: 'var(--text-muted)' }}>No insights available for this dataset.</div>}
-                    </div>
-
-                    <div style={{ padding: '20px', background: 'var(--bg-input)', borderRadius: '12px', border: '1px solid var(--border-subtle)' }}>
-                      <strong style={{ fontSize: '15px', display: 'block', marginBottom: '14px', color: 'var(--text-main)', fontFamily: "'Syne', sans-serif" }}>Recommended Actions</strong>
-                      {recommendations.length ? recommendations.map((r, i) => (
-                        <div key={`rec-${i}`} style={{ fontSize: '14px', color: 'var(--text-muted)', marginBottom: '10px', display: 'flex', gap: '10px', lineHeight: 1.5 }}>
-                          <span style={{ color: 'var(--primary-500)' }}>⇥</span>{r}
-                        </div>
-                      )) : <div style={{ fontSize: '14px', color: 'var(--text-muted)' }}>No recommendations were generated.</div>}
                     </div>
                   </div>
                 )}

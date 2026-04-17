@@ -410,7 +410,6 @@ export default function Login({ onLogin }) {
               cursor: 'pointer', fontSize: '13px', textTransform: 'uppercase', letterSpacing: '0.08em'
             }} 
             onClick={() => { 
-                console.log("Switching to register tab...");
                 setTab("register"); 
                 navigate("/register", { replace: true }); 
             }}

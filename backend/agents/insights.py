@@ -13,10 +13,7 @@ logger = logging.getLogger(__name__)
 def _build_llm_prompt(stats: dict) -> str:
     payload_json = json.dumps(stats, ensure_ascii=True)
     return "\n".join([
-        "You are an Expert Data Analyst.",
-        "Produce human-readable, conversational insights drawn from the real data.",
-        "Write in natural, easy-to-understand English but freely use technical/statistical terms (e.g. standard deviation, variance, strong correlation) to justify the conclusions.",
-        "Crucial: Give actual facts about the subjects in the data (e.g., '70% of professionals use X', 'Revenue peaks significantly when Y occurs, driven by a strong correlation of Z').",
+        "You are an Expert Data Analyst. Respond in plain, simple English.",
         "Treat the payload as the truth about a real-world domain.",
         "",
         "Dataset payload (JSON):",
@@ -24,12 +21,13 @@ def _build_llm_prompt(stats: dict) -> str:
         "",
         "Respond with ONLY valid JSON (no markdown, no explanation):",
         "{",
-        '  "headline": "One powerful final conclusion drawn from the data.",',
-        '  "findings": ["5-8 specific, real-world facts backed by numbers (e.g., Most common category X makes up 45% of the data, Average Y is profoundly correlated with Z)"],',
-        '  "recommendations": ["3-5 actionable domain/business recommendations based on what the data shows"],',
-        '  "risk_flags": ["any major alarming trends found in the subjects/data values (not metadata issues)"]',
+        '  "headline": "One powerful conclusion drawn from the data in one sentence.",',
+        '  "data_info": ["3-5 factual statements about WHAT this dataset is: its structure, columns, types, size, completeness, and what domain/subject it covers. Plain language, no analysis."],',
+        '  "findings": ["5-8 conclusions and patterns DRAWN from the data: correlations, distributions, dominant categories, outlier patterns, trends. Each must be a specific, number-backed observation in plain language."]',
         "}",
     ])
+
+
 
 
 def _llm_insights(stats: dict) -> Optional[dict]:
@@ -79,58 +77,46 @@ def _rule_based_insights(stats: dict) -> dict:
     outliers = stats.get("outliers", {})
     correlations = stats.get("strong_correlations", [])
     dq = stats.get("data_quality", {})
+    profile = stats.get("dataset_profile", {})
 
-    findings = [
-        f"Dataset contains {stats.get('row_count', 0)} rows and "
-        f"{stats.get('column_count', 0)} columns",
+    # data_info: structural facts about what the dataset IS
+    data_info = [
+        f"This dataset contains {stats.get('row_count', 0):,} rows and {stats.get('column_count', 0)} columns.",
     ]
-
-    completeness = dq.get("completeness", 100)
-    if completeness < 100:
-        findings.append(
-            f"Data completeness is {completeness:.2f}% with "
-            f"{dq.get('missing_cells', 0)} missing values"
-        )
-
+    if profile.get("label"):
+        data_info.append(f"Dataset type: {profile['label']}." + (f" Domain: {profile['domain']}." if profile.get('domain') else ""))
     if numeric_cols:
-        findings.append(
-            f"Identified {len(numeric_cols)} numeric columns: "
-            f"{', '.join(numeric_cols[:5])}"
-        )
-
+        data_info.append(f"Numeric columns ({len(numeric_cols)}): {', '.join(numeric_cols[:6])}{'...' if len(numeric_cols) > 6 else ''}.")
     if categorical_cols:
-        findings.append(
-            f"Identified {len(categorical_cols)} categorical columns: "
-            f"{', '.join(categorical_cols[:5])}"
-        )
+        data_info.append(f"Categorical columns ({len(categorical_cols)}): {', '.join(categorical_cols[:6])}{'...' if len(categorical_cols) > 6 else ''}.")
+    completeness = dq.get("completeness", 100)
+    data_info.append(f"Data completeness is {completeness:.1f}% with {dq.get('missing_cells', 0)} missing values.")
 
+    # findings: what can be drawn/concluded from the data
+    findings = []
     if outliers:
-        findings.append(
-            f"Detected outliers in {len(outliers)} columns: "
-            f"{', '.join(outliers.keys())}"
-        )
-
+        findings.append(f"Outliers detected in {len(outliers)} column(s): {', '.join(list(outliers.keys())[:4])}.")
     if correlations:
+        best = correlations[0]
         findings.append(
-            f"Found {len(correlations)} strong correlations between variables"
+            f"Strongest correlation: {best['col1']} and {best['col2']} (r={best['correlation']:.2f})."
         )
-
-    recommendations = [
-        "Perform exploratory data analysis to understand distributions",
-        "Segment data by categorical variables and analyze subgroups",
-        "Consider feature engineering based on domain knowledge",
-    ]
-    if completeness < 95:
-        recommendations.insert(0, "Investigate missing data patterns")
-    if outliers:
-        recommendations.insert(0, "Review and decide on outlier handling")
+        if len(correlations) > 1:
+            findings.append(f"{len(correlations)} strong variable relationships found overall.")
+    cat_stats = stats.get("categorical_columns", {})
+    for col, info in list(cat_stats.items())[:2]:
+        if info.get("most_common"):
+            pct = round(info.get("most_common_count", 0) / max(stats.get("row_count", 1), 1) * 100, 1)
+            findings.append(f"In '{col}', the most common value is '{info['most_common']}' ({pct}% of rows).")
+    if not findings:
+        findings.append("No strong patterns detected — the dataset may need more varied data for richer insights.")
 
     return {
         "headline": "",
+        "data_info": data_info,
         "findings": findings,
-        "recommendations": recommendations,
-        "risk_flags": [],
     }
+
 
 
 def _computed_insights(stats: dict) -> dict:
@@ -183,9 +169,8 @@ def insights_agent(state: AnalysisState) -> AnalysisState:
         if llm_result:
             insights = {
                 "headline": llm_result.get("headline"),
+                "data_info": llm_result.get("data_info", []),
                 "findings": llm_result.get("findings", []),
-                "recommendations": llm_result.get("recommendations", []),
-                "risk_flags": llm_result.get("risk_flags", []),
             }
         else:
             insights = _rule_based_insights(stats)
@@ -194,9 +179,9 @@ def insights_agent(state: AnalysisState) -> AnalysisState:
 
         state.insights = insights
         logger.info(
-            "Insights complete. %d findings, %d recommendations (LLM=%s)",
+            "Insights complete. %d data_info, %d findings (LLM=%s)",
+            len(insights.get("data_info", [])),
             len(insights.get("findings", [])),
-            len(insights.get("recommendations", [])),
             llm_result is not None,
         )
 
@@ -212,3 +197,4 @@ def insights_agent(state: AnalysisState) -> AnalysisState:
 
     state.completed_agents.append("insights")
     return state
+

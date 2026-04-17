@@ -52,10 +52,10 @@ def _classify_columns(df: pd.DataFrame) -> dict:
             first_val = df[col].dropna().unique()[0] if nunique == 1 else "N/A"
             reason = f"constant (only value: {first_val!r})"
         elif nunique >= 2:
-            top_freq = df[col].value_counts(dropna=True).iloc[0] / n
+            vc = df[col].value_counts(dropna=True)   # computed once, reused below
+            top_freq = vc.iloc[0] / n
             if top_freq >= _QUASI_CONST_THRESHOLD:
-                top_val = df[col].value_counts(dropna=True).index[0]
-                reason = f"quasi_constant ({top_freq:.0%} = {top_val!r})"
+                reason = f"quasi_constant ({top_freq:.0%} = {vc.index[0]!r})"
 
         # 3. High-cardinality ID column (name matches ID pattern + very high uniqueness)
         if reason is None and df[col].dtype == "object" and n > 0:
@@ -63,9 +63,9 @@ def _classify_columns(df: pd.DataFrame) -> dict:
                     and any(p in col_lower for p in _ID_PATTERNS)):
                 reason = f"high_cardinality_id ({nunique} unique / {n} rows)"
 
-        # 4. Free-text column (open-ended survey answers, comments, descriptions)
+        # 4. Free-text column — sample 200 rows to avoid full-series .str.len()
         if reason is None and df[col].dtype == "object" and nunique > 0:
-            non_null = df[col].dropna()
+            non_null = df[col].dropna().head(200)
             avg_len = non_null.astype(str).str.len().mean() if len(non_null) > 0 else 0
             if avg_len > _FREE_TEXT_AVG_LEN and nunique / max(n, 1) > _FREE_TEXT_CARDINALITY:
                 reason = f"free_text (avg_len={avg_len:.0f}, {nunique} unique)"
