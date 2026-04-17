@@ -314,7 +314,6 @@ function ChartFlipCard({
 
           {/* Chart type badge */}
           <div className="chart-back-badge">
-            <span style={{ fontSize: '13px' }}>📊</span>
             {chartType}
           </div>
 
@@ -998,7 +997,7 @@ export default function DataPulse({ user, onLogout }) {
              <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center' }}>
                <div style={{ position: 'relative', width: '100%', maxWidth: '390px' }}>
                   {/* Outer pulse ring */}
-                  <div style={{ position: 'absolute', inset: 0, borderRadius: '50%', background: 'var(--primary-500)', filter: 'blur(40px)', opacity: 0.05, animation: 'pulse 4s infinite' }} />
+                  <div style={{ position: 'absolute', inset: 0, borderRadius: '50%', background: 'var(--primary-500)', filter: 'blur(20px)', opacity: 0.015, animation: 'pulse 4s infinite' }} />
                   
                   {/* The AI Image Hologram Container */}
                   <div className="ai-hologram-layer" style={{ zIndex: 1, display: 'flex', justifyContent: 'center' }}>
@@ -1090,14 +1089,20 @@ export default function DataPulse({ user, onLogout }) {
                   
                   {/* Agent Logs Component */}
                   <div style={{ width: '100%', background: 'rgba(13,18,32,0.8)', border: '1px solid var(--border-subtle)', borderRadius: '16px', padding: '24px', position: 'relative', overflow: 'hidden' }}>
-                    <div className="progress-container" style={{ marginBottom: '20px', height: '4px', background: 'rgba(255,255,255,0.05)' }}>
-                      <div className="progress-bar animate-pulse" style={{ width: '65%', background: 'linear-gradient(90deg, var(--primary-600), var(--info))' }} />
+                    <style>{`
+                      @keyframes progressScan {
+                        0% { transform: translateX(-100%); }
+                        100% { transform: translateX(200%); }
+                      }
+                    `}</style>
+                    <div className="progress-container" style={{ marginBottom: '20px', height: '4px', background: 'rgba(255,255,255,0.05)', borderRadius: '2px', overflow: 'hidden' }}>
+                      <div style={{ width: '50%', height: '100%', background: 'linear-gradient(90deg, transparent, var(--primary-600), var(--info), transparent)', animation: 'progressScan 1.5s infinite linear' }} />
                     </div>
                     
                     <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', minHeight: '60px', justifyContent: 'center' }}>
                       <span style={{ fontSize: '12px', color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '2px' }}>Active Agent Node</span>
                       <strong style={{ fontSize: '16px', color: 'var(--primary-500)', fontFamily: "'Outfit', monospace", textShadow: '0 0 10px rgba(99,102,241,0.3)' }}>
-                        {agentLog[agentLog.length - 1]?.msg || "Orchestrating Neural Paths..."}
+                        {agentLog[agentLog.length - 1] || "Initializing AI Agents..."}
                       </strong>
                     </div>
                   </div>
@@ -1273,7 +1278,7 @@ export default function DataPulse({ user, onLogout }) {
                    <div className="flex-col gap-24">
                      {headline && (
                        <div style={{ padding: '20px', background: 'rgba(99,102,241,0.05)', borderRadius: '12px', borderLeft: '4px solid var(--primary-500)' }}>
-                         <strong style={{ fontSize: '12px', color: 'var(--primary-500)', textTransform: 'uppercase', display: 'block', marginBottom: '8px', letterSpacing: '0.1em' }}>Executive Matrix</strong>
+                         <strong style={{ fontSize: '12px', color: 'var(--primary-500)', textTransform: 'uppercase', display: 'block', marginBottom: '8px', letterSpacing: '0.1em' }}>Executive Summary</strong>
                          <p style={{ fontSize: '15px', color: 'var(--text-main)' }}>{headline}</p>
                        </div>
                      )}
@@ -1281,7 +1286,7 @@ export default function DataPulse({ user, onLogout }) {
                        {keyMetrics.map(m => (
                          <div key={m.label} style={{ padding: '20px', border: '1px solid var(--border-subtle)', borderRadius: '12px', background: 'var(--bg-input)' }}>
                            <strong style={{ fontSize: '12px', color: 'var(--text-muted)', display: 'block', marginBottom: '8px', textTransform: 'uppercase', letterSpacing: '0.05em' }}>{m.label}</strong>
-                           <span style={{ fontSize: '28px', fontFamily: "'Syne', sans-serif", fontWeight: 800, color: 'var(--text-main)', textShadow: '0 0 15px rgba(255,255,255,0.1)' }}>{m.val}</span>
+                           <span style={{ fontSize: '32px', fontFamily: "'Inter', sans-serif", fontWeight: 700, color: 'var(--text-main)', textShadow: '0 0 15px rgba(255,255,255,0.1)' }}>{m.val}</span>
                          </div>
                        ))}
                      </div>
@@ -1303,15 +1308,15 @@ export default function DataPulse({ user, onLogout }) {
                     <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '16px' }}>
                       <div style={{ padding: '18px', borderRadius: '12px', border: '1px solid var(--border-subtle)', background: 'var(--bg-input)' }}>
                         <strong style={{ fontSize: '12px', color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.08em' }}>Strong Correlations</strong>
-                        <div style={{ marginTop: '8px', fontSize: '26px', color: 'var(--text-main)', fontFamily: "'Syne', sans-serif" }}>{(stats?.strong_correlations || []).length}</div>
+                        <div style={{ marginTop: '8px', fontSize: '28px', fontWeight: 700, color: 'var(--text-main)', fontFamily: "'Inter', sans-serif" }}>{(stats?.strong_correlations || []).length}</div>
                       </div>
                       <div style={{ padding: '18px', borderRadius: '12px', border: '1px solid var(--border-subtle)', background: 'var(--bg-input)' }}>
                         <strong style={{ fontSize: '12px', color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.08em' }}>Columns With Outliers</strong>
-                        <div style={{ marginTop: '8px', fontSize: '26px', color: 'var(--text-main)', fontFamily: "'Syne', sans-serif" }}>{outlierCols.length}</div>
+                        <div style={{ marginTop: '8px', fontSize: '28px', fontWeight: 700, color: 'var(--text-main)', fontFamily: "'Inter', sans-serif" }}>{outlierCols.length}</div>
                       </div>
                       <div style={{ padding: '18px', borderRadius: '12px', border: '1px solid var(--border-subtle)', background: 'var(--bg-input)' }}>
                         <strong style={{ fontSize: '12px', color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.08em' }}>Data Completeness</strong>
-                        <div style={{ marginTop: '8px', fontSize: '26px', color: 'var(--text-main)', fontFamily: "'Syne', sans-serif" }}>{formatPercent(dq.completeness || 100)}</div>
+                        <div style={{ marginTop: '8px', fontSize: '28px', fontWeight: 700, color: 'var(--text-main)', fontFamily: "'Inter', sans-serif" }}>{formatPercent(dq.completeness || 100)}</div>
                       </div>
                     </div>
 

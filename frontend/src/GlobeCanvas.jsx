@@ -121,8 +121,8 @@ export default function GlobeCanvas({ size = 390 }) {
 
     // Cache gradient objects — never recreate each frame
     const bgGrad = ctx.createRadialGradient(cx, cy, baseRadius, cx, cy, baseRadius * 1.06);
-    bgGrad.addColorStop(0, "rgba(40,150,255,0.15)");
-    bgGrad.addColorStop(0.5, "rgba(40,150,255,0.04)");
+    bgGrad.addColorStop(0, "rgba(40,150,255,0.075)");
+    bgGrad.addColorStop(0.5, "rgba(40,150,255,0.02)");
     bgGrad.addColorStop(1, "rgba(0,0,0,0)");
 
     const sphereGrad = ctx.createRadialGradient(cx, cy, baseRadius * 0.85, cx, cy, baseRadius);
@@ -210,37 +210,41 @@ export default function GlobeCanvas({ size = 390 }) {
       ctx.stroke();
       ctx.setLineDash([]);
 
-      const t = Math.max(0, Math.min(1, arc.t));
-      if (arc.t >= 0 && arc.t <= 1) {
-        const bx = (1 - t) * (1 - t) * p1x + 2 * (1 - t) * t * cpx + t * t * p2x;
-        const by = (1 - t) * (1 - t) * p1y + 2 * (1 - t) * t * cpy + t * t * p2y;
+      const tLen = 0.16;
+      if (arc.t >= 0 && arc.t <= 1 + tLen) {
+        const t = Math.max(0, Math.min(1, arc.t));
+        const t0 = Math.max(0, Math.min(1, arc.t - tLen));
 
-        const tLen = 0.16;
-        const t0 = Math.max(0, t - tLen);
-        ctx.beginPath();
-        let first = true;
-        for (let s = t0; s <= t; s += 0.012) {
-          const tx = (1 - s) * (1 - s) * p1x + 2 * (1 - s) * s * cpx + s * s * p2x;
-          const ty = (1 - s) * (1 - s) * p1y + 2 * (1 - s) * s * cpy + s * s * p2y;
-          if (first) {
-            ctx.moveTo(tx, ty);
-            first = false;
-          } else {
-            ctx.lineTo(tx, ty);
+        if (t0 < 1) {
+          ctx.beginPath();
+          let first = true;
+          for (let s = t0; s <= t; s += 0.012) {
+            const tx = (1 - s) * (1 - s) * p1x + 2 * (1 - s) * s * cpx + s * s * p2x;
+            const ty = (1 - s) * (1 - s) * p1y + 2 * (1 - s) * s * cpy + s * s * p2y;
+            if (first) {
+              ctx.moveTo(tx, ty);
+              first = false;
+            } else {
+              ctx.lineTo(tx, ty);
+            }
           }
+          ctx.strokeStyle = `${arc.color}b2`;
+          ctx.lineWidth = 1.2;
+          ctx.stroke();
         }
-        ctx.strokeStyle = `${arc.color}b2`;
-        ctx.lineWidth = 1.2;
-        ctx.stroke();
 
-        ctx.beginPath();
-        ctx.arc(bx, by, 5, 0, Math.PI * 2);
-        ctx.fillStyle = `${arc.color}18`;
-        ctx.fill();
-        ctx.beginPath();
-        ctx.arc(bx, by, 2.7, 0, Math.PI * 2);
-        ctx.fillStyle = `${arc.color}5a`;
-        ctx.fill();
+        if (arc.t <= 1) {
+          const bx = (1 - t) * (1 - t) * p1x + 2 * (1 - t) * t * cpx + t * t * p2x;
+          const by = (1 - t) * (1 - t) * p1y + 2 * (1 - t) * t * cpy + t * t * p2y;
+          ctx.beginPath();
+          ctx.arc(bx, by, 5, 0, Math.PI * 2);
+          ctx.fillStyle = `${arc.color}18`;
+          ctx.fill();
+          ctx.beginPath();
+          ctx.arc(bx, by, 2.7, 0, Math.PI * 2);
+          ctx.fillStyle = `${arc.color}5a`;
+          ctx.fill();
+        }
       }
       ctx.restore();
     }
@@ -307,7 +311,7 @@ export default function GlobeCanvas({ size = 390 }) {
     function animate() {
       if (!state.dragging) {
         if (state.autoRotate) {
-          state.rotY += 0.0035;
+          state.rotY += 0.007;
         } else {
           state.velY *= 0.9;
           state.velX *= 0.9;
@@ -386,11 +390,7 @@ export default function GlobeCanvas({ size = 390 }) {
       e.stopPropagation();
     };
 
-    canvas.addEventListener("pointerdown", onPointerDown);
-    window.addEventListener("pointermove", onPointerMove);
-    window.addEventListener("pointerup", onPointerUp);
-    window.addEventListener("pointercancel", onPointerCancel);
-    canvas.addEventListener("wheel", onWheel, { passive: false });
+    // Interaction disabled
 
     animate();
 
@@ -398,13 +398,8 @@ export default function GlobeCanvas({ size = 390 }) {
       clearTimeout(fadeTimer);
       cancelAnimationFrame(state.rafId);
       if (state.generationRaf) cancelAnimationFrame(state.generationRaf);
-      canvas.removeEventListener("pointerdown", onPointerDown);
-      window.removeEventListener("pointermove", onPointerMove);
-      window.removeEventListener("pointerup", onPointerUp);
-      window.removeEventListener("pointercancel", onPointerCancel);
-      canvas.removeEventListener("wheel", onWheel);
     };
   }, [size]);
 
-  return <canvas ref={canvasRef} style={{ cursor: "grab", display: "block", borderRadius: "50%", touchAction: "none", userSelect: "none", opacity: loaded ? 1 : 0, transition: "opacity 0.4s ease-in-out" }} />;
+  return <canvas ref={canvasRef} style={{ display: "block", borderRadius: "50%", touchAction: "none", userSelect: "none", opacity: loaded ? 1 : 0, transition: "opacity 0.4s ease-in-out" }} />;
 }
