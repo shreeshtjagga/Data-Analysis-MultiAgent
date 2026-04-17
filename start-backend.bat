@@ -39,7 +39,7 @@ REM Dependencies
 echo  [2/3] Updating dependencies...
 python -m pip install --upgrade pip --quiet
 python -m pip install greenlet==3.1.1 --prefer-binary --quiet
-python -m pip install -r requirements.txt --prefer-binary
+python -m pip install -r backend\requirements.txt --prefer-binary
 echo        Dependencies ready.
 
 REM Start FastAPI with live console logs

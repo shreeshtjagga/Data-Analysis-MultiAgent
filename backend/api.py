@@ -141,6 +141,14 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+@app.middleware("http")
+async def add_security_headers(request: Request, call_next):
+    response = await call_next(request)
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    response.headers["X-Frame-Options"] = "DENY"
+    response.headers["X-XSS-Protection"] = "1; mode=block"
+    return response
+
 @app.exception_handler(Exception)
 async def catch_all_exception_handler(request: Request, exc: Exception):
     error_trace = "".join(traceback.format_exception(type(exc), exc, exc.__traceback__))
@@ -170,6 +178,31 @@ async def get_current_user_id(
     return int(payload["sub"])
 
 
+async def check_ip_rate_limit(request: Request):
+    client_ip = request.client.host if request.client else "unknown"
+    key = f"ratelimit:ip:{client_ip}"
+    try:
+        count = await redis_cache.increment_with_ttl(key, 60)
+        if count > 5:
+            raise HTTPException(status_code=429, detail="Too many requests from this IP. Please try again in a minute.")
+    except Exception as exc:
+        if isinstance(exc, HTTPException):
+            raise exc
+        logger.warning(f"Rate limiting failed for {key}: {exc}")
+
+async def check_user_rate_limit(user_id: int = Depends(get_current_user_id)):
+    key = f"ratelimit:user_analyze:{user_id}"
+    try:
+        count = await redis_cache.increment_with_ttl(key, 60)
+        if count > 5:
+            raise HTTPException(status_code=429, detail="Too many analysis requests. Please try again in a minute.")
+    except Exception as exc:
+        if isinstance(exc, HTTPException):
+            raise exc
+        logger.warning(f"Rate limiting failed for {key}: {exc}")
+
+
+
 
 
 @app.get("/health", response_model=HealthResponse, tags=["system"])
@@ -193,7 +226,7 @@ async def health_check(db: AsyncSession = Depends(get_db)):
 
 
 
-@app.post("/auth/register", response_model=AuthResponse, status_code=status.HTTP_201_CREATED, tags=["auth"])
+@app.post("/auth/register", response_model=AuthResponse, status_code=status.HTTP_201_CREATED, tags=["auth"], dependencies=[Depends(check_ip_rate_limit)])
 async def register(body: UserRegister, db: AsyncSession = Depends(get_db)):
     result = await register_user(db, body.email, body.password, body.name)
     if not result["success"]:
@@ -201,7 +234,7 @@ async def register(body: UserRegister, db: AsyncSession = Depends(get_db)):
     return AuthResponse(success=True, message=result["message"])
 
 
-@app.post("/auth/login", response_model=TokenResponse, tags=["auth"])
+@app.post("/auth/login", response_model=TokenResponse, tags=["auth"], dependencies=[Depends(check_ip_rate_limit)])
 async def login(body: UserLogin, db: AsyncSession = Depends(get_db), response: Response = None):
     result = await login_user(db, body.email, body.password)
     if not result["success"]:
@@ -239,7 +272,7 @@ async def login(body: UserLogin, db: AsyncSession = Depends(get_db), response: R
     )
 
 
-@app.post("/auth/forgot-password", response_model=ForgotPasswordResponse, tags=["auth"])
+@app.post("/auth/forgot-password", response_model=ForgotPasswordResponse, tags=["auth"], dependencies=[Depends(check_ip_rate_limit)])
 async def forgot_password(body: ForgotPasswordRequest, db: AsyncSession = Depends(get_db)):
     result = await request_password_reset(db, body.email)
     return ForgotPasswordResponse(
@@ -249,7 +282,7 @@ async def forgot_password(body: ForgotPasswordRequest, db: AsyncSession = Depend
     )
 
 
-@app.post("/auth/reset-password", response_model=AuthResponse, tags=["auth"])
+@app.post("/auth/reset-password", response_model=AuthResponse, tags=["auth"], dependencies=[Depends(check_ip_rate_limit)])
 async def reset_password(body: ResetPasswordRequest, db: AsyncSession = Depends(get_db)):
     result = await reset_password_with_token(db, body.token, body.new_password)
     if not result.get("success"):
@@ -381,7 +414,7 @@ async def me(
 
 
 
-@app.post("/analyze", tags=["analysis"])
+@app.post("/analyze", tags=["analysis"], dependencies=[Depends(check_user_rate_limit)])
 async def analyze(
     file: UploadFile = File(...),
     user_id: int = Depends(get_current_user_id),
