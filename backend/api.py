@@ -11,6 +11,7 @@ from typing import Annotated
 import pandas as pd
 from fastapi import Depends, FastAPI, File, HTTPException, UploadFile, status, Request, Response, Query
 from fastapi.responses import JSONResponse
+from fastapi.middleware.gzip import GZipMiddleware
 import traceback
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
@@ -102,7 +103,6 @@ origins = [o.strip() for o in _raw_origins.split(",") if o.strip()]
 async def lifespan(app: FastAPI):
     logger.info("Starting DataPulse API v2 (pipeline %s)", PIPELINE_VERSION)
 
-
     if not os.getenv("GROQ_API_KEY"):
         raise RuntimeError(
             "GROQ_API_KEY environment variable is not set. "
@@ -118,7 +118,27 @@ async def lifespan(app: FastAPI):
             "Google OAuth Client ID mismatch between backend and frontend configuration"
         )
 
+    # ── Eagerly warm up connections so first request is instant ──────────────
     await init_db()
+
+    # Warm DB pool: open one real connection now so asyncpg doesn't cold-start
+    try:
+        from sqlalchemy import text
+        from .db import engine
+        async with engine.connect() as conn:
+            await conn.execute(text("SELECT 1"))
+        logger.info("DB connection pool warmed up")
+    except Exception as exc:
+        logger.warning("DB warmup failed (non-fatal): %s", exc)
+
+    # Warm Redis: open the connection now instead of on first request
+    try:
+        redis_ok = await redis_cache.ping()
+        logger.info("Redis warmed up (reachable=%s)", redis_ok)
+    except Exception as exc:
+        logger.warning("Redis warmup failed (non-fatal): %s", exc)
+    # ─────────────────────────────────────────────────────────────────────────
+
     yield
     await redis_cache.close()
     logger.info("DataPulse API shutdown complete")
@@ -133,6 +153,7 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
+app.add_middleware(GZipMiddleware, minimum_size=1024)  # compress responses > 1KB
 app.add_middleware(
     CORSMiddleware,
     allow_origins=origins,
