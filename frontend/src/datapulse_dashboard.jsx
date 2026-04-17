@@ -4,6 +4,7 @@ import { apiAnalyze, apiChat, apiHistory, apiHistoryAnalysis, apiDeleteAnalysis 
 import ParticleBackground from "./ParticleBackground.jsx";
 import GlobeCanvas from "./GlobeCanvas.jsx";
 
+
 const PALETTE = ["#6366f1", "#10b981", "#f59e0b", "#06b6d4", "#ef4444", "#a855f7", "#34d399", "#f472b6"];
 
 const PLOTLY_DARK_LAYOUT = {
@@ -23,7 +24,12 @@ const PLOTLY_DARK_LAYOUT = {
   margin: { l: 40, r: 20, t: 40, b: 30 },
 };
 
-const PLOTLY_CONFIG = { responsive: true, displayModeBar: false, displaylogo: false, modeBarButtonsToRemove: ["lasso2d", "select2d", "toggleSpikelines"] };
+const PLOTLY_CONFIG = {
+  responsive: true,
+  displayModeBar: "hover",
+  displaylogo: false,
+  modeBarButtons: [["zoomIn2d", "zoomOut2d", "resetScale2d"]]
+};
 
 function truncateLabel(value, max = 26) {
   const text = String(value ?? "").trim();
@@ -73,7 +79,7 @@ function getLegendConfig(traceCount, isMatrix) {
   if (isMatrix || traceCount <= 1) {
     return { showlegend: false, legend: {}, legendRows: 0 };
   }
-  
+
   const legendRows = Math.max(1, Math.ceil(traceCount / 4));
   const legendYOffset = -0.14 - ((legendRows - 1) * 0.11);
 
@@ -100,252 +106,6 @@ function shouldHideLegend(data, traceCount) {
   return false;
 }
 
-// ─── Chart info helpers ────────────────────────────────────────────────────
-
-function inferChartType(key, traces) {
-  const k = key.toLowerCase();
-  const primaryType = (traces[0]?.type || "").toLowerCase();
-
-  if (k.includes("scatter_matrix") || k.includes("splom")) return "Scatter Matrix";
-  if (k.includes("heatmap") || primaryType === "heatmap") return "Heatmap";
-  if (k.includes("timeseries") || k.includes("time_series")) return "Time Series";
-  if (k.includes("line") || primaryType === "scatter") return "Line Chart";
-  if (k.includes("bar") || primaryType === "bar") return "Bar Chart";
-  if (k.includes("pie") || primaryType === "pie") return "Pie Chart";
-  if (k.includes("donut") || (primaryType === "pie" && traces[0]?.hole > 0)) return "Donut Chart";
-  if (k.includes("histogram") || primaryType === "histogram") return "Histogram";
-  if (k.includes("box") || primaryType === "box") return "Box Plot";
-  if (k.includes("violin") || primaryType === "violin") return "Violin Plot";
-  if (k.includes("scatter") || primaryType === "scatter") return "Scatter Plot";
-  if (k.includes("funnel") || primaryType === "funnel") return "Funnel Chart";
-  if (k.includes("treemap") || primaryType === "treemap") return "Treemap";
-  if (k.includes("sunburst") || primaryType === "sunburst") return "Sunburst Chart";
-  if (primaryType) return primaryType.charAt(0).toUpperCase() + primaryType.slice(1) + " Chart";
-  return "Chart";
-}
-
-const CHART_TYPE_DESCRIPTIONS = {
-  "Scatter Matrix":  "Displays pairwise relationships between multiple numeric variables simultaneously, making it easy to spot correlations and clusters across the full dataset.",
-  "Heatmap":         "Uses color intensity to encode values across a two-dimensional grid, revealing patterns, correlations, or concentrations at a glance.",
-  "Time Series":     "Plots data points over a continuous time axis to reveal trends, seasonality, anomalies, and long-term momentum in time-ordered data.",
-  "Line Chart":      "Connects data points with lines to illustrate trends and changes across a continuous axis, ideal for comparing trajectories over time or categories.",
-  "Bar Chart":       "Compares discrete categories using rectangular bars, making it straightforward to rank, compare magnitudes, or track grouped values.",
-  "Pie Chart":       "Shows the proportional share of each category as a slice of the whole, emphasizing part-to-whole relationships.",
-  "Donut Chart":     "Like a pie chart but with a hollow center — ideal for highlighting individual segment proportions while keeping the design clean.",
-  "Histogram":       "Groups continuous numeric values into bins to reveal the underlying frequency distribution, shape, spread, and skewness of the data.",
-  "Box Plot":        "Summarises the distribution of a variable via its median, quartiles, and outliers, letting you compare spread and skewness across groups.",
-  "Violin Plot":     "Combines a box plot with a probability density curve to show the full distribution shape, including multi-modality.",
-  "Scatter Plot":    "Plots individual data points on two axes to reveal correlations, clusters, and outliers between two numeric variables.",
-  "Funnel Chart":    "Tracks the progressive reduction of data through stages, commonly used for conversion or pipeline analysis.",
-  "Treemap":         "Encodes hierarchical data as nested rectangles sized by value, making it easy to compare proportions within categories.",
-  "Sunburst Chart":  "Shows hierarchical data as concentric rings, enabling drill-down into multi-level category relationships.",
-};
-
-function getChartDescription(chartType) {
-  return CHART_TYPE_DESCRIPTIONS[chartType] || "Visualises patterns and relationships present in the dataset.";
-}
-
-function deriveChartInsights(key, fig, chartType) {
-  const traces = Array.isArray(fig.data) ? fig.data : [];
-  const layout = fig.layout || {};
-  const titleRaw = typeof layout.title === "string" ? layout.title : (layout.title?.text || "");
-  const title = cleanQuestionLabel(titleRaw) || key.replaceAll("_", " ");
-  const insights = [];
-
-  // Number of series / groups
-  const seriesCount = traces.length;
-  if (seriesCount > 1) {
-    insights.push(`Compares ${seriesCount} data series — look for the series with the highest values or most distinct trend.`);
-  }
-
-  // Axis labels as context clues
-  const xTitle = layout.xaxis?.title?.text || layout.xaxis?.title || "";
-  const yTitle = layout.yaxis?.title?.text || layout.yaxis?.title || "";
-  if (xTitle && yTitle) {
-    insights.push(`The X-axis represents "${cleanAxisTitle(xTitle)}" and the Y-axis represents "${cleanAxisTitle(yTitle)}" — focus on extreme values at either end.`);
-  } else if (xTitle) {
-    insights.push(`The horizontal axis shows "${cleanAxisTitle(xTitle)}" — scan for the tallest or most prominent category.`);
-  }
-
-  // Chart-type specific insights
-  if (chartType === "Heatmap" || chartType === "Scatter Matrix") {
-    insights.push("Cells with intense color indicate strong relationships. Look for diagonal symmetry in correlation heatmaps.");
-    insights.push("Clusters of similar color suggest groups of correlated or co-occurring variables.");
-  } else if (chartType === "Time Series" || chartType === "Line Chart") {
-    insights.push("Follow the slope — a rising line signals growth while a falling line signals decline.");
-    insights.push("Sharp peaks or troughs mark anomalies or events worth investigating.");
-  } else if (chartType === "Bar Chart") {
-    insights.push("The tallest bar represents the dominant category — compare it against the average to assess how much it stands out.");
-    insights.push("Look for bars significantly shorter than the rest, as they may indicate underperforming segments.");
-  } else if (chartType === "Pie Chart" || chartType === "Donut Chart") {
-    insights.push("The largest slice dominates — consider whether a single category is disproportionately large.");
-    insights.push("Very thin slices may be candidates to group into an 'Other' category for clarity.");
-  } else if (chartType === "Histogram") {
-    insights.push("The peak of the histogram (mode) shows the most common value range in the dataset.");
-    insights.push("A long tail to the right or left indicates skewness and the presence of outliers.");
-  } else if (chartType === "Box Plot" || chartType === "Violin Plot") {
-    insights.push("Points plotted beyond the whiskers are statistical outliers — investigate them individually.");
-    insights.push("A wide interquartile range (IQR) indicates high variability within the group.");
-  } else if (chartType === "Scatter Plot") {
-    insights.push("A clear diagonal pattern suggests a strong correlation between the two variables.");
-    insights.push("Isolated points far from the main cluster are potential outliers worth reviewing.");
-  }
-
-  // Fallback if nothing added
-  if (insights.length === 0) {
-    insights.push(`This chart visualises "${title}" — focus on the peaks, clusters, or segments that stand out most.`);
-    insights.push("Compare values across categories or time points to identify trends and exceptions.");
-  }
-
-  return insights.slice(0, 4); // Cap at 4 bullet points
-}
-
-// ─── Single flippable chart card ───────────────────────────────────────────
-
-function ChartFlipCard({
-  chartKey, fig, idx, isMatrix, isWide, gridSpan, chartHeight,
-  normalizedData, effectiveShowLegend, margin, legend, hasLongLabels,
-  PlotComponent, insights,
-}) {
-  const [flipped, setFlipped] = useState(false);
-  const traces = Array.isArray(fig.data) ? fig.data : [];
-  const layout = fig.layout || {};
-
-  const chartType = inferChartType(chartKey, traces);
-  const description = getChartDescription(chartType);
-  const chartInsights = deriveChartInsights(chartKey, fig, chartType);
-  const titleRaw = typeof layout.title === "string" ? layout.title : (layout.title?.text || "");
-  const displayTitle = truncateLabel(cleanQuestionLabel(titleRaw) || chartKey.replaceAll("_", " "), 80);
-
-  // back face min-height must match the rendered chart height
-  const containerHeight = chartHeight + 48; // 24px padding top + bottom
-
-  return (
-    <div
-      style={{
-        gridColumn: gridSpan,
-        minWidth: 0,
-        height: `${containerHeight}px`,
-        animation: 'fadeIn 0.35s cubic-bezier(0.2, 0.8, 0.2, 1) both',
-        animationDelay: `${idx * 90}ms`,
-      }}
-      className={`chart-flip-wrapper${flipped ? ' flipped' : ''}`}
-    >
-      <div className="chart-flip-inner" style={{ height: `${containerHeight}px` }}>
-
-        {/* ── FRONT FACE ── */}
-        <div className="chart-flip-front" style={{ padding: '24px', height: `${containerHeight}px` }}>
-          {/* Info toggle button */}
-          <button
-            className="chart-info-btn"
-            data-tooltip="Chart Insights"
-            onClick={() => setFlipped(true)}
-            aria-label="Show chart information"
-          >
-            ℹ
-          </button>
-
-          <PlotComponent
-            data={normalizedData}
-            layout={{
-              ...PLOTLY_DARK_LAYOUT,
-              ...layout,
-              authorise: true,
-              title: {
-                ...(layout?.title || {}),
-                text: truncateLabel(cleanQuestionLabel(layout?.title?.text || layout?.title || chartKey.replaceAll("_", " ")), 85),
-                font: { color: "#FFFFFF", size: 16, weight: 'bold' },
-                x: 0.5,
-                xanchor: "center",
-              },
-              paper_bgcolor: "rgba(0,0,0,0)",
-              plot_bgcolor: "rgba(0,0,0,0)",
-              font: { color: "#FFFFFF", family: "'Inter', sans-serif" },
-              hovermode: layout?.hovermode || "closest",
-              hoverlabel: {
-                ...PLOTLY_DARK_LAYOUT.hoverlabel,
-                ...(layout?.hoverlabel || {}),
-              },
-              height: chartHeight,
-              showlegend: effectiveShowLegend,
-              margin,
-              legend: {
-                ...(layout?.legend || {}),
-                ...legend,
-              },
-              xaxis: {
-                ...(layout?.xaxis || {}),
-                title: {
-                  ...(layout?.xaxis?.title || {}),
-                  text: cleanAxisTitle(layout?.xaxis?.title?.text || layout?.xaxis?.title || ""),
-                },
-                automargin: true,
-                tickangle: hasLongLabels ? -28 : (layout?.xaxis?.tickangle ?? 0),
-                tickfont: { color: "#FFFFFF", size: 11 },
-              },
-              yaxis: {
-                ...(layout?.yaxis || {}),
-                title: {
-                  ...(layout?.yaxis?.title || {}),
-                  text: cleanAxisTitle(layout?.yaxis?.title?.text || layout?.yaxis?.title || ""),
-                },
-                automargin: true,
-                tickfont: { color: "#FFFFFF", size: 11 },
-              },
-              uniformtext: { minsize: 10, mode: "hide" },
-            }}
-            config={PLOTLY_CONFIG}
-            style={{ width: "100%", height: `${chartHeight}px` }}
-          />
-        </div>
-
-        {/* ── BACK FACE ── */}
-        <div className="chart-flip-back" style={{ height: `${containerHeight}px` }}>
-          {/* Close button */}
-          <button
-            className="chart-info-btn"
-            data-tooltip="Back to Chart"
-            onClick={() => setFlipped(false)}
-            aria-label="Close chart information"
-          >
-            ✕
-          </button>
-
-          {/* Chart type badge */}
-          <div className="chart-back-badge">
-            {chartType}
-          </div>
-
-          {/* Chart title */}
-          <div className="chart-back-title">{displayTitle}</div>
-
-          {/* Divider */}
-          <div className="chart-back-divider" />
-
-          {/* What the chart conveys */}
-          <div className="chart-back-section-label">What this chart shows</div>
-          <p className="chart-back-description">{description}</p>
-
-          {/* Divider */}
-          <div className="chart-back-divider" />
-
-          {/* Data insights */}
-          <div className="chart-back-section-label">Key insights to look for</div>
-          {chartInsights.map((insight, i) => (
-            <div key={i} className="chart-back-insight-item">
-              <div className="chart-back-insight-dot" />
-              <span>{insight}</span>
-            </div>
-          ))}
-        </div>
-
-      </div>
-    </div>
-  );
-}
-
-// ─── ChartPanel ────────────────────────────────────────────────────────────
-
 function ChartPanel({ result, PlotComponent }) {
   if (!PlotComponent) {
     return (
@@ -367,7 +127,7 @@ function ChartPanel({ result, PlotComponent }) {
       const layout = fig.layout && typeof fig.layout === "object" ? fig.layout : {};
       return [key, { data, layout }];
     });
-  
+
   if (entries.length === 0) {
     return <div style={{ color: "var(--text-muted)", fontSize: "14px" }}>No charts available.</div>;
   }
@@ -393,23 +153,74 @@ function ChartPanel({ result, PlotComponent }) {
         };
 
         return (
-          <ChartFlipCard
+          <div
             key={key}
-            chartKey={key}
-            fig={fig}
-            idx={idx}
-            isMatrix={isMatrix}
-            isWide={isWide}
-            gridSpan={gridSpan}
-            chartHeight={chartHeight}
-            normalizedData={normalizedData}
-            effectiveShowLegend={effectiveShowLegend}
-            margin={margin}
-            legend={legend}
-            hasLongLabels={hasLongLabels}
-            PlotComponent={PlotComponent}
-            insights={result?.insights || {}}
-          />
+            style={{
+              gridColumn: gridSpan,
+              minWidth: 0,
+              padding: '24px',
+              backgroundColor: 'rgba(13, 18, 32, 0.7)',
+              backdropFilter: 'blur(8px)',
+              borderRadius: '14px',
+              border: '1px solid var(--border-subtle)',
+              boxShadow: 'var(--shadow-card)',
+              animation: 'fadeIn 0.35s cubic-bezier(0.2, 0.8, 0.2, 1) both',
+              animationDelay: `${idx * 90}ms`,
+            }}
+          >
+            <PlotComponent
+              data={normalizedData}
+              layout={{
+                ...PLOTLY_DARK_LAYOUT,
+                ...fig.layout,
+                authorise: true,
+                title: {
+                  ...(fig.layout?.title || {}),
+                  text: truncateLabel(cleanQuestionLabel(fig.layout?.title?.text || fig.layout?.title || key.replaceAll("_", " ")), 85),
+                  font: { color: "#FFFFFF", size: 16, weight: 'bold' },
+                  x: 0.5,
+                  xanchor: "center",
+                },
+                paper_bgcolor: "rgba(0,0,0,0)",
+                plot_bgcolor: "rgba(0,0,0,0)",
+                font: { color: "#FFFFFF", family: "'Inter', sans-serif" },
+                hovermode: fig.layout?.hovermode || "closest",
+                hoverlabel: {
+                  ...PLOTLY_DARK_LAYOUT.hoverlabel,
+                  ...(fig.layout?.hoverlabel || {}),
+                },
+                height: chartHeight,
+                showlegend: effectiveShowLegend,
+                margin,
+                legend: {
+                  ...(fig.layout?.legend || {}),
+                  ...legend,
+                },
+                xaxis: {
+                  ...(fig.layout?.xaxis || {}),
+                  title: {
+                    ...(fig.layout?.xaxis?.title || {}),
+                    text: cleanAxisTitle(fig.layout?.xaxis?.title?.text || fig.layout?.xaxis?.title || ""),
+                  },
+                  automargin: true,
+                  tickangle: hasLongLabels ? -28 : (fig.layout?.xaxis?.tickangle ?? 0),
+                  tickfont: { color: "#FFFFFF", size: 11 },
+                },
+                yaxis: {
+                  ...(fig.layout?.yaxis || {}),
+                  title: {
+                    ...(fig.layout?.yaxis?.title || {}),
+                    text: cleanAxisTitle(fig.layout?.yaxis?.title?.text || fig.layout?.yaxis?.title || ""),
+                  },
+                  automargin: true,
+                  tickfont: { color: "#FFFFFF", size: 11 },
+                },
+                uniformtext: { minsize: 10, mode: "hide" },
+              }}
+              config={PLOTLY_CONFIG}
+              style={{ width: "100%", height: `${chartHeight}px` }}
+            />
+          </div>
         );
       })}
     </div>
@@ -473,12 +284,12 @@ export default function DataPulse({ user, onLogout }) {
 
   useEffect(() => {
     if (chatContainerRef.current) {
-        // Use requestAnimationFrame instead of setTimeout to guarantee browser paint cycle has completed
-        requestAnimationFrame(() => {
-            if (chatContainerRef.current) {
-                chatContainerRef.current.scrollTop = chatContainerRef.current.scrollHeight;
-            }
-        });
+      // Use requestAnimationFrame instead of setTimeout to guarantee browser paint cycle has completed
+      requestAnimationFrame(() => {
+        if (chatContainerRef.current) {
+          chatContainerRef.current.scrollTop = chatContainerRef.current.scrollHeight;
+        }
+      });
     }
   }, [chatMsgs, chatLoading]);
 
@@ -599,46 +410,46 @@ export default function DataPulse({ user, onLogout }) {
   };
 
   const deleteItem = async (id) => {
-  setDeleteLoading(id);
-  setHistoryActionError("");
-  try {
-    await apiDeleteAnalysis(id);
-    setHistory(p => p.filter(x => x.analysis_id !== id));
-  } catch (err) {
-    setHistoryActionError("Failed to delete record. Please try again.");
-  } finally {
-    setDeleteLoading(null);
-  }
-};
+    setDeleteLoading(id);
+    setHistoryActionError("");
+    try {
+      await apiDeleteAnalysis(id);
+      setHistory(p => p.filter(x => x.analysis_id !== id));
+    } catch (err) {
+      setHistoryActionError("Failed to delete record. Please try again.");
+    } finally {
+      setDeleteLoading(null);
+    }
+  };
 
   const loadHistoryItem = async (item) => {
-  setHistorySelectLoading(item.analysis_id);
-  setHistoryActionError("");
-  try {
-    const data = await apiHistoryAnalysis(item.analysis_id);
-    setResult(data);
-    setFileName(item.file_name);
-    setPhase("done");
-    setShowHistory(false);
-    setTab("overview");
-  } catch (err) {
-    setHistoryActionError("Failed to restore session. Please try again.");
-  } finally {
-    setHistorySelectLoading(null);
-  }
-};
+    setHistorySelectLoading(item.analysis_id);
+    setHistoryActionError("");
+    try {
+      const data = await apiHistoryAnalysis(item.analysis_id);
+      setResult(data);
+      setFileName(item.file_name);
+      setPhase("done");
+      setShowHistory(false);
+      setTab("overview");
+    } catch (err) {
+      setHistoryActionError("Failed to restore session. Please try again.");
+    } finally {
+      setHistorySelectLoading(null);
+    }
+  };
 
   const exportPDF = useCallback(async () => {
     if (!result) return;
-    
+
     try {
       const { default: Plotly } = await import("plotly.js-dist-min");
-      
+
       // Initialize Landscape A4
       const doc = new jsPDF("l", "mm", "a4");
       const pageWidth = doc.internal.pageSize.getWidth();  // ~297mm
       const pageHeight = doc.internal.pageSize.getHeight(); // ~210mm
-      
+
       // 0. Background Color (Pale Teal/Cream)
       doc.setFillColor(236, 244, 243);
       doc.rect(0, 0, pageWidth, pageHeight, 'F');
@@ -651,25 +462,25 @@ export default function DataPulse({ user, onLogout }) {
       doc.setTextColor(34, 49, 63); // Dark slate
       const displayTitle = fileName ? `${fileName.replace(/\.[^/.]+$/, "")} Dashboard` : "Analytics Dashboard";
       doc.text(truncateLabel(displayTitle, 45), margin, 20);
-      
+
       // DataPulse Watermark
       doc.setFont("helvetica", "bolditalic");
       doc.setFontSize(14);
       doc.setTextColor(180, 200, 195);
       doc.text("DataPulse", pageWidth - margin - 20, margin + 4);
-      
+
       // 2. SUBTITLE / HEADLINE
       const insights = result.insights || {};
       let headlineText = "Data processed successfully via automated AI analysis.";
       if (insights.headline) {
-         headlineText = typeof insights.headline === 'object' ? String(insights.headline.text || "") : String(insights.headline);
+        headlineText = typeof insights.headline === 'object' ? String(insights.headline.text || "") : String(insights.headline);
       }
-      
+
       doc.setFont("helvetica", "bold");
       doc.setFontSize(11); // Bold explicit heading
       doc.setTextColor(30, 40, 40);
       doc.text("Executive Summary", margin, 26);
-      
+
       doc.setFont("helvetica", "normal");
       doc.setFontSize(10);
       doc.setTextColor(40, 40, 40);
@@ -680,60 +491,60 @@ export default function DataPulse({ user, onLogout }) {
       const stats = result.stats_summary || {};
       const findingsList = [];
       if (insights.findings && Array.isArray(insights.findings)) {
-         insights.findings.forEach(f => {
-            findingsList.push(typeof f === 'object' ? String(f.text || f.message || "") : String(f));
-         });
+        insights.findings.forEach(f => {
+          findingsList.push(typeof f === 'object' ? String(f.text || f.message || "") : String(f));
+        });
       }
       if (insights.recommendations && Array.isArray(insights.recommendations)) {
-         insights.recommendations.forEach(f => {
-            findingsList.push(typeof f === 'object' ? String(f.text || f.message || "") : String(f));
-         });
+        insights.recommendations.forEach(f => {
+          findingsList.push(typeof f === 'object' ? String(f.text || f.message || "") : String(f));
+        });
       }
-      
+
       const topFinding = findingsList.length > 0 ? findingsList[0] : "Data processed and structured successfully.";
       const secondFinding = findingsList.length > 1 ? findingsList[1] : `Analyzed ${stats.row_count || 0} rows across ${stats.column_count || 0} variables.`;
 
       let metricY = 41;
       const numMetrics = 3;
       const metricBoxWidth = (pageWidth - margin * 2 - 20) / numMetrics;
-      
+
       for (let i = 0; i < numMetrics; i++) {
-         const mX = margin + i * (metricBoxWidth + 10);
-         
-         // Label
-         doc.setFont("helvetica", "bold");
-         doc.setFontSize(10);
-         doc.setTextColor(30, 50, 50);
-         const label = i === 0 ? "Strategic Insight" : (i === 1 ? "Key Finding" : "Dataset Scope");
-         doc.text(label, mX, metricY);
-         
-         // Value
-         doc.setFont("helvetica", "normal");
-         doc.setFontSize(10);
-         doc.setTextColor(20, 30, 30);
-         let valStr = "";
-         if (i === 0) valStr = topFinding;
-         else if (i === 1) valStr = secondFinding;
-         else valStr = `${(stats.row_count || 0).toLocaleString()} records processed accurately.`;
-         
-         const splitVal = doc.splitTextToSize(valStr, metricBoxWidth);
-         doc.text(splitVal, mX, metricY + 6);
+        const mX = margin + i * (metricBoxWidth + 10);
+
+        // Label
+        doc.setFont("helvetica", "bold");
+        doc.setFontSize(10);
+        doc.setTextColor(30, 50, 50);
+        const label = i === 0 ? "Strategic Insight" : (i === 1 ? "Key Finding" : "Dataset Scope");
+        doc.text(label, mX, metricY);
+
+        // Value
+        doc.setFont("helvetica", "normal");
+        doc.setFontSize(10);
+        doc.setTextColor(20, 30, 30);
+        let valStr = "";
+        if (i === 0) valStr = topFinding;
+        else if (i === 1) valStr = secondFinding;
+        else valStr = `${(stats.row_count || 0).toLocaleString()} records processed accurately.`;
+
+        const splitVal = doc.splitTextToSize(valStr, metricBoxWidth);
+        doc.text(splitVal, mX, metricY + 6);
       }
 
       // 4. CHARTS GRID
       const charts = result.charts || {};
       const chartKeys = Object.keys(charts);
-      
+
       if (chartKeys.length > 0) {
         const totalCharts = Math.min(chartKeys.length, 6);
         let cols = 3;
         if (totalCharts <= 4) cols = 2;
         if (totalCharts === 1) cols = 1;
-        
+
         const gap = 12;
         const availableWidth = pageWidth - margin * 2;
         const chartBoxWidth = (availableWidth - gap * (cols - 1)) / cols;
-        
+
         const startY = 62; // Shifted down to accommodate standalone Executive Summary
         const availableHeight = pageHeight - startY - margin;
         const totalRows = Math.ceil(totalCharts / cols);
@@ -746,100 +557,100 @@ export default function DataPulse({ user, onLogout }) {
           if (!fig || !fig.data) continue;
 
           try {
-             // Calculate positions
-             let col = i % cols;
-             let row = Math.floor(i / cols);
-             
-             let boxX = margin + col * (chartBoxWidth + gap);
-             
-             // Center bottom row if exactly 3 charts (2 top, 1 bottom)
-             if (totalCharts === 3 && i === 2) {
-                 boxX = margin + (availableWidth / 2) - (chartBoxWidth / 2);
-             }
-             // Center bottom row if exactly 5 charts (3 top, 2 bottom)
-             if (totalCharts === 5 && i >= 3) {
-                 // For 5 charts, cols=3. The bottom row has 2 charts.
-                 // The width of 2 charts + 1 gap is (2*chartBoxWidth + gap).
-                 const bottomRowWidth = (2 * chartBoxWidth) + gap;
-                 const startOff = margin + (availableWidth - bottomRowWidth) / 2;
-                 const bottomCol = i - 3;
-                 boxX = startOff + bottomCol * (chartBoxWidth + gap);
-             }
-             
-             const boxY = startY + row * (chartBoxHeight + yGap);
+            // Calculate positions
+            let col = i % cols;
+            let row = Math.floor(i / cols);
 
-             // Draw White Rounded Container
-             doc.setFillColor(255, 255, 255);
-             doc.setDrawColor(200, 215, 215);
-             doc.roundedRect(boxX, boxY, chartBoxWidth, chartBoxHeight, 3, 3, 'FD');
+            let boxX = margin + col * (chartBoxWidth + gap);
 
-             // Draw Dark Title Pill Overlapping Top
-             const pillWidth = chartBoxWidth * 0.95;
-             const pillX = boxX + (chartBoxWidth - pillWidth) / 2;
-             const pillY = boxY - 3;
-             const pillHeight = 6;
-             doc.setFillColor(4, 59, 72); // dark teal
-             doc.roundedRect(pillX, pillY, pillWidth, pillHeight, 2, 2, 'F');
-             
-             // Pill Text Cleansing
-             let baseTitle = key;
-             if (fig.layout && fig.layout.title) {
-                 baseTitle = typeof fig.layout.title === 'string' ? fig.layout.title : (fig.layout.title.text || key.replaceAll("_", " "));
-             }
-             let strippedTitle = baseTitle.replace(/^(timeseries|scatter|bar\s?counts?|frequency\s?of|composition\s?of|donut|pie|line|heatmap)(?:\s+multi)?[\s-:]*/gi, "").trim() || baseTitle;
-             // Remove instances of "Q10 - ", "Q4 - " anywhere in the title
-             strippedTitle = strippedTitle.replace(/\bQ\d+\s*[-:]*\s*/gi, "").trim() || strippedTitle;
-             // Remove aggregation suffixes e.g., "(agg to 16 pts)" and trailing question marks
-             strippedTitle = strippedTitle.replace(/\(agg[^)]+\)/gi, "").replace(/\?+$/, "").trim() || strippedTitle;
-             
-             doc.setFontSize(7.5); // Reduced slightly for better fit
-             doc.setTextColor(255, 255, 255);
-             doc.setFont("helvetica", "bold");
-             const titleStr = strippedTitle.charAt(0).toUpperCase() + strippedTitle.slice(1);
-             const trTitle = titleStr.length > 60 ? titleStr.slice(0, 57) + '...' : titleStr;
-             doc.text(trTitle, boxX + chartBoxWidth / 2, pillY + 4.0, { align: 'center' });
+            // Center bottom row if exactly 3 charts (2 top, 1 bottom)
+            if (totalCharts === 3 && i === 2) {
+              boxX = margin + (availableWidth / 2) - (chartBoxWidth / 2);
+            }
+            // Center bottom row if exactly 5 charts (3 top, 2 bottom)
+            if (totalCharts === 5 && i >= 3) {
+              // For 5 charts, cols=3. The bottom row has 2 charts.
+              // The width of 2 charts + 1 gap is (2*chartBoxWidth + gap).
+              const bottomRowWidth = (2 * chartBoxWidth) + gap;
+              const startOff = margin + (availableWidth - bottomRowWidth) / 2;
+              const bottomCol = i - 3;
+              boxX = startOff + bottomCol * (chartBoxWidth + gap);
+            }
 
-             // Prepare Plotly Configuration for Light Mode
-             const pdfLayout = {
-               ...fig.layout,
-               paper_bgcolor: "rgba(0,0,0,0)",
-               plot_bgcolor: "rgba(0,0,0,0)",
-               font: { color: "#333333", family: "Helvetica", size: 14 }, 
-               xaxis: {
-                  ...fig.layout.xaxis,
-                  tickfont: { color: "#555555", size: 13 },
-                  title: { ...(fig.layout.xaxis?.title || {}), font: { color: "#333333", size: 15 } }
-               },
-               yaxis: {
-                  ...fig.layout.yaxis,
-                  tickfont: { color: "#555555", size: 13 },
-                  title: { ...(fig.layout.yaxis?.title || {}), font: { color: "#333333", size: 15 } }
-               },
-               width: 450,
-               height: 320,
-               showlegend: false,
-               margin: { l: 45, r: 25, t: 20, b: 45 }, 
-               title: null // Title is handled by pdf pill
-             };
+            const boxY = startY + row * (chartBoxHeight + yGap);
 
-             // Generate Image with retuned resolution ratio
-             const imgData = await Plotly.toImage(
-                { data: fig.data, layout: pdfLayout }, 
-                { format: 'png', width: 450, height: 320, scale: 3 }
-             );
+            // Draw White Rounded Container
+            doc.setFillColor(255, 255, 255);
+            doc.setDrawColor(200, 215, 215);
+            doc.roundedRect(boxX, boxY, chartBoxWidth, chartBoxHeight, 3, 3, 'FD');
 
-             // Add Image to Box
-             doc.addImage(imgData, 'PNG', boxX + 2, boxY + 4, chartBoxWidth - 4, chartBoxHeight - 8);
+            // Draw Dark Title Pill Overlapping Top
+            const pillWidth = chartBoxWidth * 0.95;
+            const pillX = boxX + (chartBoxWidth - pillWidth) / 2;
+            const pillY = boxY - 3;
+            const pillHeight = 6;
+            doc.setFillColor(4, 59, 72); // dark teal
+            doc.roundedRect(pillX, pillY, pillWidth, pillHeight, 2, 2, 'F');
+
+            // Pill Text Cleansing
+            let baseTitle = key;
+            if (fig.layout && fig.layout.title) {
+              baseTitle = typeof fig.layout.title === 'string' ? fig.layout.title : (fig.layout.title.text || key.replaceAll("_", " "));
+            }
+            let strippedTitle = baseTitle.replace(/^(timeseries|scatter|bar\s?counts?|frequency\s?of|composition\s?of|donut|pie|line|heatmap)(?:\s+multi)?[\s-:]*/gi, "").trim() || baseTitle;
+            // Remove instances of "Q10 - ", "Q4 - " anywhere in the title
+            strippedTitle = strippedTitle.replace(/\bQ\d+\s*[-:]*\s*/gi, "").trim() || strippedTitle;
+            // Remove aggregation suffixes e.g., "(agg to 16 pts)" and trailing question marks
+            strippedTitle = strippedTitle.replace(/\(agg[^)]+\)/gi, "").replace(/\?+$/, "").trim() || strippedTitle;
+
+            doc.setFontSize(7.5); // Reduced slightly for better fit
+            doc.setTextColor(255, 255, 255);
+            doc.setFont("helvetica", "bold");
+            const titleStr = strippedTitle.charAt(0).toUpperCase() + strippedTitle.slice(1);
+            const trTitle = titleStr.length > 60 ? titleStr.slice(0, 57) + '...' : titleStr;
+            doc.text(trTitle, boxX + chartBoxWidth / 2, pillY + 4.0, { align: 'center' });
+
+            // Prepare Plotly Configuration for Light Mode
+            const pdfLayout = {
+              ...fig.layout,
+              paper_bgcolor: "rgba(0,0,0,0)",
+              plot_bgcolor: "rgba(0,0,0,0)",
+              font: { color: "#333333", family: "Helvetica", size: 14 },
+              xaxis: {
+                ...fig.layout.xaxis,
+                tickfont: { color: "#555555", size: 13 },
+                title: { ...(fig.layout.xaxis?.title || {}), font: { color: "#333333", size: 15 } }
+              },
+              yaxis: {
+                ...fig.layout.yaxis,
+                tickfont: { color: "#555555", size: 13 },
+                title: { ...(fig.layout.yaxis?.title || {}), font: { color: "#333333", size: 15 } }
+              },
+              width: 450,
+              height: 320,
+              showlegend: false,
+              margin: { l: 45, r: 25, t: 20, b: 45 },
+              title: null // Title is handled by pdf pill
+            };
+
+            // Generate Image with retuned resolution ratio
+            const imgData = await Plotly.toImage(
+              { data: fig.data, layout: pdfLayout },
+              { format: 'png', width: 450, height: 320, scale: 3 }
+            );
+
+            // Add Image to Box
+            doc.addImage(imgData, 'PNG', boxX + 2, boxY + 4, chartBoxWidth - 4, chartBoxHeight - 8);
 
           } catch (chartErr) {
-             console.warn(`Skipped chart ${key}`, chartErr);
+            console.warn(`Skipped chart ${key}`, chartErr);
           }
         }
       }
 
       const cleanFileName = fileName.replace(/\.[^/.]+$/, "");
       doc.save(`${cleanFileName}_Dashboard.pdf`);
-      
+
     } catch (err) {
       console.error("PDF Generation Error:", err);
       alert("Failed to compile PDF document. Please try again.");
@@ -848,7 +659,7 @@ export default function DataPulse({ user, onLogout }) {
 
   const downloadCleanedData = useCallback(() => {
     if (!result || !result.clean_df || result.clean_df.length === 0) return;
-    
+
     const df = result.clean_df;
     const headers = Object.keys(df[0]);
     const csvContent = [
@@ -934,7 +745,7 @@ export default function DataPulse({ user, onLogout }) {
     return [String(value)];
   };
   const findings = toTextList(insights?.findings);
-  const dataInfo = toTextList(insights?.data_info);
+  const recommendations = toTextList(insights?.recommendations);
   const headline = (() => {
     const value = insights?.headline;
     if (value == null) return "";
@@ -943,7 +754,7 @@ export default function DataPulse({ user, onLogout }) {
     }
     return String(value);
   })();
-  
+
   const formatPercent = (value) => {
     const n = Number.isFinite(value) ? Number(value) : 100;
     return Number.isInteger(n) ? `${n}%` : `${n.toFixed(1)}%`;
@@ -960,10 +771,10 @@ export default function DataPulse({ user, onLogout }) {
         noExclude={false}
         exclusionSelectors={phase === "done"
           ? [
-              ".col-4 > div:first-child",
-              ".col-4 .card",
-              ".panel-flat",
-            ]
+            ".col-4 > div:first-child",
+            ".col-4 .card",
+            ".panel-flat",
+          ]
           : []}
         exclusionPadding={14}
       />
@@ -991,167 +802,147 @@ export default function DataPulse({ user, onLogout }) {
         {/* MAIN SECTION */}
         {phase === "upload" ? (
           <div className="animate-fade-in" style={{ flex: 1, display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 'clamp(22px, 3vw, 48px)', alignItems: 'center', maxWidth: '1400px', margin: '0 auto', padding: 'clamp(22px, 3vw, 40px) clamp(20px, 4vw, 64px)', height: '100%', overflow: 'hidden' }}>
-             
-             {/* LEFT SIDE: AI Animated Visual */}
-             <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center' }}>
-               <div style={{ position: 'relative', width: '100%', maxWidth: '390px' }}>
-                  {/* Outer pulse ring */}
-                  <div style={{ position: 'absolute', inset: 0, borderRadius: '50%', background: 'var(--primary-500)', filter: 'blur(20px)', opacity: 0.015, animation: 'pulse 4s infinite' }} />
-                  
-                  {/* The AI Image Hologram Container */}
-                  <div className="ai-hologram-layer" style={{ zIndex: 1, display: 'flex', justifyContent: 'center' }}>
-                    <GlobeCanvas size={390} />
-                  </div>
-                </div>
-             </div>
 
-             {/* RIGHT SIDE: Upload Logic */}
-             <div style={{ display: 'flex', flexDirection: 'column', justifyContent: 'center', alignItems: 'center', gap: '24px' }}>
+            {/* LEFT SIDE: AI Animated Visual */}
+            <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center' }}>
+              <div style={{ position: 'relative', width: '100%', maxWidth: '390px' }}>
+                {/* Outer pulse ring */}
+                <div style={{ position: 'absolute', inset: 0, borderRadius: '50%', background: 'var(--primary-500)', filter: 'blur(40px)', opacity: 0.05, animation: 'pulse 4s infinite' }} />
+
+                {/* The Rotating AI Globe Core Container */}
+                <div className="ai-hologram-layer" style={{ zIndex: 1 }}>
+                  <GlobeCanvas size={390} />
+                  <div
+                    style={{
+                      position: 'absolute',
+                      inset: 0,
+                      borderRadius: '24px',
+                      zIndex: 3,
+                      pointerEvents: 'none',
+                      boxShadow: 'inset 0 0 60px 15px #0A0F1C'
+                    }}
+                  />
+                </div>
+              </div>
+            </div>
+
+            {/* RIGHT SIDE: Upload Logic */}
+            <div style={{ display: 'flex', flexDirection: 'column', justifyContent: 'center', alignItems: 'center', gap: '24px' }}>
               <div style={{ animation: 'slideUp 0.8s cubic-bezier(0.2, 0.8, 0.2, 1)', textAlign: 'center', width: '100%' }}>
                 <div style={{ display: 'inline-flex', alignItems: 'center', gap: '12px', padding: '6px 16px', background: 'rgba(99,102,241,0.1)', borderRadius: '100px', border: '1px solid rgba(99,102,241,0.2)', marginBottom: '16px', color: 'var(--primary-500)', fontSize: '13px', fontWeight: 600, letterSpacing: '0.1em', textTransform: 'uppercase', marginInline: 'auto' }}>
-                     <span style={{ width: '6px', height: '6px', background: 'var(--primary-500)', borderRadius: '50%', boxShadow: '0 0 10px var(--primary-500)' }} />
-                     System Ready
-                  </div>
-                  <h1 style={{ fontSize: 'clamp(34px, 4vw, 42px)', margin: '0 0 4px 0', letterSpacing: '-0.02em', lineHeight: 1, color: 'var(--text-main)', opacity: 0.9, fontFamily: "'Inter', sans-serif", fontWeight: 700 }}>
-                     Welcome
-                  </h1>
-                  <h2 style={{ fontSize: 'clamp(38px, 4.6vw, 48px)', margin: '0 0 16px 0', color: 'var(--primary-500)', textShadow: '0 0 20px rgba(99,102,241,0.3)', lineHeight: 1, fontFamily: "'Inter', sans-serif", fontWeight: 700 }}>
-                     {user?.name || user?.email?.split('@')[0] || "Analyst"}
-                  </h2>
-                  <p style={{ fontSize: '16px', color: 'var(--text-muted)', lineHeight: 1.6, margin: 0 }}>
-                    Ready to architect your data? Connect a datasheet to initialize multi-agent analysis.
-                  </p>
-               </div>
+                  <span style={{ width: '6px', height: '6px', background: 'var(--primary-500)', borderRadius: '50%', boxShadow: '0 0 10px var(--primary-500)' }} />
+                  System Ready
+                </div>
+                <h1 style={{ fontSize: 'clamp(34px, 4vw, 42px)', margin: '0 0 4px 0', letterSpacing: '-0.02em', lineHeight: 1, color: 'var(--text-main)', opacity: 0.9, fontFamily: "'Inter', sans-serif", fontWeight: 700 }}>
+                  Welcome
+                </h1>
+                <h2 style={{ fontSize: 'clamp(38px, 4.6vw, 48px)', margin: '0 0 16px 0', color: 'var(--primary-500)', textShadow: '0 0 20px rgba(99,102,241,0.3)', lineHeight: 1, fontFamily: "'Inter', sans-serif", fontWeight: 700 }}>
+                  {user?.name || user?.email?.split('@')[0] || "Analyst"}
+                </h2>
+                <p style={{ fontSize: '16px', color: 'var(--text-muted)', lineHeight: 1.6, margin: 0 }}>
+                  Ready to architect your data? Connect a datasheet to initialize multi-agent analysis.
+                </p>
+              </div>
 
-               {/* Upload Box */}
-               <div style={{ position: 'relative', width: '100%' }}>
-                  <div
-                    className={`upload-box ${isDragOver ? 'drag-over' : ''}`}
-                    onDrop={onDrop}
-                    onDragOver={(e) => e.preventDefault()}
-                    onDragEnter={onDragEnter}
-                    onDragLeave={onDragLeave}
-                    onClick={() => fileRef.current.click()}
-                    style={{ 
-                      padding: '50px 32px', 
-                      borderColor: isDragOver ? 'var(--primary-500)' : 'var(--border-subtle)', 
-                      background: 'rgba(13, 18, 32, 0.4)', 
-                      backdropFilter: 'blur(12px)',
-                      position: 'relative',
-                      overflow: 'hidden',
-                      textAlign: 'center',
-                      borderRadius: '16px'
-                    }}
-                  >
-                    <div style={{ fontSize: '48px', color: 'var(--primary-500)', marginBottom: '16px', textShadow: '0 0 25px rgba(99,102,241,0.6)', transform: isDragOver ? 'scale(1.1)' : 'scale(1)', transition: 'transform 0.3s ease' }}>↑</div>
-                    <strong style={{ color: 'var(--text-main)', fontSize: '20px', fontFamily: "'Syne', sans-serif", display: 'block', marginBottom: '8px' }}>Select Data Set</strong>
-                    <p className="caption" style={{ color: 'var(--text-muted)', fontSize: '13px', margin: 0 }}>Drag (.csv, .xlsx) anywhere to initialize</p>
-                    <input ref={fileRef} type="file" accept=".csv,.xlsx,.xls" style={{ display: "none" }} onChange={(e) => onFile(e.target.files[0])} />
-                  </div>
-               </div>
+              {/* Upload Box */}
+              <div style={{ position: 'relative', width: '100%' }}>
+                <div
+                  className={`upload-box ${isDragOver ? 'drag-over' : ''}`}
+                  onDrop={onDrop}
+                  onDragOver={(e) => e.preventDefault()}
+                  onDragEnter={onDragEnter}
+                  onDragLeave={onDragLeave}
+                  onClick={() => fileRef.current.click()}
+                  style={{
+                    padding: '50px 32px',
+                    borderColor: isDragOver ? 'var(--primary-500)' : 'var(--border-subtle)',
+                    background: 'rgba(13, 18, 32, 0.4)',
+                    backdropFilter: 'blur(12px)',
+                    position: 'relative',
+                    overflow: 'hidden',
+                    textAlign: 'center',
+                    borderRadius: '16px'
+                  }}
+                >
+                  <div style={{ fontSize: '48px', color: 'var(--primary-500)', marginBottom: '16px', textShadow: '0 0 25px rgba(99,102,241,0.6)', transform: isDragOver ? 'scale(1.1)' : 'scale(1)', transition: 'transform 0.3s ease' }}>↑</div>
+                  <strong style={{ color: 'var(--text-main)', fontSize: '20px', fontFamily: "'Syne', sans-serif", display: 'block', marginBottom: '8px' }}>Select File to upload</strong>
+                  <p className="caption" style={{ color: 'var(--text-muted)', fontSize: '13px', margin: 0 }}>Drag (.csv, .xlsx) anywhere to initialize</p>
+                  <input ref={fileRef} type="file" accept=".csv,.xlsx,.xls" style={{ display: "none" }} onChange={(e) => onFile(e.target.files[0])} />
+                </div>
+              </div>
 
-               {/* Metrics */}
-               <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '16px', marginTop: '8px' }}>
-                  {[
-                    { 
-                      title: "Private & Secure", 
-                      desc: "Datasets are fully encrypted, instantly analyzed, and completely purged.", 
-                      icon: (
-                        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                          <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"></path>
-                        </svg>
-                      ) 
-                    },
-                    { 
-                      title: "Automated Insights", 
-                      desc: "Multi-agent profiling instantly uncovers core trends and outliers.", 
-                      icon: (
-                        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                          <polyline points="22 12 18 12 15 21 9 3 6 12 2 12"></polyline>
-                        </svg>
-                      ) 
-                    },
-                    { 
-                      title: "Dynamic Charts", 
-                      desc: "Interactive, sleek visualizations mapped directly from your schema.", 
-                      icon: (
-                        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                          <path d="M3 3v18h18"></path><path d="M18 17V9"></path><path d="M13 17V5"></path><path d="M8 17v-3"></path>
-                        </svg>
-                      ) 
-                    }
-                  ].map((feat, i) => (
-                    <div key={feat.title} className="card" style={{ padding: '18px 22px', textAlign: 'center', background: 'rgba(13, 18, 32, 0.4)', animation: `slideUp 0.8s cubic-bezier(0.2, 0.8, 0.2, 1) ${0.2 + i * 0.1}s both`, display: 'flex', flexDirection: 'column', alignItems: 'center' }}>
-                      <div style={{ color: 'var(--primary-500)', marginBottom: '10px', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>{feat.icon}</div>
-                      <strong style={{ display: 'block', fontSize: '13px', color: 'var(--text-main)', marginBottom: '4px', textTransform: 'uppercase', letterSpacing: '0.05em' }}>{feat.title}</strong>
-                      <span style={{ fontSize: '12px', color: 'var(--text-muted)', lineHeight: '1.4' }}>{feat.desc}</span>
-                    </div>
-                  ))}
-               </div>
-             </div>
+              {/* Metrics */}
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '16px', marginTop: '8px' }}>
+                {[
+                  { title: "Neural Logic", desc: "Multi-agent orchestration.", icon: "◈" },
+                  { title: "Deep Viz", desc: "Automated vector sets.", icon: "⬢" },
+                  { title: "Secure Vault", desc: "End-to-end encryption.", icon: "⊛" }
+                ].map((feat, i) => (
+                  <div key={feat.title} className="card" style={{ padding: '16px', textAlign: 'center', background: 'rgba(13, 18, 32, 0.25)', animation: `slideUp 0.8s cubic-bezier(0.2, 0.8, 0.2, 1) ${0.2 + i * 0.1}s both` }}>
+                    <div style={{ color: 'var(--primary-500)', fontSize: '18px', marginBottom: '8px' }}>{feat.icon}</div>
+                    <strong style={{ display: 'block', fontSize: '12px', color: 'var(--text-main)', marginBottom: '2px', textTransform: 'uppercase', letterSpacing: '1px' }}>{feat.title}</strong>
+                    <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>{feat.desc}</span>
+                  </div>
+                ))}
+              </div>
+            </div>
           </div>
         ) : phase === "analyzing" || analysisError ? (
           <div className="animate-fade-in" style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', textAlign: 'center', maxWidth: '800px', margin: '0 auto', height: '100%', width: '100%' }}>
             {analysisError ? (
-                <div className="card flex-col align-center justify-center animate-fade-in" style={{ padding: '60px', textAlign: 'center', border: '1px solid rgba(239,68,68,0.2)', background: 'rgba(13,18,32,0.6)', width: '100%' }}>
-                  <div style={{ fontSize: '56px', color: 'var(--error)', marginBottom: '24px' }}>⚠</div>
-                  <h3 style={{ color: 'var(--text-main)', marginBottom: '12px', fontSize: '24px' }}>Analysis Protocol Interrupted</h3>
-                  <p style={{ color: 'var(--error)', fontSize: '15px', maxWidth: '500px', marginBottom: '32px', margin: '0 auto 32px auto', lineHeight: 1.6 }}>{analysisError}</p>
-                  <button className="btn-primary" style={{ padding: '12px 32px', fontSize: '15px', margin: '0 auto' }} onClick={() => { setPhase("upload"); setAnalysisError(""); }}>Upload New Dataset</button>
-                </div>
+              <div className="card flex-col align-center justify-center animate-fade-in" style={{ padding: '60px', textAlign: 'center', border: '1px solid rgba(239,68,68,0.2)', background: 'rgba(13,18,32,0.6)', width: '100%' }}>
+                <div style={{ fontSize: '56px', color: 'var(--error)', marginBottom: '24px' }}>⚠</div>
+                <h3 style={{ color: 'var(--text-main)', marginBottom: '12px', fontSize: '24px' }}>Analysis Protocol Interrupted</h3>
+                <p style={{ color: 'var(--error)', fontSize: '15px', maxWidth: '500px', marginBottom: '32px', margin: '0 auto 32px auto', lineHeight: 1.6 }}>{analysisError}</p>
+                <button className="btn-primary" style={{ padding: '12px 32px', fontSize: '15px', margin: '0 auto' }} onClick={() => { setPhase("upload"); setAnalysisError(""); }}>Upload New Dataset</button>
+              </div>
             ) : (
-                <div style={{ width: '100%', maxWidth: '600px', display: 'flex', flexDirection: 'column', alignItems: 'center' }}>
-                  {/* Dynamic Animation */}
-                  <div style={{ position: 'relative', width: '120px', height: '120px', marginBottom: '40px', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                    <div style={{ position: 'absolute', inset: 0, borderRadius: '50%', border: '2px solid rgba(99,102,241,0.2)', borderTop: '2px solid var(--primary-500)', animation: 'spin 1.5s linear infinite' }} />
-                    <div style={{ position: 'absolute', inset: '15px', borderRadius: '50%', border: '2px solid rgba(16,185,129,0.2)', borderBottom: '2px solid var(--success)', animation: 'spin 2s linear infinite reverse' }} />
-                    <div style={{ fontSize: '32px', color: 'var(--primary-500)', animation: 'pulse 2s infinite' }}>◈</div>
-                  </div>
-                  
-                  <h2 style={{ fontSize: '28px', color: 'var(--text-main)', marginBottom: '12px', letterSpacing: '0.05em' }}>Analyzing Dataset</h2>
-                  
-                  {/* Agent Logs Component */}
-                  <div style={{ width: '100%', background: 'rgba(13,18,32,0.8)', border: '1px solid var(--border-subtle)', borderRadius: '16px', padding: '24px', position: 'relative', overflow: 'hidden' }}>
-                    <style>{`
-                      @keyframes progressScan {
-                        0% { transform: translateX(-100%); }
-                        100% { transform: translateX(200%); }
-                      }
-                    `}</style>
-                    <div className="progress-container" style={{ marginBottom: '20px', height: '4px', background: 'rgba(255,255,255,0.05)', borderRadius: '2px', overflow: 'hidden' }}>
-                      <div style={{ width: '50%', height: '100%', background: 'linear-gradient(90deg, transparent, var(--primary-600), var(--info), transparent)', animation: 'progressScan 1.5s infinite linear' }} />
-                    </div>
-                    
-                    <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', minHeight: '60px', justifyContent: 'center' }}>
-                      <span style={{ fontSize: '12px', color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '2px' }}>Active Agent Node</span>
-                      <strong style={{ fontSize: '16px', color: 'var(--primary-500)', fontFamily: "'Outfit', monospace", textShadow: '0 0 10px rgba(99,102,241,0.3)' }}>
-                        {agentLog[agentLog.length - 1] || "Initializing AI Agents..."}
-                      </strong>
-                    </div>
-                  </div>
-                  
-                  <p style={{ marginTop: '24px', fontSize: '14px', color: 'var(--text-muted)', opacity: 0.8 }}>Data transparency protocols engaged. Preparing visualizations...</p>
+              <div style={{ width: '100%', maxWidth: '600px', display: 'flex', flexDirection: 'column', alignItems: 'center' }}>
+                {/* Dynamic Animation */}
+                <div style={{ position: 'relative', width: '120px', height: '120px', marginBottom: '40px', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                  <div style={{ position: 'absolute', inset: 0, borderRadius: '50%', border: '2px solid rgba(99,102,241,0.2)', borderTop: '2px solid var(--primary-500)', animation: 'spin 1.5s linear infinite' }} />
+                  <div style={{ position: 'absolute', inset: '15px', borderRadius: '50%', border: '2px solid rgba(16,185,129,0.2)', borderBottom: '2px solid var(--success)', animation: 'spin 2s linear infinite reverse' }} />
+                  <div style={{ fontSize: '32px', color: 'var(--primary-500)', animation: 'pulse 2s infinite' }}>◈</div>
                 </div>
+
+                <h2 style={{ fontSize: '28px', color: 'var(--text-main)', marginBottom: '12px', letterSpacing: '0.05em' }}>Analyzing Dataset</h2>
+
+                {/* Agent Logs Component */}
+                <div style={{ width: '100%', background: 'rgba(13,18,32,0.8)', border: '1px solid var(--border-subtle)', borderRadius: '16px', padding: '24px', position: 'relative', overflow: 'hidden' }}>
+                  <div className="progress-container" style={{ marginBottom: '20px', height: '4px', background: 'rgba(255,255,255,0.05)' }}>
+                    <div className="progress-bar animate-pulse" style={{ width: '65%', background: 'linear-gradient(90deg, var(--primary-600), var(--info))' }} />
+                  </div>
+
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', minHeight: '60px', justifyContent: 'center' }}>
+                    <span style={{ fontSize: '12px', color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '2px' }}>Active Agent Node</span>
+                    <strong style={{ fontSize: '16px', color: 'var(--primary-500)', fontFamily: "'Outfit', monospace", textShadow: '0 0 10px rgba(99,102,241,0.3)' }}>
+                      {agentLog[agentLog.length - 1]?.msg || "Analysis Pipeline running..."}
+                    </strong>
+                  </div>
+                </div>
+
+                <p style={{ marginTop: '24px', fontSize: '14px', color: 'var(--text-muted)', opacity: 0.8 }}>Data transparency protocols engaged. Preparing visualizations...</p>
+              </div>
             )}
           </div>
         ) : (
           <div className="grid-12 animate-fade-in" style={{ alignItems: 'start', width: '100%', flex: 1, overflow: 'hidden', height: '100%' }}>
-            
+
             {/* LEFT 4 (Chat & Status) */}
             <div className="col-4 flex-col gap-24" style={{ height: '100%', overflowY: 'auto', paddingRight: '12px' }}>
-               <div
-                    onClick={() => fileRef.current?.click()}
-                    style={{
-                      padding: '20px',
-                      cursor: 'pointer',
-                      border: '1px dashed rgba(99,102,241,0.45)',
-                      background: 'rgba(13, 18, 32, 0.55)',
-                      borderRadius: '14px',
-                      transition: 'border-color 0.2s ease, background 0.2s ease',
-                    }}
-                    onMouseEnter={e => e.currentTarget.style.borderColor = 'var(--primary-500)'}
-                    onMouseLeave={e => e.currentTarget.style.borderColor = 'rgba(99,102,241,0.45)'}
-                  >
+              <div
+                onClick={() => fileRef.current?.click()}
+                style={{
+                  padding: '20px',
+                  cursor: 'pointer',
+                  border: '1px dashed rgba(99,102,241,0.45)',
+                  background: 'rgba(13, 18, 32, 0.55)',
+                  borderRadius: '14px',
+                  transition: 'border-color 0.2s ease, background 0.2s ease',
+                }}
+                onMouseEnter={e => e.currentTarget.style.borderColor = 'var(--primary-500)'}
+                onMouseLeave={e => e.currentTarget.style.borderColor = 'rgba(99,102,241,0.45)'}
+              >
                 <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '12px' }}>
                   <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
                     <div style={{ padding: '8px', background: 'rgba(99,102,241,0.1)', borderRadius: '8px', fontSize: '14px', border: '1px solid rgba(99,102,241,0.2)', color: 'var(--primary-500)' }}>＋</div>
@@ -1171,8 +962,8 @@ export default function DataPulse({ user, onLogout }) {
                 />
               </div>
 
-               {/* File Info */}
-               {fileName && (
+              {/* File Info */}
+              {fileName && (
                 <div className="card" style={{ padding: '20px' }}>
                   <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                     <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
@@ -1200,74 +991,74 @@ export default function DataPulse({ user, onLogout }) {
                 <div className="card flex-col gap-16" style={{ padding: '20px', flex: 1, display: 'flex', overflow: 'hidden' }}>
                   <strong style={{ fontSize: '14px', color: 'var(--text-main)', fontFamily: 'Syne, sans-serif' }}>Analyst Advisor</strong>
                   <div ref={chatContainerRef} style={{ flex: 1, overflowY: "auto", display: "flex", flexDirection: "column", gap: "12px", background: 'var(--bg-input)', padding: '16px', borderRadius: '12px', border: '1px solid var(--border-subtle)' }}>
-                     {chatMsgs.length === 0 ? (
-                       <div style={{ margin: 'auto', textAlign: 'center', display: 'flex', flexDirection: 'column', gap: '10px', maxWidth: '310px', background: 'linear-gradient(180deg, rgba(99,102,241,0.08), rgba(6,9,18,0.05))', border: '1px solid rgba(99,102,241,0.2)', borderRadius: '12px', padding: '16px 18px' }}>
-                         <strong style={{ fontSize: '16px', color: 'var(--text-main)', fontFamily: "'Syne', sans-serif", letterSpacing: '0.02em' }}>I am your Data Analyst.</strong>
-                         <p style={{ fontSize: '13px', color: '#cbd5e1', lineHeight: 1.55, fontFamily: "'Inter', sans-serif" }}>Feel free to ask me any questions about your data.</p>
-                       </div>
-                     ) : chatMsgs.map((m, i) => (
-                       <div 
-                        key={i} 
-                        style={{ 
-                          alignSelf: m.role === 'user' ? 'flex-end' : 'flex-start', 
-                          background: m.role === 'user' 
-                            ? 'linear-gradient(135deg, #6366f1 0%, #4f46e5 100%)' 
-                            : 'rgba(30, 41, 59, 0.5)', 
-                          color: m.role === 'user' ? '#FFFFFF' : 'var(--text-main)', 
-                          padding: '12px 18px', 
-                          borderRadius: m.role === 'user' ? '18px 18px 4px 18px' : '18px 18px 18px 4px', 
-                          fontSize: '13px', 
-                          maxWidth: m.role === 'user' ? '90%' : '100%', 
-                          border: m.role === 'user' ? '1px solid rgba(255,255,255,0.1)' : '1px solid rgba(99,102,241,0.2)', 
+                    {chatMsgs.length === 0 ? (
+                      <div style={{ margin: 'auto', textAlign: 'center', display: 'flex', flexDirection: 'column', gap: '10px', maxWidth: '310px', background: 'linear-gradient(180deg, rgba(99,102,241,0.08), rgba(6,9,18,0.05))', border: '1px solid rgba(99,102,241,0.2)', borderRadius: '12px', padding: '16px 18px' }}>
+                        <strong style={{ fontSize: '16px', color: 'var(--text-main)', fontFamily: "'Syne', sans-serif", letterSpacing: '0.02em' }}>I am your Data Analyst.</strong>
+                        <p style={{ fontSize: '13px', color: '#cbd5e1', lineHeight: 1.55, fontFamily: "'Inter', sans-serif" }}>Feel free to ask me any questions about your data.</p>
+                      </div>
+                    ) : chatMsgs.map((m, i) => (
+                      <div
+                        key={i}
+                        style={{
+                          alignSelf: m.role === 'user' ? 'flex-end' : 'flex-start',
+                          background: m.role === 'user'
+                            ? 'linear-gradient(135deg, #6366f1 0%, #4f46e5 100%)'
+                            : 'rgba(30, 41, 59, 0.5)',
+                          color: m.role === 'user' ? '#FFFFFF' : 'var(--text-main)',
+                          padding: '12px 18px',
+                          borderRadius: m.role === 'user' ? '18px 18px 4px 18px' : '18px 18px 18px 4px',
+                          fontSize: '13px',
+                          maxWidth: m.role === 'user' ? '90%' : '100%',
+                          border: m.role === 'user' ? '1px solid rgba(255,255,255,0.1)' : '1px solid rgba(99,102,241,0.2)',
                           boxShadow: m.role === 'user' ? '0 4px 15px rgba(99,102,241,0.3)' : '0 4px 15px rgba(0,0,0,0.2)',
                           lineHeight: 1.5,
                           marginBottom: '4px'
                         }}
-                       >
-                         {(() => {
-                           if (m.role !== 'ai' || !m.text.includes('[CHART:')) return m.text;
-                           const parts = m.text.split(/(\[CHART:\s*[^\]]+\])/);
-                           return parts.map((part, pIdx) => {
-                             const match = part.match(/\[CHART:\s*([^\]]+)\]/);
-                             if (match && result?.charts?.[match[1]]) {
-                               const figStr = result.charts[match[1]];
-                               let parsedFig = typeof figStr === "string" ? JSON.parse(figStr) : figStr;
-                               const data = Array.isArray(parsedFig?.data) ? parsedFig.data : [];
-                               const layout = (parsedFig?.layout && typeof parsedFig.layout === 'object') ? parsedFig.layout : {};
-                               return PlotComponent ? (
-                                 <div key={pIdx} style={{ margin: '16px 0', border: '1px solid rgba(99,102,241,0.2)', borderRadius: '12px', overflow: 'hidden', padding: '12px', background: 'rgba(0,0,0,0.3)', width: '100%' }}>
-                                   <PlotComponent
-                                     data={data.map(t => ({ ...t, textfont: { color: "#FFFFFF" } }))}
-                                     layout={{ 
-                                       ...PLOTLY_DARK_LAYOUT, 
-                                       ...layout, 
-                                       paper_bgcolor: "rgba(0,0,0,0)",
-                                       plot_bgcolor: "rgba(0,0,0,0)",
-                                       font: { color: "#FFFFFF", family: "'Inter', sans-serif" },
-                                       hoverlabel: { bgcolor: "rgba(8,12,24,0.98)", font: { color: "#F8FAFC", size: 12 }, bordercolor: "rgba(99,102,241,0.85)" },
-                                       height: 280, 
-                                       margin: {l: 40, r: 20, t: 40, b: 40}, 
-                                       title: { ...(layout.title || {}), font: { size: 14, color: '#fff', weight: 'bold' }, y: 0.95, yanchor: 'top' }, 
-                                       legend: { orientation: "h", yanchor: "top", y: -0.2, xanchor: "center", x: 0.5, font: { size: 10, color: "rgba(255,255,255,0.7)" } } 
-                                     }}
-                                     config={PLOTLY_CONFIG}
-                                     style={{ width: "100%", height: "280px" }}
-                                   />
-                                 </div>
-                               ) : <div key={pIdx} style={{ color: 'var(--primary-500)' }}>[Rendering Chart...]</div>;
-                             }
-                             if (match) return null; // hide broken chart tags if it doesn't exist
-                             return <span key={pIdx}>{part}</span>;
-                           });
-                         })()}
-                       </div>
-                     ))}
-                     {chatLoading && <div style={{ fontSize: '13px', color: 'var(--primary-500)', fontFamily: "'Outfit', monospace" }}>Synthesizing...</div>}
-                     {chatMsgs.length >= MAX_CHAT_MESSAGES && (
-                        <div style={{ fontSize: '11px', color: 'var(--text-muted)', textAlign: 'center', padding: '4px 0', borderTop: '1px solid var(--border-subtle)', marginTop: '4px' }}>
-                          Showing last {MAX_CHAT_MESSAGES} messages
-                        </div>
-                      )}
+                      >
+                        {(() => {
+                          if (m.role !== 'ai' || !m.text.includes('[CHART:')) return m.text;
+                          const parts = m.text.split(/(\[CHART:\s*[^\]]+\])/);
+                          return parts.map((part, pIdx) => {
+                            const match = part.match(/\[CHART:\s*([^\]]+)\]/);
+                            if (match && result?.charts?.[match[1]]) {
+                              const figStr = result.charts[match[1]];
+                              let parsedFig = typeof figStr === "string" ? JSON.parse(figStr) : figStr;
+                              const data = Array.isArray(parsedFig?.data) ? parsedFig.data : [];
+                              const layout = (parsedFig?.layout && typeof parsedFig.layout === 'object') ? parsedFig.layout : {};
+                              return PlotComponent ? (
+                                <div key={pIdx} style={{ margin: '16px 0', border: '1px solid rgba(99,102,241,0.2)', borderRadius: '12px', overflow: 'hidden', padding: '12px', background: 'rgba(0,0,0,0.3)', width: '100%' }}>
+                                  <PlotComponent
+                                    data={data.map(t => ({ ...t, textfont: { color: "#FFFFFF" } }))}
+                                    layout={{
+                                      ...PLOTLY_DARK_LAYOUT,
+                                      ...layout,
+                                      paper_bgcolor: "rgba(0,0,0,0)",
+                                      plot_bgcolor: "rgba(0,0,0,0)",
+                                      font: { color: "#FFFFFF", family: "'Inter', sans-serif" },
+                                      hoverlabel: { bgcolor: "rgba(8,12,24,0.98)", font: { color: "#F8FAFC", size: 12 }, bordercolor: "rgba(99,102,241,0.85)" },
+                                      height: 280,
+                                      margin: { l: 40, r: 20, t: 40, b: 40 },
+                                      title: { ...(layout.title || {}), font: { size: 14, color: '#fff', weight: 'bold' }, y: 0.95, yanchor: 'top' },
+                                      legend: { orientation: "h", yanchor: "top", y: -0.2, xanchor: "center", x: 0.5, font: { size: 10, color: "rgba(255,255,255,0.7)" } }
+                                    }}
+                                    config={PLOTLY_CONFIG}
+                                    style={{ width: "100%", height: "280px" }}
+                                  />
+                                </div>
+                              ) : <div key={pIdx} style={{ color: 'var(--primary-500)' }}>[Rendering Chart...]</div>;
+                            }
+                            if (match) return null; // hide broken chart tags if it doesn't exist
+                            return <span key={pIdx}>{part}</span>;
+                          });
+                        })()}
+                      </div>
+                    ))}
+                    {chatLoading && <div style={{ fontSize: '13px', color: 'var(--primary-500)', fontFamily: "'Outfit', monospace" }}>Gener...</div>}
+                    {chatMsgs.length >= MAX_CHAT_MESSAGES && (
+                      <div style={{ fontSize: '11px', color: 'var(--text-muted)', textAlign: 'center', padding: '4px 0', borderTop: '1px solid var(--border-subtle)', marginTop: '4px' }}>
+                        Showing last {MAX_CHAT_MESSAGES} messages
+                      </div>
+                    )}
                   </div>
                   <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
                     <div style={{ display: 'flex', gap: '12px' }}>
@@ -1287,81 +1078,90 @@ export default function DataPulse({ user, onLogout }) {
             {/* RIGHT (Results / Loading) */}
             <div className="col-8" style={{ height: '100%', overflowY: 'auto', paddingRight: '12px', paddingBottom: '32px', display: 'flex', flexDirection: 'column' }}>
               {!result ? (
-                 <div className="card animate-fade-in" style={{ minHeight: '500px', display: 'flex', alignItems: 'center', justifyContent: 'center', width: '100%' }}>
-                   <p style={{ color: 'var(--text-muted)' }}>Synchronizing data... Standby.</p>
-                 </div>
-              ) : (
-              <div className="panel-flat flex-col gap-24 animate-fade-in">
-                <div style={{ display: 'flex', borderBottom: '1px solid var(--border-subtle)', gap: '16px', paddingBottom: '12px' }}>
-                  {PRIMARY_TABS.map(t => <button key={t} onClick={() => setTab(t)} style={{ background: 'none', border: 'none', color: tab === t ? 'var(--text-main)' : 'var(--text-muted)', fontWeight: tab === t ? 600 : 500, fontSize: '14px', cursor: 'pointer', borderBottom: tab === t ? '2px solid var(--primary-500)' : 'none', paddingBottom: '12px', marginBottom: '-13px', textTransform: 'capitalize', letterSpacing: '0.05em' }}>{t}</button>)}
-                  {SECONDARY_TABS.map(t => <button key={t} onClick={() => setTab(t)} style={{ background: 'none', border: 'none', color: tab === t ? 'var(--text-main)' : 'var(--text-muted)', fontWeight: tab === t ? 600 : 500, fontSize: '14px', cursor: 'pointer', borderBottom: tab === t ? '2px solid var(--primary-500)' : 'none', paddingBottom: '12px', marginBottom: '-13px', textTransform: 'capitalize', letterSpacing: '0.05em' }}>{t}</button>)}
+                <div className="card animate-fade-in" style={{ minHeight: '500px', display: 'flex', alignItems: 'center', justifyContent: 'center', width: '100%' }}>
+                  <p style={{ color: 'var(--text-muted)' }}>Synchronizing data... Standby.</p>
                 </div>
-                
-                {tab === "overview" && (
-                   <div className="flex-col gap-24">
-                     {headline && (
-                       <div style={{ padding: '20px', background: 'rgba(99,102,241,0.05)', borderRadius: '12px', borderLeft: '4px solid var(--primary-500)' }}>
-                         <strong style={{ fontSize: '12px', color: 'var(--primary-500)', textTransform: 'uppercase', display: 'block', marginBottom: '8px', letterSpacing: '0.1em' }}>Executive Summary</strong>
-                         <p style={{ fontSize: '15px', color: 'var(--text-main)' }}>{headline}</p>
-                       </div>
-                     )}
-                     <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '16px' }}>
-                       {keyMetrics.map(m => (
-                         <div key={m.label} style={{ padding: '20px', border: '1px solid var(--border-subtle)', borderRadius: '12px', background: 'var(--bg-input)' }}>
-                           <strong style={{ fontSize: '12px', color: 'var(--text-muted)', display: 'block', marginBottom: '8px', textTransform: 'uppercase', letterSpacing: '0.05em' }}>{m.label}</strong>
-                           <span style={{ fontSize: '32px', fontFamily: "'Inter', sans-serif", fontWeight: 700, color: 'var(--text-main)', textShadow: '0 0 15px rgba(255,255,255,0.1)' }}>{m.val}</span>
-                         </div>
-                       ))}
-                     </div>
-                     <div style={{ padding: '20px', background: 'var(--bg-input)', borderRadius: '12px', border: '1px solid var(--border-subtle)' }}>
-                       <strong style={{ fontSize: '15px', display: 'block', marginBottom: '16px', color: 'var(--text-main)', fontFamily: "'Syne', sans-serif" }}>Data Info</strong>
-                       {(dataInfo.length ? dataInfo : findings).map((f, i) => (
-                          <div key={i} style={{ fontSize: '15px', color: 'var(--text-muted)', marginBottom: '12px', display: 'flex', gap: '12px', alignItems: 'center' }}>
-                            <div style={{ width: '6px', height: '6px', background: 'var(--primary-500)', borderRadius: '50%', boxShadow: '0 0 10px var(--primary-500)', flexShrink: 0 }} /> {f}
+              ) : (
+                <div className="panel-flat flex-col gap-24 animate-fade-in">
+                  <div style={{ display: 'flex', borderBottom: '1px solid var(--border-subtle)', gap: '16px', paddingBottom: '12px' }}>
+                    {PRIMARY_TABS.map(t => <button key={t} onClick={() => setTab(t)} style={{ background: 'none', border: 'none', color: tab === t ? 'var(--text-main)' : 'var(--text-muted)', fontWeight: tab === t ? 600 : 500, fontSize: '14px', cursor: 'pointer', borderBottom: tab === t ? '2px solid var(--primary-500)' : 'none', paddingBottom: '12px', marginBottom: '-13px', textTransform: 'capitalize', letterSpacing: '0.05em' }}>{t}</button>)}
+                    {SECONDARY_TABS.map(t => <button key={t} onClick={() => setTab(t)} style={{ background: 'none', border: 'none', color: tab === t ? 'var(--text-main)' : 'var(--text-muted)', fontWeight: tab === t ? 600 : 500, fontSize: '14px', cursor: 'pointer', borderBottom: tab === t ? '2px solid var(--primary-500)' : 'none', paddingBottom: '12px', marginBottom: '-13px', textTransform: 'capitalize', letterSpacing: '0.05em' }}>{t}</button>)}
+                  </div>
+
+                  {tab === "overview" && (
+                    <div className="flex-col gap-24">
+                      {headline && (
+                        <div style={{ padding: '20px', background: 'rgba(99,102,241,0.05)', borderRadius: '12px', borderLeft: '4px solid var(--primary-500)' }}>
+                          <strong style={{ fontSize: '12px', color: 'var(--primary-500)', textTransform: 'uppercase', display: 'block', marginBottom: '8px', letterSpacing: '0.1em' }}>Executive Matrix</strong>
+                          <p style={{ fontSize: '15px', color: 'var(--text-main)' }}>{headline}</p>
+                        </div>
+                      )}
+                      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '16px' }}>
+                        {keyMetrics.map(m => (
+                          <div key={m.label} style={{ padding: '20px', border: '1px solid var(--border-subtle)', borderRadius: '12px', background: 'var(--bg-input)' }}>
+                            <strong style={{ fontSize: '12px', color: 'var(--text-muted)', display: 'block', marginBottom: '8px', textTransform: 'uppercase', letterSpacing: '0.05em' }}>{m.label}</strong>
+                            <span style={{ fontSize: '28px', fontFamily: "'Syne', sans-serif", fontWeight: 800, color: 'var(--text-main)', textShadow: '0 0 15px rgba(255,255,255,0.1)' }}>{m.val}</span>
                           </div>
                         ))}
-                     </div>
-                   </div>
-                )}
-
-                {tab === "charts" && <ChartPanel result={result} PlotComponent={PlotComponent} />} 
-                
-                {tab === "insights" && (
-                  <div className="flex-col gap-24">
-                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '16px' }}>
-                      <div style={{ padding: '18px', borderRadius: '12px', border: '1px solid var(--border-subtle)', background: 'var(--bg-input)' }}>
-                        <strong style={{ fontSize: '12px', color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.08em' }}>Strong Correlations</strong>
-                        <div style={{ marginTop: '8px', fontSize: '28px', fontWeight: 700, color: 'var(--text-main)', fontFamily: "'Inter', sans-serif" }}>{(stats?.strong_correlations || []).length}</div>
                       </div>
-                      <div style={{ padding: '18px', borderRadius: '12px', border: '1px solid var(--border-subtle)', background: 'var(--bg-input)' }}>
-                        <strong style={{ fontSize: '12px', color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.08em' }}>Columns With Outliers</strong>
-                        <div style={{ marginTop: '8px', fontSize: '28px', fontWeight: 700, color: 'var(--text-main)', fontFamily: "'Inter', sans-serif" }}>{outlierCols.length}</div>
-                      </div>
-                      <div style={{ padding: '18px', borderRadius: '12px', border: '1px solid var(--border-subtle)', background: 'var(--bg-input)' }}>
-                        <strong style={{ fontSize: '12px', color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.08em' }}>Data Completeness</strong>
-                        <div style={{ marginTop: '8px', fontSize: '28px', fontWeight: 700, color: 'var(--text-main)', fontFamily: "'Inter', sans-serif" }}>{formatPercent(dq.completeness || 100)}</div>
+                      <div style={{ padding: '20px', background: 'var(--bg-input)', borderRadius: '12px', border: '1px solid var(--border-subtle)' }}>
+                        <strong style={{ fontSize: '15px', display: 'block', marginBottom: '16px', color: 'var(--text-main)', fontFamily: "'Syne', sans-serif" }}>Data Info</strong>
+                        {findings.map((f, i) => (
+                          <div key={i} style={{ fontSize: '15px', color: 'var(--text-muted)', marginBottom: '12px', display: 'flex', gap: '12px', alignItems: 'center' }}>
+                            <div style={{ width: '6px', height: '6px', background: 'var(--primary-500)', borderRadius: '50%', boxShadow: '0 0 10px var(--primary-500)' }} /> {f}
+                          </div>
+                        ))}
                       </div>
                     </div>
+                  )}
 
-                    <div style={{ padding: '20px', background: 'var(--bg-input)', borderRadius: '12px', border: '1px solid var(--border-subtle)' }}>
-                      <strong style={{ fontSize: '15px', display: 'block', marginBottom: '14px', color: 'var(--text-main)', fontFamily: "'Syne', sans-serif" }}>Key Insights</strong>
-                      {findings.length ? findings.map((f, i) => (
-                        <div key={`ins-${i}`} style={{ fontSize: '14px', color: 'var(--text-muted)', marginBottom: '10px', display: 'flex', gap: '10px', lineHeight: 1.5 }}>
-                          <span style={{ color: 'var(--info)', flexShrink: 0 }}>•</span>{f}
+                  {tab === "charts" && <ChartPanel result={result} PlotComponent={PlotComponent} />}
+
+                  {tab === "insights" && (
+                    <div className="flex-col gap-24">
+                      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '16px' }}>
+                        <div style={{ padding: '18px', borderRadius: '12px', border: '1px solid var(--border-subtle)', background: 'var(--bg-input)' }}>
+                          <strong style={{ fontSize: '12px', color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.08em' }}>Strong Correlations</strong>
+                          <div style={{ marginTop: '8px', fontSize: '26px', color: 'var(--text-main)', fontFamily: "'Syne', sans-serif" }}>{(stats?.strong_correlations || []).length}</div>
                         </div>
-                      )) : <div style={{ fontSize: '14px', color: 'var(--text-muted)' }}>No insights available for this dataset.</div>}
+                        <div style={{ padding: '18px', borderRadius: '12px', border: '1px solid var(--border-subtle)', background: 'var(--bg-input)' }}>
+                          <strong style={{ fontSize: '12px', color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.08em' }}>Columns With Outliers</strong>
+                          <div style={{ marginTop: '8px', fontSize: '26px', color: 'var(--text-main)', fontFamily: "'Syne', sans-serif" }}>{outlierCols.length}</div>
+                        </div>
+                        <div style={{ padding: '18px', borderRadius: '12px', border: '1px solid var(--border-subtle)', background: 'var(--bg-input)' }}>
+                          <strong style={{ fontSize: '12px', color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.08em' }}>Data Completeness</strong>
+                          <div style={{ marginTop: '8px', fontSize: '26px', color: 'var(--text-main)', fontFamily: "'Syne', sans-serif" }}>{formatPercent(dq.completeness || 100)}</div>
+                        </div>
+                      </div>
+
+                      <div style={{ padding: '20px', background: 'var(--bg-input)', borderRadius: '12px', border: '1px solid var(--border-subtle)' }}>
+                        <strong style={{ fontSize: '15px', display: 'block', marginBottom: '14px', color: 'var(--text-main)', fontFamily: "'Syne', sans-serif" }}>Key Insights</strong>
+                        {findings.length ? findings.map((f, i) => (
+                          <div key={`ins-${i}`} style={{ fontSize: '14px', color: 'var(--text-muted)', marginBottom: '10px', display: 'flex', gap: '10px', lineHeight: 1.5 }}>
+                            <span style={{ color: 'var(--info)' }}>•</span>{f}
+                          </div>
+                        )) : <div style={{ fontSize: '14px', color: 'var(--text-muted)' }}>No insights available for this dataset.</div>}
+                      </div>
+
+                      <div style={{ padding: '20px', background: 'var(--bg-input)', borderRadius: '12px', border: '1px solid var(--border-subtle)' }}>
+                        <strong style={{ fontSize: '15px', display: 'block', marginBottom: '14px', color: 'var(--text-main)', fontFamily: "'Syne', sans-serif" }}>Recommended Actions</strong>
+                        {recommendations.length ? recommendations.map((r, i) => (
+                          <div key={`rec-${i}`} style={{ fontSize: '14px', color: 'var(--text-muted)', marginBottom: '10px', display: 'flex', gap: '10px', lineHeight: 1.5 }}>
+                            <span style={{ color: 'var(--primary-500)' }}>⇥</span>{r}
+                          </div>
+                        )) : <div style={{ fontSize: '14px', color: 'var(--text-muted)' }}>No recommendations were generated.</div>}
+                      </div>
                     </div>
-                  </div>
-                )}
-                
-                {tab === "data" && (
-                  <div className="flex-col gap-16">
-                     <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                       <strong style={{ fontSize: '15px', color: 'var(--text-main)', fontFamily: "'Syne', sans-serif" }}>Cleaned Data Preview</strong>
-                       <button onClick={downloadCleanedData} className="btn-primary" style={{ padding: '0 16px', height: '36px', fontSize: '12px' }}>Download Data (CSV)</button>
-                     </div>
-                     <p style={{ fontSize: '13px', color: 'var(--text-muted)' }}>This preview shows up to 100 array segments from your engine after cleaning and imputation algorithms have run.</p>
-                     <div style={{ overflowX: 'auto', border: '1px solid var(--border-subtle)', borderRadius: '12px' }}>
+                  )}
+
+                  {tab === "data" && (
+                    <div className="flex-col gap-16">
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                        <strong style={{ fontSize: '15px', color: 'var(--text-main)', fontFamily: "'Syne', sans-serif" }}>Cleaned Data Preview</strong>
+                        <button onClick={downloadCleanedData} className="btn-primary" style={{ padding: '0 16px', height: '36px', fontSize: '12px' }}>Download Data (CSV)</button>
+                      </div>
+                      <p style={{ fontSize: '13px', color: 'var(--text-muted)' }}>This preview shows up to 100 array segments from your engine after cleaning and imputation algorithms have run.</p>
+                      <div style={{ overflowX: 'auto', border: '1px solid var(--border-subtle)', borderRadius: '12px' }}>
                         {result?.clean_df && result.clean_df.length > 0 ? (
                           <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '13px', textAlign: 'left', background: 'var(--bg-input)' }}>
                             <thead style={{ background: 'rgba(99,102,241,0.05)', borderBottom: '1px solid var(--border-subtle)' }}>
@@ -1384,62 +1184,62 @@ export default function DataPulse({ user, onLogout }) {
                         ) : (
                           <div style={{ padding: '24px', textAlign: 'center', color: 'var(--text-muted)' }}>Cleaned data unavailable.</div>
                         )}
-                     </div>
-                  </div>
-                )}
-                
-              </div>
-            )}
-          </div>
+                      </div>
+                    </div>
+                  )}
+
+                </div>
+              )}
+            </div>
 
           </div>
         )}
       </div>
-      
+
       {/* HISTORY SIDEBAR OVERLAY */}
-    {showHistory && (
-      <div style={{ position: 'fixed', inset: 0, zIndex: 1000, display: 'flex', justifyContent: 'flex-end' }}>
-        <div style={{ position: 'absolute', inset: 0, background: 'rgba(0,0,0,0.5)', backdropFilter: 'blur(6px)' }} onClick={() => setShowHistory(false)} />
-        <div className="animate-fade-in" style={{ width: 'min(400px, 100vw)', background: 'var(--bg-card)', borderLeft: '1px solid var(--border-subtle)', position: 'relative', zIndex: 1, padding: '24px', display: 'flex', flexDirection: 'column', gap: '24px', boxShadow: '-20px 0 50px rgba(0,0,0,0.5)' }}>
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-             <h2 style={{ fontSize: '20px' }}>Analysis Vault</h2>
-             <button onClick={() => setShowHistory(false)} style={{ background: 'none', border: 'none', color: 'var(--text-muted)', cursor: 'pointer', fontSize: '20px' }}>✕</button>
-          </div>
-          
-          <div style={{ flex: 1, overflowY: 'auto' }} className="flex-col gap-12">
-            {historyError && (
-              <div style={{ color: 'var(--error)', fontSize: '13px', padding: '12px', background: 'rgba(239,68,68,0.1)', borderRadius: '8px', border: '1px solid rgba(239,68,68,0.2)' }}>
-                {historyError}
-              </div>
-            )}
-            {historyActionError && (
-              <div style={{ color: 'var(--error)', fontSize: '13px', padding: '12px', background: 'rgba(239,68,68,0.1)', borderRadius: '8px', border: '1px solid rgba(239,68,68,0.2)' }}>
-                {historyActionError}
-              </div>
-            )}
-            {historyLoading ? <div style={{ color: 'var(--primary-500)' }}>Syncing history...</div> : (
-              (Array.isArray(history) ? history.length : 0) === 0 ? <div style={{ color: 'var(--text-muted)' }}>No recorded sessions found.</div> : (
-                (Array.isArray(history) ? history : []).map(item => (
-                  <div key={item.analysis_id} className="card" style={{ padding: '16px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '10px', cursor: 'pointer', border: historySelectLoading === item.analysis_id ? '1px solid var(--primary-500)' : '1px solid var(--border-subtle)' }} onClick={() => loadHistoryItem(item)}>
-                    <div className="flex-col gap-4" style={{ flex: 1, minWidth: 0 }}>
-                      <strong style={{ fontSize: '14px', color: 'var(--text-main)', display: 'block', lineHeight: 1.35, overflowWrap: 'anywhere', wordBreak: 'break-word' }}>{item.file_name}</strong>
-                      <span className="caption">{new Date(item.analyzed_at).toLocaleDateString()} • {item.row_count} rows</span>
+      {showHistory && (
+        <div style={{ position: 'fixed', inset: 0, zIndex: 1000, display: 'flex', justifyContent: 'flex-end' }}>
+          <div style={{ position: 'absolute', inset: 0, background: 'rgba(0,0,0,0.5)', backdropFilter: 'blur(6px)' }} onClick={() => setShowHistory(false)} />
+          <div className="animate-fade-in" style={{ width: 'min(400px, 100vw)', background: 'var(--bg-card)', borderLeft: '1px solid var(--border-subtle)', position: 'relative', zIndex: 1, padding: '24px', display: 'flex', flexDirection: 'column', gap: '24px', boxShadow: '-20px 0 50px rgba(0,0,0,0.5)' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+              <h2 style={{ fontSize: '20px' }}>Analysis Vault</h2>
+              <button onClick={() => setShowHistory(false)} style={{ background: 'none', border: 'none', color: 'var(--text-muted)', cursor: 'pointer', fontSize: '20px' }}>✕</button>
+            </div>
+
+            <div style={{ flex: 1, overflowY: 'auto' }} className="flex-col gap-12">
+              {historyError && (
+                <div style={{ color: 'var(--error)', fontSize: '13px', padding: '12px', background: 'rgba(239,68,68,0.1)', borderRadius: '8px', border: '1px solid rgba(239,68,68,0.2)' }}>
+                  {historyError}
+                </div>
+              )}
+              {historyActionError && (
+                <div style={{ color: 'var(--error)', fontSize: '13px', padding: '12px', background: 'rgba(239,68,68,0.1)', borderRadius: '8px', border: '1px solid rgba(239,68,68,0.2)' }}>
+                  {historyActionError}
+                </div>
+              )}
+              {historyLoading ? <div style={{ color: 'var(--primary-500)' }}>Syncing history...</div> : (
+                (Array.isArray(history) ? history.length : 0) === 0 ? <div style={{ color: 'var(--text-muted)' }}>No recorded sessions found.</div> : (
+                  (Array.isArray(history) ? history : []).map(item => (
+                    <div key={item.analysis_id} className="card" style={{ padding: '16px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', cursor: 'pointer', border: historySelectLoading === item.analysis_id ? '1px solid var(--primary-500)' : '1px solid var(--border-subtle)' }} onClick={() => loadHistoryItem(item)}>
+                      <div className="flex-col gap-4">
+                        <strong style={{ fontSize: '14px', color: 'var(--text-main)', display: 'block' }}>{item.file_name}</strong>
+                        <span className="caption">{new Date(item.analyzed_at).toLocaleDateString()} • {item.row_count} rows</span>
+                      </div>
+                      <button
+                        onClick={(e) => { e.stopPropagation(); deleteItem(item.analysis_id); }}
+                        disabled={deleteLoading === item.analysis_id}
+                        style={{ background: 'none', border: 'none', color: 'var(--text-muted)', cursor: 'pointer', padding: '8px', fontSize: '24px' }}
+                      >
+                        {deleteLoading === item.analysis_id ? "..." : "🗑"}
+                      </button>
                     </div>
-                    <button 
-                      onClick={(e) => { e.stopPropagation(); deleteItem(item.analysis_id); }} 
-                      disabled={deleteLoading === item.analysis_id}
-                      style={{ background: 'none', border: 'none', color: 'var(--text-muted)', cursor: 'pointer', padding: '8px', fontSize: '24px', flexShrink: 0, alignSelf: 'center' }}
-                    >
-                      {deleteLoading === item.analysis_id ? "..." : "🗑"}
-                    </button>
-                  </div>
-                ))
-              )
-            )}
+                  ))
+                )
+              )}
+            </div>
           </div>
         </div>
-      </div>
-    )}
+      )}
     </div>
   );
 }
