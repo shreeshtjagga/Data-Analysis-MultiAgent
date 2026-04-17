@@ -1,15 +1,17 @@
 """
-DataPulse Visualizer Agent — Agentic Chart Intelligence v4.0
+DataPulse Visualizer Agent — Agentic Chart Intelligence v5.0
 =============================================================
-True agentic loop with 3 LLM-driven phases per analysis:
+Full agentic loop with 4-phase parallel pipeline:
 
-  PHASE 1 — PLAN (LLM Call #1)
+  PHASE 1 — PLAN  (LLM Call #2 in overall pipeline, runs in parallel with Phase 2)
     LLM receives the full dataset profile: column names, types,
     min/max/median/skew per numeric col, top values per categorical,
     datetime columns, Likert scales, and strong correlations.
     Returns a prioritised list of chart specs (type + columns + title).
+    Runs concurrently with Phase 2 via ThreadPoolExecutor.
 
-  PHASE 2 — BUILD (no LLM)
+  PHASE 2 — HEURISTIC BUILD  (runs concurrently with Phase 1)
+    Pure rule-based chart generation — guaranteed fallback for any dataset.
     Each spec is executed by a dedicated smart builder:
     • ranked_bar: sorted top-N horizontal bar
     • grouped_bar: aggregated cat × numeric (sum or mean auto-detected)
@@ -20,25 +22,31 @@ True agentic loop with 3 LLM-driven phases per analysis:
     • donut/pie: low-cardinality categoricals only
     • likert_bar: average rating per question
     • line: time-series with auto-resampling
-    Heuristic plan always runs in parallel as a fallback supplement.
+    Runs concurrently with Phase 1 — ready the instant LLM plan arrives.
 
-  PHASE 3 — EVALUATE & REFINE (LLM Call #2, agentic feedback loop)
-    LLM receives a structured summary of EVERY built chart:
+  PHASE 3 — EXECUTE + MERGE
+    LLM-planned charts are built; merged with heuristic charts.
+    LLM charts lead; heuristic fills gaps not covered.
+
+  PHASE 4 — EVALUATE & REFINE  (LLM Call, agentic feedback loop)
+    Runs only when the merged pool exceeds MAX_OUTPUT_CHARTS (worth filtering).
+    LLM receives a structured summary of the top built charts:
     • chart type, title, columns plotted, data sample
     • data signal quality score
-    Judges each chart: KEEP / REPLACE / DROP and optionally
-    returns revised specs for charts it wants replaced.
+    Judges each chart: KEEP / REPLACE / DROP.
     Replacement charts are built immediately (no extra LLM call).
     This creates a real feedback cycle — the agent sees its own
     output and self-corrects before returning results.
+    max_tokens is capped at 500 to keep latency minimal.
 
-  PHASE 4 — SELECT
+  PHASE 5 — SELECT
     Final deduplication, family limits, score-ranked selection
     of top MAX_OUTPUT_CHARTS charts.
 """
 
 from __future__ import annotations
 
+import concurrent.futures
 import json
 import logging
 import os
@@ -1090,7 +1098,7 @@ def _chart_summary_for_llm(chart: Chart, df: pd.DataFrame) -> dict:
                 val = getattr(t, attr, None)
                 if val is not None:
                     try:
-                        lst = list(val)[:6]
+                        lst = [str(v) for v in list(val)[:6]]
                         t_info[attr] = lst
                     except Exception:
                         pass
@@ -1172,7 +1180,7 @@ Respond ONLY with valid JSON:
                 {"role": "user", "content": prompt},
             ],
             temperature=0.1,
-            max_tokens=900,
+            max_tokens=500,
         )
         raw = (completion.choices[0].message.content or "").strip()
         if raw.startswith("```"):
@@ -1248,9 +1256,18 @@ def _select_charts(df: pd.DataFrame, stats: dict) -> dict[str, go.Figure]:
         len(cols["num"]), len(cols["cat"]), len(cols["date"]), len(cols["likert"]),
     )
 
-    # ── PHASE 1: LLM plans what charts to build (fast 8B model) ───────────
-    logger.info("[VIZ] Phase 1: LLM chart planning...")
-    plan = _llm_plan_charts(df, cols, stats)
+    # ── PHASE 1 + PHASE 2: Run LLM planning and heuristic build concurrently ──
+    # Both are read-only on df/cols/stats — safe to parallelise.
+    logger.info("[VIZ] Phase 1+2: LLM chart planning AND heuristic build running concurrently...")
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=2) as pool:
+        plan_future      = pool.submit(_llm_plan_charts, df, cols, stats)
+        heuristic_future = pool.submit(_heuristic_plan,  df, cols, stats)
+
+        plan             = plan_future.result()      # None if LLM unavailable
+        heuristic_charts = heuristic_future.result()
+
+    # ── PHASE 3: Execute LLM plan specs → Chart objects, then merge ──────
     llm_charts: list[Chart] = []
     if plan:
         llm_charts = _execute_plan(df, plan, cols)
@@ -1258,13 +1275,10 @@ def _select_charts(df: pd.DataFrame, stats: dict) -> dict[str, go.Figure]:
     else:
         logger.info("[VIZ] Phase 1 skipped (no API key or LLM failed)")
 
-    # ── PHASE 2: Heuristic always runs — supplement + guaranteed fallback ──
-    logger.info("[VIZ] Phase 2: Heuristic chart generation...")
-    heuristic_charts = _heuristic_plan(df, cols, stats)
     logger.info("[VIZ] Phase 2 done — %d heuristic charts built", len(heuristic_charts))
 
     # Merge: LLM charts lead, heuristic fills anything not covered
-    llm_keys = {c.key for c in llm_charts}
+    llm_keys   = {c.key for c in llm_charts}
     all_charts = llm_charts + [c for c in heuristic_charts if c.key not in llm_keys]
 
     # ── SAFETY NET: if nothing was built at all, force at least one chart ──
@@ -1276,9 +1290,22 @@ def _select_charts(df: pd.DataFrame, stats: dict) -> dict[str, go.Figure]:
                 all_charts = [fb]
                 break
 
-    # ── PHASE 3: Final dedup + score-ranked selection ──────────────────────
-    # (Phase-3 LLM evaluation removed — it added ~15s latency and could
-    #  drop all charts with no recovery path. Heuristic scoring is reliable.)
+    # ── PHASE 4: Agentic Evaluate & Refine (LLM, re-enabled v5.0) ─────────
+    # Only runs when we have more charts than we will output — worth filtering.
+    # Capped at 500 tokens → minimal marginal latency (recovered by parallelism).
+    if len(all_charts) > MAX_OUTPUT_CHARTS:
+        logger.info(
+            "[VIZ] Phase 4: Agentic evaluate & refine — reviewing %d charts...",
+            len(all_charts),
+        )
+        all_charts = _llm_evaluate_charts(all_charts, df, cols, stats)
+    else:
+        logger.info(
+            "[VIZ] Phase 4: Skipped (only %d charts — no filtering needed)",
+            len(all_charts),
+        )
+
+    # ── PHASE 5: Final dedup + score-ranked selection ──────────────────────
     result = _deduplicate_and_select(all_charts)
 
     # Last resort: if dedup somehow returned empty, use heuristic charts as-is
@@ -1294,7 +1321,7 @@ def _select_charts(df: pd.DataFrame, stats: dict) -> dict[str, go.Figure]:
 # ═══════════════════════════════════════════════════════════════════════════
 
 def run(state: AnalysisState) -> AnalysisState:
-    logger.info("Agentic Visualizer v4.0 (Plan→Build→Evaluate→Refine) starting")
+    logger.info("Agentic Visualizer v5.0 (Parallel Plan+Heuristic → Merge → Evaluate → Select) starting")
     state.current_agent = "visualizer"
 
     if state.clean_df is None or state.clean_df.empty:

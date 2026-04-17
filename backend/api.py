@@ -740,26 +740,44 @@ async def chat_with_analysis(
                 details = []
                 for trace in c.get("data", []):
                     ttype = trace.get("type", "unknown")
-                    if ttype in ("pie", "pie"):
+                    if ttype in ("pie", "funnelarea"):
                         labels = trace.get("labels") or trace.get("x") or []
                         values = trace.get("values") or trace.get("y") or []
                         if isinstance(labels, list) and isinstance(values, list):
                             pairs = [f"{l}: {val}" for l, val in zip(labels[:10], values[:10])]
-                            details.append(f"Pie Breakdown: {', '.join(pairs)}")
+                            details.append(f"Pie/Donut Breakdown: {', '.join(pairs)}")
+                        else:
+                            details.append("Pie/Donut chart")
                     elif ttype in ("bar", "scatter", "violin", "box"):
                         x = (trace.get("x") or [])[:8]
                         y = (trace.get("y") or [])[:8]
                         details.append(f"{ttype.capitalize()} Data: X={x}, Y={y}")
+                    elif ttype in ("heatmap", "choropleth"):
+                        z_sample = (trace.get("z") or [])[:3]
+                        details.append(f"Heatmap with z-values (sample): {z_sample}")
+                    elif ttype == "histogram":
+                        x = (trace.get("x") or [])[:8]
+                        details.append(f"Histogram of: {x}")
                     else:
                         details.append(f"{ttype} chart")
-                title = c.get("layout", {}).get("title", {}).get("text", k) if isinstance(c.get("layout", {}).get("title"), dict) else k
-                charts_summary[k] = f"Title '{title}' - " + " | ".join(details)
+                # Safely extract title: layout.title can be a str or dict
+                layout_title = c.get("layout", {}).get("title", {})
+                if isinstance(layout_title, dict):
+                    title = layout_title.get("text") or k
+                elif isinstance(layout_title, str) and layout_title:
+                    title = layout_title
+                else:
+                    title = k
+                charts_summary[k] = f"[key='{k}'] Title '{title}' \u2014 " + (" | ".join(details) if details else "chart")
             except Exception as e:
                 import traceback
-                print("CHART EXCEPTION:", k, traceback.format_exc())
-                charts_summary[k] = f"Visual chart (metadata only)"
+                logger.warning("Chart summary parse failed for key '%s': %s", k, traceback.format_exc())
+                charts_summary[k] = f"[key='{k}'] Visual chart (parse error)"
     else:
         charts_summary = charts_data
+
+    # Build a concise list of EXACT chart keys so the LLM never invents one
+    exact_chart_keys = list(charts_summary.keys()) if isinstance(charts_summary, dict) else []
     outlier_summary = context.get("outlierSummary") or [
         {"column": col, "count": count} for col, count in top_outliers
     ]
@@ -773,8 +791,10 @@ async def chat_with_analysis(
         "If context is insufficient, state exactly which information is missing professionally.\n"
         "IMPORTANT BEHAVIORAL RULES:\n"
         "1. Answer ONLY what the user asks. If the user's input is conversational (e.g., 'hello', 'no', 'thanks'), just reply naturally. DO NOT spontaneously analyze the data or throw random charts unless the user explicitly asks a question about the data.\n"
-        "2. If you are explaining, describing, or referencing any chart from 'Available Charts', you MUST format it exactly like this: `[CHART: chart_key_name]` so the application can render it. Put the chart tag first, and explain it below.\n"
-        "3. Never just put the chart name in backticks. You MUST use the bracket format `[CHART: key]`.\n\n"
+        f"2. The dataset has exactly these charts available (EXACT keys, copy verbatim): {exact_chart_keys}. "
+        "When referencing or explaining any chart, you MUST use the format `[CHART: exact_key]` where exact_key is one of the keys listed above, copied verbatim with no changes. "
+        "Never invent, shorten, or modify a chart key. If the chart does not exist in the list above, do NOT reference it.\n"
+        "3. Never just put the chart name in backticks. You MUST use the bracket format `[CHART: key]` using only keys from the list in rule 2.\n\n"
         f"File: {file_name}\n"
         f"Dataset: {profile.get('label', 'unknown')} ({profile.get('domain', 'general')})\n"
         f"Data Quality: {quality}\n"
