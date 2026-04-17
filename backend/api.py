@@ -579,8 +579,15 @@ async def analyze(
     result["raw_df"]   = preview_raw
     result["clean_df"] = preview_clean
 
-    if state.errors or state.partial:
-        logger.error("Pipeline failed for user %d / %s: %s", user_id, filename, state.errors)
+    # Only hard-fail if the core pipeline produced nothing useful.
+    # Non-fatal errors from sub-agents (e.g. one chart builder failing) are
+    # returned as warnings alongside real results so users still get insights.
+    has_stats    = bool(result.get("stats_summary"))
+    has_insights = bool(result.get("insights"))
+    is_fatal     = not has_stats or not has_insights
+
+    if is_fatal and (state.errors or state.partial):
+        logger.error("Pipeline critically failed for user %d / %s: %s", user_id, filename, state.errors)
         raise HTTPException(
             status_code=500,
             detail={
@@ -589,6 +596,12 @@ async def analyze(
                 "errors": state.errors,
                 "completed_agents": state.completed_agents,
             },
+        )
+    elif state.errors:
+        # Non-fatal warnings: log them but continue — the result is still usable
+        logger.warning(
+            "Pipeline completed with non-fatal errors for user %d / %s: %s",
+            user_id, filename, state.errors,
         )
 
     # Fix #6: compute serialized charts once, reuse for both DB save and response
@@ -610,6 +623,8 @@ async def analyze(
 
     result["charts"] = serialized_charts
     result["partial"] = False
+    if state.errors:
+        result["warnings"] = state.errors   # surface non-fatal errors to frontend
 
     # orjson serialises NaN/Inf → null natively and is ~10x faster than
     # the manual recursive sanitize_floats walk on large result dicts.

@@ -934,7 +934,7 @@ export default function DataPulse({ user, onLogout }) {
     return [String(value)];
   };
   const findings = toTextList(insights?.findings);
-  const recommendations = toTextList(insights?.recommendations);
+  const dataInfo = toTextList(insights?.data_info);
   const headline = (() => {
     const value = insights?.headline;
     if (value == null) return "";
@@ -1315,9 +1315,9 @@ export default function DataPulse({ user, onLogout }) {
                      </div>
                      <div style={{ padding: '20px', background: 'var(--bg-input)', borderRadius: '12px', border: '1px solid var(--border-subtle)' }}>
                        <strong style={{ fontSize: '15px', display: 'block', marginBottom: '16px', color: 'var(--text-main)', fontFamily: "'Syne', sans-serif" }}>Data Info</strong>
-                       {findings.map((f, i) => (
+                       {(dataInfo.length ? dataInfo : findings).map((f, i) => (
                           <div key={i} style={{ fontSize: '15px', color: 'var(--text-muted)', marginBottom: '12px', display: 'flex', gap: '12px', alignItems: 'center' }}>
-                            <div style={{ width: '6px', height: '6px', background: 'var(--primary-500)', borderRadius: '50%', boxShadow: '0 0 10px var(--primary-500)' }} /> {f}
+                            <div style={{ width: '6px', height: '6px', background: 'var(--primary-500)', borderRadius: '50%', boxShadow: '0 0 10px var(--primary-500)', flexShrink: 0 }} /> {f}
                           </div>
                         ))}
                      </div>
@@ -1347,18 +1347,9 @@ export default function DataPulse({ user, onLogout }) {
                       <strong style={{ fontSize: '15px', display: 'block', marginBottom: '14px', color: 'var(--text-main)', fontFamily: "'Syne', sans-serif" }}>Key Insights</strong>
                       {findings.length ? findings.map((f, i) => (
                         <div key={`ins-${i}`} style={{ fontSize: '14px', color: 'var(--text-muted)', marginBottom: '10px', display: 'flex', gap: '10px', lineHeight: 1.5 }}>
-                          <span style={{ color: 'var(--info)' }}>•</span>{f}
+                          <span style={{ color: 'var(--info)', flexShrink: 0 }}>•</span>{f}
                         </div>
                       )) : <div style={{ fontSize: '14px', color: 'var(--text-muted)' }}>No insights available for this dataset.</div>}
-                    </div>
-
-                    <div style={{ padding: '20px', background: 'var(--bg-input)', borderRadius: '12px', border: '1px solid var(--border-subtle)' }}>
-                      <strong style={{ fontSize: '15px', display: 'block', marginBottom: '14px', color: 'var(--text-main)', fontFamily: "'Syne', sans-serif" }}>Recommended Actions</strong>
-                      {recommendations.length ? recommendations.map((r, i) => (
-                        <div key={`rec-${i}`} style={{ fontSize: '14px', color: 'var(--text-muted)', marginBottom: '10px', display: 'flex', gap: '10px', lineHeight: 1.5 }}>
-                          <span style={{ color: 'var(--primary-500)' }}>⇥</span>{r}
-                        </div>
-                      )) : <div style={{ fontSize: '14px', color: 'var(--text-muted)' }}>No recommendations were generated.</div>}
                     </div>
                   </div>
                 )}

@@ -213,7 +213,7 @@ def statistician_agent(state: AnalysisState) -> AnalysisState:
                 for i in range(len(correlation_matrix.columns)):
                     for j in range(i + 1, len(correlation_matrix.columns)):
                         corr_val = correlation_matrix.iloc[i, j]
-                        if abs(corr_val) > 0.7:
+                        if abs(corr_val) > 0.7 and pd.notna(corr_val):
                             strong_correlations.append(
                                 {
                                     "col1": correlation_matrix.columns[i],
@@ -241,7 +241,7 @@ def statistician_agent(state: AnalysisState) -> AnalysisState:
             "duplicate_rows": int(len(df) - len(df.drop_duplicates())),
             "completeness": float(
                 ((len(df) * len(df.columns) - total_missing)
-                 / (len(df) * len(df.columns)))
+                 / max(len(df) * len(df.columns), 1))
                 * 100
             ),
         }
