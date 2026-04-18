@@ -252,7 +252,11 @@ function ChartPanel({ result, PlotComponent }) {
                 </button>
 
                 <div className="chart-back-badge">
-                  <span style={{ fontSize: '10px' }}>◈</span> Dataset Insight
+                  <span style={{ fontSize: '10px' }}>◈</span> {
+                    fig.data?.[0]?.type
+                      ? fig.data[0].type.charAt(0).toUpperCase() + fig.data[0].type.slice(1).replace('scatter', 'Scatter Plot').replace('bar', 'Bar Chart').replace('pie', 'Pie Chart').replace('histogram', 'Histogram')
+                      : 'Data Insight'
+                  }
                 </div>
 
                 <h3 className="chart-back-title">
@@ -874,7 +878,7 @@ export default function DataPulse({ user, onLogout }) {
       <div style={{ background: 'rgba(6, 9, 18, 0.90)', backdropFilter: 'blur(12px)', WebkitBackdropFilter: 'blur(12px)', padding: '16px 48px', borderBottom: '1px solid var(--border-subtle)', display: 'flex', justifyContent: 'space-between', alignItems: 'center', position: 'sticky', top: 0, zIndex: 100 }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
           <div style={{ color: 'var(--primary-500)', fontSize: '24px', textShadow: '0 0 10px rgba(99,102,241,0.4)' }}>◈</div>
-          <strong style={{ fontSize: '18px', color: 'var(--text-main)', fontFamily: "'Syne', sans-serif" }}>DATA PULSE</strong>
+          <strong style={{ fontSize: '18px', color: 'var(--text-main)', fontFamily: "'Inter', sans-serif" }}>DATA PULSE</strong>
         </div>
         <div style={{ display: 'flex', alignItems: 'center', gap: '32px' }}>
           <div style={{ display: 'flex', gap: '16px' }}>
@@ -946,7 +950,7 @@ export default function DataPulse({ user, onLogout }) {
                   }}
                 >
                   <div style={{ fontSize: '48px', color: 'var(--primary-500)', marginBottom: '16px', textShadow: '0 0 25px rgba(99,102,241,0.6)', transform: isDragOver ? 'scale(1.1)' : 'scale(1)', transition: 'transform 0.3s ease' }}>↑</div>
-                  <strong style={{ color: 'var(--text-main)', fontSize: '20px', fontFamily: "'Syne', sans-serif", display: 'block', marginBottom: '8px' }}>Select File to upload</strong>
+                  <strong style={{ color: 'var(--text-main)', fontSize: '20px', fontFamily: "'Inter', sans-serif", display: 'block', marginBottom: '8px' }}>Select File to upload</strong>
                   <p className="caption" style={{ color: 'var(--text-muted)', fontSize: '13px', margin: 0 }}>Drag (.csv, .xlsx) anywhere to initialize</p>
                   <input ref={fileRef} type="file" accept=".csv,.xlsx,.xls" style={{ display: "none" }} onChange={(e) => onFile(e.target.files[0])} />
                 </div>
@@ -1074,7 +1078,7 @@ export default function DataPulse({ user, onLogout }) {
                   <div ref={chatContainerRef} style={{ flex: 1, overflowY: "auto", display: "flex", flexDirection: "column", gap: "12px", background: 'var(--bg-input)', padding: '16px', borderRadius: '12px', border: '1px solid var(--border-subtle)' }}>
                     {chatMsgs.length === 0 ? (
                       <div style={{ margin: 'auto', textAlign: 'center', display: 'flex', flexDirection: 'column', gap: '10px', maxWidth: '310px', background: 'linear-gradient(180deg, rgba(99,102,241,0.08), rgba(6,9,18,0.05))', border: '1px solid rgba(99,102,241,0.2)', borderRadius: '12px', padding: '16px 18px' }}>
-                        <strong style={{ fontSize: '16px', color: 'var(--text-main)', fontFamily: "'Syne', sans-serif", letterSpacing: '0.02em' }}>I am your Data Analyst.</strong>
+                        <strong style={{ fontSize: '16px', color: 'var(--text-main)', fontFamily: "'Inter', sans-serif", letterSpacing: '0.02em' }}>I am your Data Analyst.</strong>
                         <p style={{ fontSize: '13px', color: '#cbd5e1', lineHeight: 1.55, fontFamily: "'Inter', sans-serif" }}>Feel free to ask me any questions about your data.</p>
                       </div>
                     ) : chatMsgs.map((m, i) => (
@@ -1181,12 +1185,12 @@ export default function DataPulse({ user, onLogout }) {
                         {keyMetrics.map(m => (
                           <div key={m.label} style={{ padding: '20px', border: '1px solid var(--border-subtle)', borderRadius: '12px', background: 'var(--bg-input)' }}>
                             <strong style={{ fontSize: '12px', color: 'var(--text-muted)', display: 'block', marginBottom: '8px', textTransform: 'uppercase', letterSpacing: '0.05em' }}>{m.label}</strong>
-                            <span style={{ fontSize: '28px', fontFamily: "'Syne', sans-serif", fontWeight: 800, color: 'var(--text-main)', textShadow: '0 0 15px rgba(255,255,255,0.1)' }}>{m.val}</span>
+                            <span style={{ fontSize: '28px', fontFamily: "'Inter', sans-serif", fontWeight: 800, color: 'var(--text-main)', textShadow: '0 0 15px rgba(255,255,255,0.1)' }}>{m.val}</span>
                           </div>
                         ))}
                       </div>
                       <div style={{ padding: '20px', background: 'var(--bg-input)', borderRadius: '12px', border: '1px solid var(--border-subtle)' }}>
-                        <strong style={{ fontSize: '15px', display: 'block', marginBottom: '16px', color: 'var(--text-main)', fontFamily: "'Syne', sans-serif" }}>Data Info</strong>
+                        <strong style={{ fontSize: '15px', display: 'block', marginBottom: '16px', color: 'var(--text-main)', fontFamily: "'Inter', sans-serif" }}>Data Info</strong>
                         {findings.map((f, i) => (
                           <div key={i} style={{ fontSize: '15px', color: 'var(--text-muted)', marginBottom: '12px', display: 'flex', gap: '12px', alignItems: 'center' }}>
                             <div style={{ width: '6px', height: '6px', background: 'var(--primary-500)', borderRadius: '50%', boxShadow: '0 0 10px var(--primary-500)' }} /> {f}
@@ -1203,20 +1207,20 @@ export default function DataPulse({ user, onLogout }) {
                       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '16px' }}>
                         <div style={{ padding: '18px', borderRadius: '12px', border: '1px solid var(--border-subtle)', background: 'var(--bg-input)' }}>
                           <strong style={{ fontSize: '12px', color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.08em' }}>Strong Correlations</strong>
-                          <div style={{ marginTop: '8px', fontSize: '26px', color: 'var(--text-main)', fontFamily: "'Syne', sans-serif" }}>{(stats?.strong_correlations || []).length}</div>
+                          <div style={{ marginTop: '8px', fontSize: '26px', color: 'var(--text-main)', fontFamily: "'Inter', sans-serif" }}>{(stats?.strong_correlations || []).length}</div>
                         </div>
                         <div style={{ padding: '18px', borderRadius: '12px', border: '1px solid var(--border-subtle)', background: 'var(--bg-input)' }}>
                           <strong style={{ fontSize: '12px', color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.08em' }}>Columns With Outliers</strong>
-                          <div style={{ marginTop: '8px', fontSize: '26px', color: 'var(--text-main)', fontFamily: "'Syne', sans-serif" }}>{outlierCols.length}</div>
+                          <div style={{ marginTop: '8px', fontSize: '26px', color: 'var(--text-main)', fontFamily: "'Inter', sans-serif" }}>{outlierCols.length}</div>
                         </div>
                         <div style={{ padding: '18px', borderRadius: '12px', border: '1px solid var(--border-subtle)', background: 'var(--bg-input)' }}>
                           <strong style={{ fontSize: '12px', color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.08em' }}>Data Completeness</strong>
-                          <div style={{ marginTop: '8px', fontSize: '26px', color: 'var(--text-main)', fontFamily: "'Syne', sans-serif" }}>{formatPercent(dq.completeness || 100)}</div>
+                          <div style={{ marginTop: '8px', fontSize: '26px', color: 'var(--text-main)', fontFamily: "'Inter', sans-serif" }}>{formatPercent(dq.completeness || 100)}</div>
                         </div>
                       </div>
 
                       <div style={{ padding: '20px', background: 'var(--bg-input)', borderRadius: '12px', border: '1px solid var(--border-subtle)' }}>
-                        <strong style={{ fontSize: '15px', display: 'block', marginBottom: '14px', color: 'var(--text-main)', fontFamily: "'Syne', sans-serif" }}>Key Insights</strong>
+                        <strong style={{ fontSize: '15px', display: 'block', marginBottom: '14px', color: 'var(--text-main)', fontFamily: "'Inter', sans-serif" }}>Key Insights</strong>
                         {findings.length ? findings.map((f, i) => (
                           <div key={`ins-${i}`} style={{ fontSize: '14px', color: 'var(--text-muted)', marginBottom: '10px', display: 'flex', gap: '10px', lineHeight: 1.5 }}>
                             <span style={{ color: 'var(--info)' }}>•</span>{f}
@@ -1225,7 +1229,7 @@ export default function DataPulse({ user, onLogout }) {
                       </div>
 
                       <div style={{ padding: '20px', background: 'var(--bg-input)', borderRadius: '12px', border: '1px solid var(--border-subtle)' }}>
-                        <strong style={{ fontSize: '15px', display: 'block', marginBottom: '14px', color: 'var(--text-main)', fontFamily: "'Syne', sans-serif" }}>Recommended Actions</strong>
+                        <strong style={{ fontSize: '15px', display: 'block', marginBottom: '14px', color: 'var(--text-main)', fontFamily: "'Inter', sans-serif" }}>Recommended Actions</strong>
                         {recommendations.length ? recommendations.map((r, i) => (
                           <div key={`rec-${i}`} style={{ fontSize: '14px', color: 'var(--text-muted)', marginBottom: '10px', display: 'flex', gap: '10px', lineHeight: 1.5 }}>
                             <span style={{ color: 'var(--primary-500)' }}>⇥</span>{r}
@@ -1238,7 +1242,7 @@ export default function DataPulse({ user, onLogout }) {
                   {tab === "data" && (
                     <div className="flex-col gap-16">
                       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                        <strong style={{ fontSize: '15px', color: 'var(--text-main)', fontFamily: "'Syne', sans-serif" }}>Cleaned Data Preview</strong>
+                        <strong style={{ fontSize: '15px', color: 'var(--text-main)', fontFamily: "'Inter', sans-serif" }}>Cleaned Data Preview</strong>
                         <button onClick={downloadCleanedData} className="btn-primary" style={{ padding: '0 16px', height: '36px', fontSize: '12px' }}>Download Data (CSV)</button>
                       </div>
                       <p style={{ fontSize: '13px', color: 'var(--text-muted)' }}>This preview shows up to 100 array segments from your engine after cleaning and imputation algorithms have run.</p>
