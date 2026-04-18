@@ -824,18 +824,42 @@ async def chat_with_analysis(
         {"column": col, "count": count} for col, count in top_outliers
     ]
 
+    # ── Helper: extract the most recently mentioned entity name from history ──
+    def _extract_recent_entity(history: list) -> str | None:
+        """Scan recent assistant/user messages for a proper noun that could be a subject."""
+        import re
+        # Walk history in reverse — the most recent mention wins
+        for m in reversed(history or []):
+            content = m.get("content", "")
+            # Match capitalised words (potential names / entities) — avoid common English words
+            _STOP = {"the", "a", "an", "is", "are", "was", "were", "has", "have", "had",
+                     "in", "on", "at", "of", "for", "and", "or", "but", "with", "by",
+                     "according", "to", "data", "dataset", "fetched", "per", "as"}
+            tokens = re.findall(r"[A-Z][a-z]+(?:\s[A-Z][a-z]+)*", content)
+            for tok in reversed(tokens):
+                if tok.lower() not in _STOP and len(tok) > 2:
+                    return tok
+        return None
+
     # Enhanced System Prompt for strict grounding and context awareness
     system_prompt = (
-        "You are an elite Senior Data Analyst. You answer questions grounded in the provided dataset context."
+        "You are an elite Senior Data Analyst. You answer questions strictly grounded in the provided dataset context.\n"
         "Tone: Professional, authoritative, yet accessible. "
         "Brevity: Keep responses strictly between 1-4 sentences.\n"
         "Grounding Rules:\n"
         "1. MANDATORY: If you receive an 'ADDITIONAL DATA FROM FULL DATASET QUERY' block, you MUST use "
-        "   those exact values to answer the question. Never say 'I don't have that information' if data was fetched.\n"
-        "2. Never invent data. If no data was fetched and it's not in the stats, say you don't have it.\n"
-        "3. If the user is chatty (hi, thanks), be polite but do not spontaneously analyze data.\n"
-        f"4. Referencing Charts: Use exactly `[CHART: key]` using only these keys: {exact_chart_keys}. Never modify them.\n"
-        "5. Use previous messages to maintain continuity. If a user says 'Why?', refer to your previous explanation."
+        "   those exact values to answer the question. Do NOT say 'I don't have that information' — the data is right there.\n"
+        "2. For top_n / bottom_n results: look at 'top_entry' → that is the single best/worst entity. "
+        "   State its name and value explicitly. For 'ranked_results', list the top entries naturally.\n"
+        "3. For group_aggregate results: 'result' is a dict of {entity: value}. Pick the highest/lowest as needed.\n"
+        "4. For distinct / value_counts: summarize the list or count concisely.\n"
+        "5. For search results: each item in 'result' is a full row dict — read the relevant field and state it directly.\n"
+        "6. NEVER say 'I don't have that data' if an ADDITIONAL DATA block is present, even if the result looks unfamiliar. Parse it.\n"
+        "7. If truly no data is available and it's not in stats, say: 'I couldn't find that in the dataset.'\n"
+        "8. If the user is chatty (hi, thanks), be polite but do not spontaneously analyze data.\n"
+        f"9. Referencing Charts: Use exactly `[CHART: key]` using only these keys: {exact_chart_keys}. Never modify them.\n"
+        "10. Use previous messages to maintain continuity. Pronouns like 'his', 'her', 'their', 'its', 'he', 'she' "
+        "    ALWAYS refer to the most recently mentioned person/entity in the conversation — look back and resolve them."
     )
 
     # Data Context Block (separated from the user's actual question to prevent prompt injection/confusion)
@@ -867,80 +891,178 @@ async def chat_with_analysis(
     if client:
         try:
             # ── Phase 1: Intent & Data Retrieval ─────────────────────────────
-            # Determine if we need to query the full dataset
             file_hash = context.get("file_hash")
             data_result = None
-            
-            # Optimization: Skip intent check for simple greetings to avoid latency and errors
+
+            # Optimization: Skip intent check for simple greetings
             is_greeting = any(g in question.lower() for g in ["hello", "hi", "hey", "thanks", "thank you"])
-            
+
             if file_hash and not is_greeting:
                 try:
-                    # stats['columns'] is a plain list of names, not a typed dict.
-                    # Build col_types from the actual typed sub-dicts in stats_summary.
+                    # Build col_types from stats_summary sub-dicts
                     col_types = {}
                     for c in stats.get("numeric_columns", {}).keys():
                         col_types[c] = "numeric"
                     for c in stats.get("categorical_columns", {}).keys():
                         col_types[c] = "categorical"
-                    # Add any remaining columns from the columns list
                     for c in (stats.get("columns") or []):
                         if c not in col_types:
                             col_types[c] = "unknown"
+
+                    # Build recent conversation context so follow-up questions resolve correctly
+                    recent_history = ""
+                    if body.history:
+                        recent_turns = body.history[-8:]  # last 4 exchanges
+                        recent_history = "\n".join(
+                            f"{m.get('role','user').upper()}: {m.get('content','')}"
+                            for m in recent_turns
+                        )
+
+                    # ── Pronoun detection: if question uses pronouns without a named entity,
+                    #    inject the resolved subject into the question so the intent LLM has it.
+                    import re as _re
+                    _PRONOUNS = {"his", "her", "their", "its", "he", "she", "they",
+                                 "him", "hers", "theirs", "this person", "that person"}
+                    q_tokens = set(question.lower().split())
+                    has_pronoun = bool(q_tokens & _PRONOUNS)
+                    resolved_subject = None
+                    if has_pronoun and body.history:
+                        resolved_subject = _extract_recent_entity(body.history)
+                    # Build the question the planner actually sees (with resolved subject if any)
+                    planner_question = question
+                    if resolved_subject and has_pronoun:
+                        planner_question = f"{question} [Note: pronoun refers to '{resolved_subject}']"
+                        logger.info("Pronoun resolved: '%s' → '%s'", question, resolved_subject)
+
                     intent_prompt = (
-                        "You are a Data Query Planner. Given a user question, decide if it needs querying the FULL dataset.\n"
-                        "If YES, return ONLY a single JSON object with 'type' and 'params'. If NO, return 'NONE'.\n\n"
-                        "SUPPORTED QUERY TYPES (pick the best one):\n"
-                        "0. filter_lookup - look up a column value for a specific entity. USE THIS FIRST for 'what is X for Y', 'find the ID of Z', 'what is country_id for India'.\n"
-                        "   CRITICAL: NEVER use aggregate/mean/median on an ID or code column. Always look it up by filtering.\n"
-                        "   Example: {\"type\":\"filter_lookup\",\"params\":{\"filter_col\":\"country_name\",\"filter_val\":\"India\",\"result_col\":\"country_id\"}}\n"
-                        "1. filter_group  - filter rows then group+count. USE for 'what X in year Y', 'most popular brand in 2021'.\n"
-                        "   Example: {\"type\":\"filter_group\",\"params\":{\"group_by\":\"Brand\",\"func\":\"count\",\"n\":5,\"filters\":[{\"column\":\"Year\",\"op\":\"year\",\"value\":2021}]}}\n"
-                        "2. value_counts  - count each category. USE for 'how many of each X', 'distribution of Y'.\n"
-                        "   Example: {\"type\":\"value_counts\",\"params\":{\"column\":\"Category\",\"n\":10}}\n"
-                        "3. group_aggregate - group by column, aggregate another. USE for 'total sales per region'.\n"
-                        "   Example: {\"type\":\"group_aggregate\",\"params\":{\"group_by\":\"Region\",\"column\":\"Revenue\",\"func\":\"sum\",\"n\":10}}\n"
-                        "4. aggregate     - single stat on one column. USE for 'average price', 'total revenue'. NEVER for IDs or codes.\n"
-                        "   Example: {\"type\":\"aggregate\",\"params\":{\"column\":\"Price\",\"func\":\"mean\"}}\n"
-                        "5. top_n         - top rows sorted by a column. USE for 'top 5 most expensive'.\n"
-                        "   Example: {\"type\":\"top_n\",\"params\":{\"column\":\"Sales\",\"n\":5}}\n"
-                        "6. lookup        - get a specific row. USE for 'what is in row 500'.\n"
-                        "   Example: {\"type\":\"lookup\",\"params\":{\"row_index\":500}}\n"
-                        "7. row_count     - count rows matching a condition.\n"
-                        "   Example: {\"type\":\"row_count\",\"params\":{\"filters\":[{\"column\":\"Status\",\"op\":\"eq\",\"value\":\"Active\"}]}}\n\n"
-                        "Filter ops: 'eq' (exact match), 'contains' (text), 'gt/lt/gte/lte' (numeric), 'year' (extract year from date), 'month'.\n\n"
-                        f"Dataset columns and types: {col_types}\n"
-                        f"User question: {question}\n\n"
-                        "Return ONLY the JSON or 'NONE'. No explanation."
+                        "You are a Data Query Planner. Analyze the user's question (considering conversation history for follow-ups) "
+                        "and decide if querying the FULL dataset is needed.\n"
+                        "If YES, return ONLY a single valid JSON object. If NO, return exactly 'NONE'.\n\n"
+                        "CRITICAL RULES (read before deciding):\n"
+                        "- ALWAYS query the dataset for attribute/biographical questions: age, birthday, date of birth, address, score, "
+                        "  rank, nationality, team, role, salary, height, weight, position, stats of a named person/item.\n"
+                        "- ALWAYS query for follow-up questions about a specific entity even if the name comes from pronouns (his/her/their).\n"
+                        "- When a question uses pronouns (his/her/their/its/he/she), the subject is resolved in the [Note] annotation — USE IT.\n"
+                        "- Prefer 'search' when looking up a named entity's full row (birthday, age, address, stats).\n"
+                        "- Prefer 'filter_lookup' when mapping one specific column's value to another (e.g. get birthdate of a named player).\n"
+                        "- NEVER return NONE for questions about a specific named person or item's attributes.\n\n"
+                        "SUPPORTED QUERY TYPES — pick the BEST one:\n"
+                        "0. filter_lookup  — look up one column's value by matching another. Use for: 'what is X for Y', 'find Z of W', "
+                        "   'when is [person]'s birthday', 'what is [person]'s age/score/team'.\n"
+                        "   NEVER use aggregate on ID/code columns — always use filter_lookup instead.\n"
+                        '   Example: {"type":"filter_lookup","params":{"filter_col":"player_name","filter_val":"Lokesh Rahul","result_col":"date_of_birth"}}\n'
+                        "1. top_n          — highest N rows by a numeric column. Use for: 'most expensive', 'highest', 'costliest', 'largest', 'best', 'maximum'.\n"
+                        '   Example: {"type":"top_n","params":{"column":"Price","n":1}}   ← use n=1 for singular\n'
+                        "2. bottom_n       — lowest N rows by a numeric column. Use for: 'cheapest', 'lowest', 'worst', 'least', 'minimum'.\n"
+                        '   Example: {"type":"bottom_n","params":{"column":"Price","n":1}}\n'
+                        "3. group_aggregate — group by a column, aggregate a numeric one. Use for: 'average price per brand', 'total sales per region'.\n"
+                        '   Example: {"type":"group_aggregate","params":{"group_by":"Brand","column":"Revenue","func":"sum","n":10}}\n'
+                        "   func options: sum, mean, max, min, count, median, std\n"
+                        "4. filter_group   — filter rows then group+aggregate. Use for: 'top brand in 2021', 'most X in category Y'.\n"
+                        '   Example: {"type":"filter_group","params":{"group_by":"Brand","func":"count","n":5,"filters":[{"column":"Year","op":"year","value":2021}]}}\n'
+                        "5. value_counts   — count each unique category. Use for: 'how many of each X', 'distribution of Y', 'how many unique Z'.\n"
+                        '   Example: {"type":"value_counts","params":{"column":"Category","n":15}}\n'
+                        "6. aggregate      — single stat (no grouping). Use for: 'average price', 'total revenue', 'max score'. NEVER for IDs.\n"
+                        '   Example: {"type":"aggregate","params":{"column":"Price","func":"mean"}}\n'
+                        "7. distinct       — list unique values. Use for: 'what are all the brands', 'list all categories', 'what values does X have'.\n"
+                        '   Example: {"type":"distinct","params":{"column":"Brand"}}\n'
+                        "8. row_count      — count rows matching a condition.\n"
+                        '   Example: {"type":"row_count","params":{"filters":[{"column":"Status","op":"eq","value":"Active"}]}}\n'
+                        "9. search         — text search across all columns. Use for: 'find rows with X', 'show entries containing Y', "
+                        "   'look up person Z', or whenever you need all fields of a matching row.\n"
+                        '   Example: {"type":"search","params":{"value":"Lokesh Rahul","n":3}}\n'
+                        "10. lookup        — fetch a specific row by index.\n"
+                        '    Example: {"type":"lookup","params":{"row_index":0}}\n'
+                        "11. correlation   — correlation between two numeric columns.\n"
+                        '    Example: {"type":"correlation","params":{"column":"Price","column2":"Mileage"}}\n'
+                        "12. percentile    — compute a percentile of a column.\n"
+                        '    Example: {"type":"percentile","params":{"column":"Price","percentile":90}}\n\n'
+                        "Filter ops: 'eq' (exact), 'neq' (not equal), 'contains' (text), 'gt/lt/gte/lte' (numeric), 'year', 'month', 'isnull', 'notnull'.\n\n"
+                        "RULES:\n"
+                        "- For superlatives ('costliest','cheapest','fastest','most expensive','lowest rated') → use top_n or bottom_n with n=1\n"
+                        "- For 'which X has the most/highest/best Y' → use group_aggregate with func=max or sum\n"
+                        "- For follow-up questions with pronouns → the [Note] in the question tells you who the subject is — USE IT\n"
+                        "- For 'how many unique X' → use value_counts or distinct (use distinct when listing is needed, value_counts for counts)\n"
+                        "- Column names in params need NOT be exact — the system will fuzzy-match them automatically\n"
+                        "- Always use n=1 for singular questions like 'which ONE is...', 'what is THE most...'\n\n"
+                        f"Dataset columns and types: {col_types}\n\n"
+                        + (f"Recent conversation:\n{recent_history}\n\n" if recent_history else "")
+                        + f"Current user question: {planner_question}\n\n"
+                        "Return ONLY the JSON object or 'NONE'. No explanation, no markdown, no code fences."
                     )
+                    # Use a smarter model for intent classification
+                    intent_model = os.getenv("GROQ_INTENT_MODEL", "llama-3.3-70b-versatile")
                     intent_resp = client.chat.completions.create(
-                        model=os.getenv("GROQ_MODEL", "llama-3.1-8b-instant"),
-                        messages=[{"role": "system", "content": intent_prompt}],
-                        max_tokens=200,
+                        model=intent_model,
+                        messages=[{"role": "user", "content": intent_prompt}],
+                        max_tokens=350,
                         temperature=0,
                     )
                     intent_text = (intent_resp.choices[0].message.content or "").strip()
                     logger.info("Intent LLM response: %s", intent_text)
                     if "{" in intent_text and "}" in intent_text:
                         import json as std_json
-                        query_plan = std_json.loads(intent_text[intent_text.find("{"):intent_text.rfind("}")+1])
+                        raw_json = intent_text[intent_text.find("{"):intent_text.rfind("}")+1]
+                        query_plan = std_json.loads(raw_json)
                         data_result = run_data_query(file_hash, query_plan.get("type"), query_plan.get("params", {}))
-                        logger.info("Data Agent result: %s", str(data_result)[:300])
+                        logger.info("Data Agent result: %s", str(data_result)[:500])
+
+                        # ── Fallback: if data_result is an error or empty, try a broad search ──
+                        result_is_empty = (
+                            not data_result
+                            or "error" in data_result
+                            or (isinstance(data_result.get("result"), list) and len(data_result["result"]) == 0)
+                            or data_result.get("result") == "No rows found."
+                        )
+                        if result_is_empty and resolved_subject:
+                            logger.info("Primary query empty/failed — fallback search for '%s'", resolved_subject)
+                            data_result = run_data_query(file_hash, "search", {"value": resolved_subject, "n": 3})
+
+                    else:
+                        # Intent LLM returned NONE — apply heuristic fallback for lookup-type questions
+                        _LOOKUP_SIGNALS = {
+                            "birthday", "born", "dob", "date of birth", "birth date",
+                            "age", "address", "nationality", "country", "team", "club",
+                            "salary", "height", "weight", "role", "position", "rank",
+                            "when", "where", "who", "what is his", "what is her",
+                            "what is their", "tell me about", "details of", "info on",
+                        }
+                        q_lower_check = question.lower()
+                        is_lookup_question = any(sig in q_lower_check for sig in _LOOKUP_SIGNALS)
+                        # Also trigger if the question has a pronoun and we have a resolved subject
+                        if (is_lookup_question or has_pronoun) and resolved_subject:
+                            logger.info("Intent=NONE but looks like a lookup — searching for '%s'", resolved_subject)
+                            data_result = run_data_query(file_hash, "search", {"value": resolved_subject, "n": 3})
+                        elif is_lookup_question:
+                            # Try to extract a capitalized entity directly from the question
+                            fallback_entity = _extract_recent_entity([{"content": question, "role": "user"}])
+                            if fallback_entity:
+                                logger.info("Intent=NONE fallback entity search: '%s'", fallback_entity)
+                                data_result = run_data_query(file_hash, "search", {"value": fallback_entity, "n": 3})
+
                 except Exception as e:
                     logger.warning("Intent pass failed (skipping data retrieval): %s", e)
 
             # ── Phase 2: Synthesis ───────────────────────────────────────────
             if data_result:
+                # Inject resolved-subject hint so the synthesis LLM knows who we searched for
+                subject_note = f" (subject resolved as: {resolved_subject})" if resolved_subject else ""
                 messages.append({
-                    "role": "system", 
-                    "content": f"ADDITIONAL DATA FROM FULL DATASET QUERY:\n{data_result}"
+                    "role": "system",
+                    "content": (
+                        f"ADDITIONAL DATA FROM FULL DATASET QUERY{subject_note}:\n{data_result}\n"
+                        "IMPORTANT: The above is live data from the actual dataset. "
+                        "For 'search' results, each item in 'result' is a full row — read the relevant field and state the value directly. "
+                        "Do NOT say 'I don't have that data'. Parse the row and answer."
+                    )
                 })
 
+            synthesis_model = os.getenv("GROQ_SYNTHESIS_MODEL", os.getenv("GROQ_MODEL", "llama-3.3-70b-versatile"))
             completion = client.chat.completions.create(
-                model=os.getenv("GROQ_MODEL", "llama-3.1-8b-instant"),
+                model=synthesis_model,
                 messages=messages,
-                temperature=0.2,
-                max_tokens=400,
+                temperature=0.15,
+                max_tokens=450,
             )
             answer = (completion.choices[0].message.content or "").strip()
             if answer:
