@@ -159,10 +159,23 @@ def insights_agent(state: AnalysisState) -> AnalysisState:
     logger.info("Insights agent started")
 
     try:
-        if not state.stats_summary:
-            raise ValueError("Missing stats_summary from statistician agent")
+        stats = state.stats_summary or {}
 
-        stats = state.stats_summary
+        # If the statistician failed and stats are empty, use a safe minimal fallback.
+        # This prevents a hard crash and ensures the pipeline always produces a result.
+        if not stats or not stats.get("row_count"):
+            logger.warning("stats_summary is empty or partial — using safe minimal insights.")
+            state.insights = {
+                "headline": "Dataset was loaded but full statistical analysis could not be completed.",
+                "data_info": ["The dataset was uploaded successfully."],
+                "findings": ["Statistical analysis encountered an issue. The dataset may contain unusual formatting. Try re-uploading or checking for special characters."],
+                "outlier_summary": {},
+                "correlation_insights": [],
+                "distribution_insights": [],
+            }
+            state.completed_agents.append("insights")
+            return state
+
         slim_stats = truncate_stats_for_llm(stats)
 
         llm_result = _llm_insights(slim_stats)
@@ -194,6 +207,16 @@ def insights_agent(state: AnalysisState) -> AnalysisState:
             agent="insights",
             error_type="agent",
         )
+        # Always provide a minimal fallback so the pipeline doesn't return empty insights
+        if not state.insights:
+            state.insights = {
+                "headline": "",
+                "data_info": [],
+                "findings": ["Insights generation encountered an error."],
+                "outlier_summary": {},
+                "correlation_insights": [],
+                "distribution_insights": [],
+            }
 
     state.completed_agents.append("insights")
     return state

@@ -26,6 +26,7 @@ for /f "tokens=2 delims= " %%V in ('python --version 2^>^&1') do set PY_VER=%%V
 echo  [OK]  Python %PY_VER% found.
 
 REM ── 2. Check .env file ───────────────────────────────────────────────────────
+set "SCRIPT_DIR=%~dp0"
 if not exist ".env" (
     echo.
     echo  [ERROR] .env file is missing!
@@ -33,7 +34,7 @@ if not exist ".env" (
     echo          Ask the project owner to send you the .env file,
     echo          then place it here:
     echo.
-    echo          %~dp0.env
+    echo          !SCRIPT_DIR!.env
     echo.
     pause
     exit /b 1

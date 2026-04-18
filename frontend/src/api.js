@@ -37,7 +37,7 @@ export function clearToken() {
   accessToken = null;
   // Best-effort: ask backend to clear the HttpOnly refresh cookie.
   // Fire-and-forget is intentional — we don't need to await this.
-  fetch(`${BASE}/auth/logout`, { method: "POST", credentials: "include" }).catch(() => {});
+  fetch(`${BASE}/auth/logout`, { method: "POST", credentials: "include" }).catch(() => { });
 }
 
 async function refreshAccessToken() {
@@ -57,6 +57,52 @@ async function refreshAccessToken() {
     // ignore
   }
   return false;
+}
+
+// ── Error handling helpers ────────────────────────────────────────────────────
+
+function getStatusMessage(status) {
+  const messages = {
+    400: "Bad Request",
+    401: "Unauthorized",
+    403: "Forbidden",
+    404: "Not Found",
+    409: "Conflict",
+    422: "Unprocessable Entity",
+    429: "Too Many Requests",
+    500: "Server Error",
+    502: "Bad Gateway",
+    503: "Service Unavailable"
+  };
+  return messages[status] || `HTTP ${status}`;
+}
+
+function normalizeErrorDetail(body, fallback) {
+  if (!body || typeof body !== 'object') return fallback;
+  
+  // Handle Pydantic validation error (detail is array of validation errors)
+  if (Array.isArray(body.detail)) {
+    const errors = body.detail.map(err => {
+      if (typeof err === 'object') {
+        const field = err.loc ? err.loc[err.loc.length - 1] : 'Unknown field';
+        return `${field}: ${err.msg}`;
+      }
+      return String(err);
+    });
+    return errors.join(' | ') || fallback;
+  }
+  
+  // Handle standard error response with 'detail' field
+  if (typeof body.detail === 'string') {
+    return body.detail;
+  }
+  
+  // Handle 'message' field
+  if (typeof body.message === 'string') {
+    return body.message;
+  }
+  
+  return fallback;
 }
 
 // ── Core fetch helper ─────────────────────────────────────────────────────────
@@ -127,7 +173,7 @@ async function apiFetch(path, options = {}) {
   }
 
   if (!response.ok) {
-    let detail = getStatusMessage(response.status);
+    let detail = `HTTP ${response.status}`;
     try {
       const body = await response.json();
       detail = normalizeErrorDetail(body, detail);
@@ -196,10 +242,10 @@ export async function apiAnalyze(file) {
   return apiFetch("/analyze", { method: "POST", body: form });
 }
 
-export async function apiChat(question, context = {}) {
+export async function apiChat(question, context = {}, history = []) {
   return apiFetch("/chat", {
     method: "POST",
-    body: JSON.stringify({ question, context }),
+    body: JSON.stringify({ question, context, history }),
   });
 }
 
@@ -221,44 +267,4 @@ export async function apiDeleteAnalysis(analysisId) {
 
 export async function apiHealth() {
   return apiFetch("/health", { withAuth: false });
-}
-
-// ── Helpers ───────────────────────────────────────────────────────────────────
-
-/**
- * Normalizes error messages from the backend.
- * FastAPI/Starlette usually returns { "detail": "message" } or { "detail": [...] }.
- */
-function normalizeErrorDetail(body, fallback) {
-  if (!body) return fallback;
-  if (typeof body.detail === "string") return body.detail;
-  if (Array.isArray(body.detail)) {
-    // FastAPI validation error array
-    return body.detail.map((e) => e.msg || JSON.stringify(e)).join(", ");
-  }
-  if (body.message) return body.message;
-  if (body.error) return body.error;
-  return fallback;
-}
-
-/**
- * Maps standard HTTP status codes to user-friendly messages for cases where
- * the server does not return a specific JSON error detail.
- */
-function getStatusMessage(status) {
-  switch (status) {
-    case 400: return "Bad Request: The data provided was invalid.";
-    case 401: return "Invalid Credentials or Session Expired.";
-    case 403: return "Access Denied: You do not have permission required for this action.";
-    case 404: return "Resource Not Found: The requested data does not exist.";
-    case 408: return "Request Timeout: The server took too long to respond.";
-    case 413: return "Payload Too Large: The requested upload exceeds allowed limits.";
-    case 422: return "Unprocessable Entity: The submitted file or data is malformed.";
-    case 429: return "Too Many Requests: Please slow down and try again later.";
-    case 500: return "Internal Server Error: Something went wrong on our server.";
-    case 502: return "Bad Gateway: The upstream server failed.";
-    case 503: return "Service Unavailable: The server is currently overloaded or down for maintenance.";
-    case 504: return "Gateway Timeout: The server took too long to return a response.";
-    default: return `Unexpected Network Error (HTTP ${status})`;
-  }
 }

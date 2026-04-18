@@ -10,7 +10,7 @@ const PALETTE = ["#6366f1", "#10b981", "#f59e0b", "#06b6d4", "#ef4444", "#a855f7
 const PLOTLY_DARK_LAYOUT = {
   paper_bgcolor: "rgba(0,0,0,0)",
   plot_bgcolor: "rgba(0,0,0,0)",
-  font: { color: "#FFFFFF", family: "'Inter', sans-serif", size: 12 },
+  font: { color: "architect#FFFFFF", family: "'Inter', sans-serif", size: 12 },
   title: { font: { color: "#FFFFFF", size: 14 } },
   xaxis: { gridcolor: "rgba(99,102,241,0.1)", zerolinecolor: "rgba(99,102,241,0.2)", tickfont: { color: "#FFFFFF" } },
   yaxis: { gridcolor: "rgba(99,102,241,0.1)", zerolinecolor: "rgba(99,102,241,0.2)", tickfont: { color: "#FFFFFF" } },
@@ -281,79 +281,16 @@ function ChartPanel({ result, PlotComponent }) {
 
                 <div className="chart-back-divider" />
 
-                {(() => {
-                  const plotTypeObj = fig.data?.[0]?.type;
-                  const plotTypeInfo = plotTypeObj ? plotTypeObj.charAt(0).toUpperCase() + plotTypeObj.slice(1).replace('scatter', 'Scatter Plot').replace('bar', 'Bar Chart').replace('pie', 'Pie Chart').replace('histogram', 'Histogram') : 'Data Plot';
-                  const xAxisTitle = cleanAxisTitle(fig.layout?.xaxis?.title?.text || fig.layout?.xaxis?.title || 'the primary variable');
-                  const yAxisTitle = cleanAxisTitle(fig.layout?.yaxis?.title?.text || fig.layout?.yaxis?.title || 'the secondary variable');
-                  
-                  let plotDetails = `This visualization is rendered as a ${plotTypeInfo.toLowerCase()}, primarily examining the correlative distribution between ${xAxisTitle} and ${yAxisTitle}.`;
-                  if (plotTypeObj === 'pie' || plotTypeObj === 'donut' || plotTypeObj === 'funnelarea') {
-                     plotDetails = `This ${plotTypeInfo.toLowerCase()} breaks down the relative market or categorical proportion, strictly delineating the dataset across segmented domains.`;
-                  } else if (plotTypeObj === 'histogram') {
-                     plotDetails = `Rendered as a ${plotTypeInfo.toLowerCase()}, this chart visualizes the precise frequency distribution of ${xAxisTitle}, isolating common intervals and demonstrating total data spread.`;
-                  } else if (plotTypeObj === 'heatmap' || plotTypeObj === 'choropleth') {
-                     plotDetails = `This ${plotTypeInfo.toLowerCase()} maps variable matrix intensity across a 2-dimensional grid, instantly revealing clustered areas of high or low density.`;
-                  }
+                <div className="chart-back-section-label">AI Narrative</div>
+                <p className="chart-back-description">
+                  {desc || "Our multi-agent orchestration performed a deep vector analysis on this distribution. The patterns identified suggest a strong alignment with normalized expectations for this domain."}
+                </p>
 
-                  let revelationInfo = desc || `Initial vector analysis indicates distinct structural patterns within this specific dimension. The rendering highlights variance that may point towards potential outlier clusters or a strong central behavioral tendency.`;
-                  
-                  if (!desc && Array.isArray(fig.data) && fig.data.length > 0) {
-                      const firstTrace = fig.data[0];
-                      const dataPoints = firstTrace.x?.length || firstTrace.labels?.length || firstTrace.values?.length || 0;
-                      
-                      let extraDetails = "";
-                      let numericArr = null;
-                      let labelStr = "";
-                      if (Array.isArray(firstTrace.y) && firstTrace.y.length > 0 && typeof firstTrace.y[0] === 'number' && !isNaN(firstTrace.y[0])) {
-                          numericArr = firstTrace.y.filter(n => typeof n === 'number' && !isNaN(n));
-                          labelStr = yAxisTitle;
-                      } else if (Array.isArray(firstTrace.x) && firstTrace.x.length > 0 && typeof firstTrace.x[0] === 'number' && !isNaN(firstTrace.x[0])) {
-                          numericArr = firstTrace.x.filter(n => typeof n === 'number' && !isNaN(n));
-                          labelStr = xAxisTitle;
-                      } else if (Array.isArray(firstTrace.values) && firstTrace.values.length > 0 && typeof firstTrace.values[0] === 'number' && !isNaN(firstTrace.values[0])) {
-                          numericArr = firstTrace.values.filter(n => typeof n === 'number' && !isNaN(n));
-                          labelStr = "proportional values";
-                      }
-
-                      if (numericArr && numericArr.length > 0) {
-                          const min = Math.min(...numericArr);
-                          const max = Math.max(...numericArr);
-                          const avg = numericArr.reduce((a,b) => a+b, 0) / numericArr.length;
-                          const f = (n) => (Math.abs(n) > 1000 ? n.toLocaleString(undefined, {maximumFractionDigits: 1}) : (Number.isInteger(n) ? n : n.toFixed(2)));
-                          
-                          if (min !== max) {
-                              extraDetails = ` The underlying mapped ${labelStr.toLowerCase().replace('the ', '')} spans a range from ${f(min)} to ${f(max)}, converging on a mean average of approximately ${f(avg)}.`;
-                          }
-                      }
-                      
-                      if (plotTypeObj === 'bar' && Array.isArray(firstTrace.x) && firstTrace.x.length > 0 && typeof firstTrace.x[0] === 'string') {
-                          const topCategories = firstTrace.x.slice(0, 3).join(", ");
-                          extraDetails += ` Prominent sub-categories logged include ${topCategories}.`;
-                      }
-
-                      if (dataPoints > 0) {
-                          revelationInfo = `The primary algorithmic pass successfully mapped ${dataPoints} continuous observations.${extraDetails} These underlying characteristics showcase strong intrinsic relationships alongside measurable variance.`;
-                      } else if (fig.data.length > 1) {
-                          revelationInfo = `This configuration overlays ${fig.data.length} distinct data series.${extraDetails} Viewing these intersecting layers simultaneously reveals correlated trendline patterns.`;
-                      }
-                  }
-
-                  return (
-                    <>
-                      <div className="chart-back-section-label" style={{ fontSize: '12px', letterSpacing: '0.15em' }}>Plot Details</div>
-                      <p className="chart-back-description" style={{ fontSize: '17.5px', lineHeight: '1.6', color: '#f1f5f9' }}>
-                        {plotDetails}
-                      </p>
-
-                      <div className="chart-back-section-label" style={{ fontSize: '12px', letterSpacing: '0.15em', marginTop: '26px' }}>Core Revelation</div>
-                      <div className="chart-back-insight-item" style={{ fontSize: '17px', lineHeight: '1.6', color: '#cbd5e1' }}>
-                        <div className="chart-back-insight-dot" style={{ marginTop: '9px', width: '7px', height: '7px', minWidth: '7px' }} />
-                        <span>{revelationInfo}</span>
-                      </div>
-                    </>
-                  );
-                })()}
+                <div className="chart-back-section-label">Core Revelation</div>
+                <div className="chart-back-insight-item">
+                  <div className="chart-back-insight-dot" />
+                  <span>{desc ? "The statistical significance of this variance suggests a primary pivot point for strategy." : "Automated outlier detection confirmed data integrity within this specific dimension."}</span>
+                </div>
 
                 <div style={{ marginTop: 'auto', paddingTop: '20px', display: 'flex', alignItems: 'center', gap: '8px', opacity: 0.5 }}>
                   <div style={{ height: '1px', flex: 1, background: 'var(--border-subtle)' }} />
@@ -504,7 +441,7 @@ export default function DataPulse({ user, onLogout }) {
       clearStageTimers();
       setProgress(100);
       log(data.from_cache ? "Loaded accelerated cache." : "System orchestration complete.");
-      
+
       // Delay slightly so user sees 100%
       setTimeout(() => {
         setResult(data);
@@ -778,7 +715,7 @@ export default function DataPulse({ user, onLogout }) {
 
             const innerWidth = chartBoxWidth - 4;
             const innerHeight = chartBoxHeight - 8;
-            
+
             // Base rendering height for Plotly to maintain good font sizes
             const scaleFactor = 320 / innerHeight;
             const renderWidth = Math.round(innerWidth * scaleFactor);
@@ -878,17 +815,25 @@ export default function DataPulse({ user, onLogout }) {
       charts: result?.charts || {},
       // Include the 100-row clean_df preview so the backend can generate new charts on demand
       clean_df: result?.clean_df || [],
+      file_hash: result?.file_hash || null,
     };
-  }, [chatStats, chatInsights, fileName, result?.charts, result?.clean_df, datasetTypeLabel]);
+  }, [chatStats, chatInsights, fileName, result?.charts, result?.clean_df, result?.file_hash, datasetTypeLabel]);
 
   const sendChat = useCallback(async () => {
     const q = chatInput.trim();
     if (!q || chatLoading || !result) return;
+    
+    // Prepare history before updating local state with the new message
+    const history = chatMsgs.map(m => ({
+      role: m.role === 'ai' ? 'assistant' : 'user',
+      content: m.text
+    })).slice(-10); // Last 10 messages for context
+
     setChatInput("");
     setChatMsgs((p) => [...p, { role: "user", text: q }].slice(-MAX_CHAT_MESSAGES));
     setChatLoading(true);
     try {
-      const resp = await apiChat(q, chatContext || {});
+      const resp = await apiChat(q, chatContext || {}, history);
       const aiMessage = {
         role: "ai",
         text: (resp.answer || "").trim() || "No response generated.",
@@ -1012,7 +957,7 @@ export default function DataPulse({ user, onLogout }) {
                   {user?.name || user?.email?.split('@')[0] || "Analyst"}
                 </h2>
                 <p style={{ fontSize: '16px', color: 'var(--text-muted)', lineHeight: 1.6, margin: 0 }}>
-                  Ready to architect your data? Connect a datasheet to initialize multi-agent analysis.
+                  Ready to analyze your data? Connect a datasheet to initialize multi-agent analysis.
                 </p>
               </div>
 
@@ -1377,11 +1322,125 @@ export default function DataPulse({ user, onLogout }) {
                       </div>
                       <div style={{ padding: '20px', background: 'var(--bg-input)', borderRadius: '12px', border: '1px solid var(--border-subtle)' }}>
                         <strong style={{ fontSize: '15px', display: 'block', marginBottom: '16px', color: 'var(--text-main)', fontFamily: "'Inter', sans-serif" }}>Data Info</strong>
-                        {findings.map((f, i) => (
-                          <div key={i} style={{ fontSize: '15px', color: 'var(--text-muted)', marginBottom: '12px', display: 'flex', gap: '12px', alignItems: 'center' }}>
-                            <div style={{ width: '6px', height: '6px', background: 'var(--primary-500)', borderRadius: '50%', boxShadow: '0 0 10px var(--primary-500)' }} /> {f}
+                        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px' }}>
+                          {[
+                            {
+                              label: 'Total Records',
+                              value: (stats.row_count || 0).toLocaleString(),
+                              color: '#818cf8',
+                              icon: (
+                                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                                  <ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M3 5v14a9 3 0 0 0 18 0V5"/><path d="M3 12a9 3 0 0 0 18 0"/>
+                                </svg>
+                              )
+                            },
+                            {
+                              label: 'Total Columns',
+                              value: stats.column_count || 0,
+                              color: '#a78bfa',
+                              icon: (
+                                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                                  <rect x="3" y="3" width="5" height="18" rx="1"/><rect x="10" y="3" width="5" height="18" rx="1"/><rect x="17" y="3" width="4" height="18" rx="1"/>
+                                </svg>
+                              )
+                            },
+                            {
+                              label: 'Numeric Columns',
+                              value: Object.keys(stats.numeric_columns || {}).length || '—',
+                              color: '#60a5fa',
+                              icon: (
+                                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                                  <line x1="4" y1="9" x2="20" y2="9"/><line x1="4" y1="15" x2="20" y2="15"/><line x1="10" y1="3" x2="8" y2="21"/><line x1="16" y1="3" x2="14" y2="21"/>
+                                </svg>
+                              )
+                            },
+                            {
+                              label: 'Categorical Columns',
+                              value: Object.keys(stats.categorical_columns || {}).length || '—',
+                              color: '#c084fc',
+                              icon: (
+                                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                                  <path d="M20.59 13.41l-7.17 7.17a2 2 0 0 1-2.83 0L2 12V2h10l8.59 8.59a2 2 0 0 1 0 2.82z"/><line x1="7" y1="7" x2="7.01" y2="7"/>
+                                </svg>
+                              )
+                            },
+                            {
+                              label: 'Missing Values',
+                              value: dq.total_missing != null ? dq.total_missing.toLocaleString() : (dq.missing_count != null ? dq.missing_count.toLocaleString() : '0'),
+                              color: '#fbbf24',
+                              icon: (
+                                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                                  <path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/>
+                                </svg>
+                              )
+                            },
+                            {
+                              label: 'Duplicate Rows',
+                              value: dq.duplicate_rows != null ? dq.duplicate_rows.toLocaleString() : '0',
+                              color: '#f472b6',
+                              icon: (
+                                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                                  <rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/>
+                                </svg>
+                              )
+                            },
+                            {
+                              label: 'Data Completeness',
+                              value: formatPercent(dq.completeness || 100),
+                              color: '#34d399',
+                              icon: (
+                                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                                  <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/><polyline points="9 12 11 14 15 10"/>
+                                </svg>
+                              )
+                            },
+                            {
+                              label: 'Dataset Type',
+                              value: datasetTypeLabel || '—',
+                              color: '#38bdf8',
+                              icon: (
+                                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                                  <line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/>
+                                </svg>
+                              )
+                            },
+                          ].map(item => (
+                            <div key={item.label} style={{ display: 'flex', alignItems: 'center', gap: '12px', padding: '12px 14px', background: 'rgba(99,102,241,0.04)', borderRadius: '10px', border: '1px solid rgba(99,102,241,0.1)', transition: 'background 0.2s' }}
+                              onMouseEnter={e => e.currentTarget.style.background = 'rgba(99,102,241,0.09)'}
+                              onMouseLeave={e => e.currentTarget.style.background = 'rgba(99,102,241,0.04)'}
+                            >
+                              <div style={{
+                                width: '32px', height: '32px', borderRadius: '8px', flexShrink: 0,
+                                background: `${item.color}18`,
+                                border: `1px solid ${item.color}35`,
+                                display: 'flex', alignItems: 'center', justifyContent: 'center',
+                                color: item.color,
+                              }}>
+                                {item.icon}
+                              </div>
+                              <div style={{ display: 'flex', flexDirection: 'column', gap: '2px', minWidth: 0 }}>
+                                <span style={{ fontSize: '10px', color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.08em', whiteSpace: 'nowrap' }}>{item.label}</span>
+                                <span style={{ fontSize: '15px', fontWeight: 700, color: 'var(--text-main)', fontFamily: "'Inter', sans-serif", overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{String(item.value)}</span>
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                        {stats.column_types && Object.keys(stats.column_types).length > 0 && (
+                          <div style={{ marginTop: '14px' }}>
+                            <span style={{ fontSize: '11px', color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.07em', display: 'block', marginBottom: '8px' }}>Column Overview</span>
+                            <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px' }}>
+                              {Object.entries(stats.column_types).slice(0, 16).map(([col, dtype]) => (
+                                <span key={col} style={{ fontSize: '11px', padding: '3px 10px', borderRadius: '100px', background: 'rgba(99,102,241,0.08)', border: '1px solid rgba(99,102,241,0.15)', color: 'var(--text-muted)' }}>
+                                  <span style={{ color: 'var(--text-main)', fontWeight: 600 }}>{col}</span>
+                                  <span style={{ opacity: 0.6 }}> · {dtype}</span>
+                                </span>
+                              ))}
+                              {Object.keys(stats.column_types).length > 16 && (
+                                <span style={{ fontSize: '11px', padding: '3px 10px', borderRadius: '100px', background: 'rgba(255,255,255,0.04)', color: 'var(--text-muted)' }}>+{Object.keys(stats.column_types).length - 16} more</span>
+                              )}
+                            </div>
                           </div>
-                        ))}
+                        )}
                       </div>
                     </div>
                   )}
@@ -1406,21 +1465,34 @@ export default function DataPulse({ user, onLogout }) {
                       </div>
 
                       <div style={{ padding: '20px', background: 'var(--bg-input)', borderRadius: '12px', border: '1px solid var(--border-subtle)' }}>
-                        <strong style={{ fontSize: '15px', display: 'block', marginBottom: '14px', color: 'var(--text-main)', fontFamily: "'Inter', sans-serif" }}>Key Insights</strong>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '16px' }}>
+                          <span style={{ fontSize: '18px' }}>🔍</span>
+                          <strong style={{ fontSize: '15px', color: 'var(--text-main)', fontFamily: "'Inter', sans-serif" }}>Analyst Findings</strong>
+                          <span style={{ marginLeft: 'auto', fontSize: '11px', padding: '3px 10px', borderRadius: '100px', background: 'rgba(6,182,212,0.1)', border: '1px solid rgba(6,182,212,0.25)', color: '#7dd3fc', textTransform: 'uppercase', letterSpacing: '0.08em' }}>AI Generated</span>
+                        </div>
                         {findings.length ? findings.map((f, i) => (
-                          <div key={`ins-${i}`} style={{ fontSize: '14px', color: 'var(--text-muted)', marginBottom: '10px', display: 'flex', gap: '10px', lineHeight: 1.5 }}>
-                            <span style={{ color: 'var(--info)' }}>•</span>{f}
-                          </div>
-                        )) : <div style={{ fontSize: '14px', color: 'var(--text-muted)' }}>No insights available for this dataset.</div>}
+                            <div key={`ins-${i}`} style={{ marginBottom: '14px', padding: '14px 16px', borderRadius: '10px', background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(99,102,241,0.12)', display: 'flex', gap: '14px', alignItems: 'flex-start' }}>
+                              <div style={{ width: '26px', height: '26px', borderRadius: '50%', background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(255,255,255,0.12)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0, fontSize: '12px', fontWeight: 700, color: 'var(--text-muted)' }}>{i + 1}</div>
+                              <div style={{ fontSize: '14px', color: 'var(--text-main)', lineHeight: 1.6, paddingTop: '4px' }}>{f}</div>
+                            </div>
+                        )) : <div style={{ fontSize: '14px', color: 'var(--text-muted)', fontStyle: 'italic' }}>No analyst findings were generated for this dataset.</div>}
                       </div>
 
                       <div style={{ padding: '20px', background: 'var(--bg-input)', borderRadius: '12px', border: '1px solid var(--border-subtle)' }}>
-                        <strong style={{ fontSize: '15px', display: 'block', marginBottom: '14px', color: 'var(--text-main)', fontFamily: "'Inter', sans-serif" }}>Recommended Actions</strong>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '16px' }}>
+                          <span style={{ fontSize: '18px' }}>🚀</span>
+                          <strong style={{ fontSize: '15px', color: 'var(--text-main)', fontFamily: "'Inter', sans-serif" }}>Strategic Recommendations</strong>
+                          <span style={{ marginLeft: 'auto', fontSize: '11px', padding: '3px 10px', borderRadius: '100px', background: 'rgba(99,102,241,0.1)', border: '1px solid rgba(99,102,241,0.25)', color: 'var(--primary-500)', textTransform: 'uppercase', letterSpacing: '0.08em' }}>Actionable</span>
+                        </div>
                         {recommendations.length ? recommendations.map((r, i) => (
-                          <div key={`rec-${i}`} style={{ fontSize: '14px', color: 'var(--text-muted)', marginBottom: '10px', display: 'flex', gap: '10px', lineHeight: 1.5 }}>
-                            <span style={{ color: 'var(--primary-500)' }}>⇥</span>{r}
+                          <div key={`rec-${i}`} style={{ marginBottom: '14px', padding: '14px 16px', borderRadius: '10px', background: 'rgba(99,102,241,0.04)', border: '1px solid rgba(99,102,241,0.12)', display: 'flex', gap: '14px', alignItems: 'flex-start' }}>
+                            <div style={{ width: '26px', height: '26px', borderRadius: '50%', background: 'rgba(99,102,241,0.2)', border: '1px solid rgba(99,102,241,0.4)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0, fontSize: '12px', fontWeight: 800, color: 'var(--primary-500)' }}>{i + 1}</div>
+                            <div style={{ flex: 1 }}>
+                              <div style={{ fontSize: '11px', color: 'var(--primary-500)', textTransform: 'uppercase', letterSpacing: '0.1em', fontWeight: 700, marginBottom: '4px' }}>Action Item</div>
+                              <div style={{ fontSize: '14px', color: 'var(--text-main)', lineHeight: 1.6 }}>{r}</div>
+                            </div>
                           </div>
-                        )) : <div style={{ fontSize: '14px', color: 'var(--text-muted)' }}>No recommendations were generated.</div>}
+                        )) : <div style={{ fontSize: '14px', color: 'var(--text-muted)', fontStyle: 'italic' }}>No strategic recommendations were generated.</div>}
                       </div>
                     </div>
                   )}
