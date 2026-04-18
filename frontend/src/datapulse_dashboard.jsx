@@ -610,6 +610,14 @@ export default function DataPulse({ user, onLogout }) {
             const trTitle = titleStr.length > 60 ? titleStr.slice(0, 57) + '...' : titleStr;
             doc.text(trTitle, boxX + chartBoxWidth / 2, pillY + 4.0, { align: 'center' });
 
+            const innerWidth = chartBoxWidth - 4;
+            const innerHeight = chartBoxHeight - 8;
+            
+            // Base rendering height for Plotly to maintain good font sizes
+            const scaleFactor = 320 / innerHeight;
+            const renderWidth = Math.round(innerWidth * scaleFactor);
+            const renderHeight = Math.round(innerHeight * scaleFactor);
+
             // Prepare Plotly Configuration for Light Mode
             const pdfLayout = {
               ...fig.layout,
@@ -626,8 +634,8 @@ export default function DataPulse({ user, onLogout }) {
                 tickfont: { color: "#555555", size: 13 },
                 title: { ...(fig.layout.yaxis?.title || {}), font: { color: "#333333", size: 15 } }
               },
-              width: 450,
-              height: 320,
+              width: renderWidth,
+              height: renderHeight,
               showlegend: false,
               margin: { l: 45, r: 25, t: 20, b: 45 },
               title: null // Title is handled by pdf pill
@@ -636,11 +644,11 @@ export default function DataPulse({ user, onLogout }) {
             // Generate Image with retuned resolution ratio
             const imgData = await Plotly.toImage(
               { data: fig.data, layout: pdfLayout },
-              { format: 'png', width: 450, height: 320, scale: 3 }
+              { format: 'png', width: renderWidth, height: renderHeight, scale: 3 }
             );
 
             // Add Image to Box
-            doc.addImage(imgData, 'PNG', boxX + 2, boxY + 4, chartBoxWidth - 4, chartBoxHeight - 8);
+            doc.addImage(imgData, 'PNG', boxX + 2, boxY + 4, innerWidth, innerHeight);
 
           } catch (chartErr) {
             console.warn(`Skipped chart ${key}`, chartErr);
@@ -812,16 +820,6 @@ export default function DataPulse({ user, onLogout }) {
                 {/* The Rotating AI Globe Core Container */}
                 <div className="ai-hologram-layer" style={{ zIndex: 1 }}>
                   <GlobeCanvas size={390} />
-                  <div
-                    style={{
-                      position: 'absolute',
-                      inset: 0,
-                      borderRadius: '24px',
-                      zIndex: 3,
-                      pointerEvents: 'none',
-                      boxShadow: 'inset 0 0 60px 15px #0A0F1C'
-                    }}
-                  />
                 </div>
               </div>
             </div>
