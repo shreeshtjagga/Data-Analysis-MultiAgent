@@ -349,6 +349,7 @@ export default function Login({ onLogin }) {
   const params = new URLSearchParams(location.search);
   const resetToken = params.get("token") || "";
   const deriveTabFromPath = (pathname) => {
+    if (resetToken) return "reset"; // Auto-switch if token is present
     if (pathname === "/reset-password") return "reset";
     if (pathname === "/forgot-password") return "forgot";
     if (pathname === "/register") return "register";

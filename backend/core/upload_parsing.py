@@ -95,7 +95,7 @@ def read_csv_with_fallback(
     errors = []
     for csv_kwargs in attempts:
         try:
-            header_df = pd.read_csv(io.BytesIO(file_bytes), nrows=0, **csv_kwargs)
+            header_df = pd.read_csv(io.BytesIO(file_bytes), nrows=0, on_bad_lines="skip", **csv_kwargs)
             if header_df.shape[1] == 0:
                 errors.append("No columns detected in CSV header")
                 continue
@@ -108,6 +108,7 @@ def read_csv_with_fallback(
             return pd.read_csv(
                 io.BytesIO(file_bytes),
                 nrows=max_analyze_rows + 1,
+                on_bad_lines="skip",
                 **csv_kwargs,
             )
         except HTTPException:

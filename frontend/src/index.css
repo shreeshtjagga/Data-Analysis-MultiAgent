@@ -582,3 +582,56 @@ p, body { font-size: var(--font-body); font-weight: 400; color: var(--text-muted
   to   { opacity: 1; transform: scale(1); }
 }
 
+/* =========================================================================
+   PLOTLY MODEBAR (ZOOM CONTROLS)
+   ========================================================================= */
+
+.modebar-container {
+  top: 12px !important;
+  right: 12px !important;
+  z-index: 10 !important;
+}
+
+/* Make overall container invisible so empty bars don't show a blue box */
+.modebar {
+  background: transparent !important;
+  border: none !important;
+  box-shadow: none !important;
+  padding: 0 !important;
+}
+
+/* Apply the dark UI styling strictly to the active groups of buttons */
+.modebar-group {
+  background: rgba(13, 18, 32, 0.75) !important;
+  backdrop-filter: blur(8px) !important;
+  border-radius: 6px !important;
+  border: 1px solid rgba(99, 102, 241, 0.45) !important;
+  padding: 2px !important;
+  display: inline-flex !important;
+  margin-left: 6px !important;
+  box-shadow: 0 4px 15px rgba(0,0,0,0.3) !important;
+}
+
+/* Natively hide any injected groups that have no actual buttons (e.g. pie charts) */
+.modebar-group:empty {
+  display: none !important;
+  border: none !important;
+  padding: 0 !important;
+}
+
+.modebar-btn path {
+  fill: rgba(255, 255, 255, 0.7) !important;
+}
+
+.modebar-btn:hover {
+  background: rgba(99, 102, 241, 0.35) !important;
+  border-radius: 4px;
+}
+
+.modebar-btn:hover path {
+  fill: #FFFFFF !important;
+}
+
+.modebar-btn.active path {
+  fill: var(--primary-500) !important;
+}
