@@ -29,8 +29,10 @@ def _get_client() -> aioredis.Redis:
             encoding="utf-8",
             decode_responses=True,
             health_check_interval=30,
-            socket_connect_timeout=5,
+            socket_connect_timeout=3,      # fail fast if Upstash is unreachable
+            socket_keepalive=True,         # keeps idle connection alive; avoids reconnect cost
             retry_on_timeout=True,
+            max_connections=10,            # cap connections; Upstash free tier has limits
         )
         logger.info("Redis client initialised (%s)", redis_url.split("@")[-1])
     return _redis_client

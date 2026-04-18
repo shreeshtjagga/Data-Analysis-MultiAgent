@@ -310,9 +310,9 @@ p, body { font-size: var(--font-body); font-weight: 400; color: var(--text-muted
 }
 
 @keyframes pulse {
-  0% { transform: scale(1); opacity: 0.5; }
-  50% { transform: scale(1.2); opacity: 1; }
-  100% { transform: scale(1); opacity: 0.5; }
+  0% { transform: scale(1); opacity: 0.2; }
+  50% { transform: scale(1.05); opacity: 0.4; }
+  100% { transform: scale(1); opacity: 0.2; }
 }
 
 @keyframes spin {
@@ -322,9 +322,9 @@ p, body { font-size: var(--font-body); font-weight: 400; color: var(--text-muted
 
 /* AI Hologram Animations */
 @keyframes hologramFloat {
-  0% { transform: translateY(0) scale(1); filter: drop-shadow(0 0 15px rgba(99,102,241,0.5)) hue-rotate(0deg); }
-  50% { transform: translateY(-15px) scale(1.02); filter: drop-shadow(0 0 35px rgba(99,102,241,0.8)) hue-rotate(15deg); }
-  100% { transform: translateY(0) scale(1); filter: drop-shadow(0 0 15px rgba(99,102,241,0.5)) hue-rotate(0deg); }
+  0% { transform: translateY(0) scale(1); filter: hue-rotate(0deg); }
+  50% { transform: translateY(-15px) scale(1.02); filter: hue-rotate(15deg); }
+  100% { transform: translateY(0) scale(1); filter: hue-rotate(0deg); }
 }
 
 @keyframes glitchAnim {
@@ -392,3 +392,245 @@ p, body { font-size: var(--font-body); font-weight: 400; color: var(--text-muted
 ::-webkit-scrollbar-track { background: var(--bg-deep); }
 ::-webkit-scrollbar-thumb { background: rgba(99,102,241,0.3); border-radius: 3px; }
 ::-webkit-scrollbar-thumb:hover { background: rgba(99,102,241,0.6); }
+
+/* =========================================================================
+   CHART FLIP CARD
+   ========================================================================= */
+
+.chart-flip-wrapper {
+  perspective: 1400px;
+  position: relative;
+}
+
+.chart-flip-inner {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  transition: transform 0.65s cubic-bezier(0.4, 0.2, 0.2, 1);
+  transform-style: preserve-3d;
+}
+
+.chart-flip-wrapper.flipped .chart-flip-inner {
+  transform: rotateY(180deg);
+}
+
+.chart-flip-front,
+.chart-flip-back {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  backface-visibility: hidden;
+  -webkit-backface-visibility: hidden;
+  border-radius: 14px;
+  overflow: hidden;
+}
+
+.chart-flip-front {
+  background: rgba(13, 18, 32, 0.7);
+  backdrop-filter: blur(8px);
+  border: 1px solid var(--border-subtle);
+  box-shadow: var(--shadow-card);
+}
+
+.chart-flip-back {
+  transform: rotateY(180deg);
+  background: linear-gradient(135deg, #0d1220 0%, #12192e 55%, #0d1631 100%);
+  border: 1px solid rgba(99, 102, 241, 0.35);
+  box-shadow: 0 0 40px rgba(99, 102, 241, 0.15), var(--shadow-card);
+  padding: 28px 26px 24px;
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  overflow-y: auto;
+}
+
+/* Info / Close Toggle Button */
+.chart-info-btn {
+  position: absolute;
+  top: 12px;
+  right: 12px;
+  z-index: 10;
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  border: 1px solid rgba(99, 102, 241, 0.4);
+  background: rgba(99, 102, 241, 0.15);
+  color: #818cf8;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 15px;
+  font-weight: 700;
+  transition: background 0.2s ease, border-color 0.2s ease, transform 0.2s ease, box-shadow 0.2s ease;
+  line-height: 1;
+  backdrop-filter: blur(6px);
+}
+
+.chart-info-btn:hover {
+  background: rgba(99, 102, 241, 0.35);
+  border-color: var(--primary-500);
+  box-shadow: 0 0 14px rgba(99, 102, 241, 0.5);
+  transform: scale(1.15);
+}
+
+.chart-info-btn::after {
+  content: attr(data-tooltip);
+  position: absolute;
+  top: 100%;
+  right: 0;
+  margin-top: 8px;
+  background: rgba(13, 18, 32, 0.95);
+  color: var(--text-main);
+  padding: 6px 14px;
+  border-radius: 6px;
+  font-size: 12px;
+  font-family: 'Inter', sans-serif;
+  letter-spacing: 0.05em;
+  white-space: nowrap;
+  opacity: 0;
+  pointer-events: none;
+  font-weight: 500;
+  border: 1px solid var(--border-active);
+  transform: translateY(-5px);
+  transition: opacity 0.2s ease, transform 0.2s ease;
+  box-shadow: var(--shadow-card);
+  z-index: 100;
+}
+
+.chart-info-btn:hover::after {
+  opacity: 1;
+  transform: translateY(0) scale(0.87);
+}
+
+/* Back face content */
+.chart-back-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 14px;
+  border-radius: 20px;
+  border: 1px solid rgba(99, 102, 241, 0.35);
+  background: rgba(99, 102, 241, 0.12);
+  color: #818cf8;
+  font-size: 13px;
+  font-family: 'Inter', sans-serif;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  margin-bottom: 16px;
+  font-weight: 600;
+  width: fit-content;
+}
+
+.chart-back-title {
+  font-family: 'Inter', sans-serif;
+  font-size: 20px;
+  font-weight: 700;
+  color: var(--text-main);
+  margin-bottom: 10px;
+  line-height: 1.3;
+}
+
+.chart-back-section-label {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--primary-500);
+  margin-bottom: 8px;
+  margin-top: 20px;
+}
+
+.chart-back-description {
+  font-size: 15px;
+  color: #e2e8f0;
+  line-height: 1.65;
+}
+
+.chart-back-insight-item {
+  display: flex;
+  gap: 12px;
+  align-items: flex-start;
+  font-size: 14.5px;
+  color: var(--text-muted);
+  line-height: 1.6;
+  margin-bottom: 10px;
+}
+
+.chart-back-insight-dot {
+  width: 6px;
+  height: 6px;
+  min-width: 6px;
+  border-radius: 50%;
+  background: var(--primary-500);
+  box-shadow: 0 0 8px rgba(99, 102, 241, 0.7);
+  margin-top: 5px;
+}
+
+.chart-back-divider {
+  width: 100%;
+  height: 1px;
+  background: linear-gradient(90deg, transparent, rgba(99,102,241,0.25), transparent);
+  margin: 14px 0 0;
+}
+
+@keyframes flipIn {
+  from { opacity: 0; transform: scale(0.97); }
+  to   { opacity: 1; transform: scale(1); }
+}
+
+/* =========================================================================
+   PLOTLY MODEBAR (ZOOM CONTROLS)
+   ========================================================================= */
+
+.modebar-container {
+  top: 12px !important;
+  right: 12px !important;
+  z-index: 10 !important;
+}
+
+/* Make overall container invisible so empty bars don't show a blue box */
+.modebar {
+  background: transparent !important;
+  border: none !important;
+  box-shadow: none !important;
+  padding: 0 !important;
+}
+
+/* Apply the dark UI styling strictly to the active groups of buttons */
+.modebar-group {
+  background: rgba(13, 18, 32, 0.75) !important;
+  backdrop-filter: blur(8px) !important;
+  border-radius: 6px !important;
+  border: 1px solid rgba(99, 102, 241, 0.45) !important;
+  padding: 2px !important;
+  display: inline-flex !important;
+  margin-left: 6px !important;
+  box-shadow: 0 4px 15px rgba(0,0,0,0.3) !important;
+}
+
+/* Natively hide any injected groups that have no actual buttons (e.g. pie charts) */
+.modebar-group:empty {
+  display: none !important;
+  border: none !important;
+  padding: 0 !important;
+}
+
+.modebar-btn path {
+  fill: rgba(255, 255, 255, 0.7) !important;
+}
+
+.modebar-btn:hover {
+  background: rgba(99, 102, 241, 0.35) !important;
+  border-radius: 4px;
+}
+
+.modebar-btn:hover path {
+  fill: #FFFFFF !important;
+}
+
+.modebar-btn.active path {
+  fill: var(--primary-500) !important;
+}

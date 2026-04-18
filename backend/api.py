@@ -10,6 +10,7 @@ from typing import Annotated
 import pandas as pd
 from fastapi import Depends, FastAPI, File, HTTPException, UploadFile, status, Request, Response, Query
 from fastapi.responses import JSONResponse
+from fastapi.middleware.gzip import GZipMiddleware
 import traceback
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
@@ -80,6 +81,18 @@ READ_CHUNK_BYTES = 1024 * 1024
 CHAT_RATE_LIMIT = int(os.getenv("CHAT_RATE_LIMIT", "10"))
 CHAT_RATE_WINDOW = int(os.getenv("CHAT_RATE_WINDOW_SECONDS", "60"))
 
+# Groq client is stateless — create once at startup, reuse across requests
+_groq_client = None
+
+def _get_groq_client():
+    global _groq_client
+    if _groq_client is None:
+        api_key = os.getenv("GROQ_API_KEY")
+        if api_key:
+            from groq import Groq
+            _groq_client = Groq(api_key=api_key)
+    return _groq_client
+
 
 _raw_origins = os.getenv("CORS_ORIGINS", "http://localhost:5173,http://localhost:3000")
 origins = [o.strip() for o in _raw_origins.split(",") if o.strip()]
@@ -88,7 +101,6 @@ origins = [o.strip() for o in _raw_origins.split(",") if o.strip()]
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     logger.info("Starting DataPulse API v2 (pipeline %s)", PIPELINE_VERSION)
-
 
     if not os.getenv("GROQ_API_KEY"):
         raise RuntimeError(
@@ -105,7 +117,27 @@ async def lifespan(app: FastAPI):
             "Google OAuth Client ID mismatch between backend and frontend configuration"
         )
 
+    # ── Eagerly warm up connections so first request is instant ──────────────
     await init_db()
+
+    # Warm DB pool: open one real connection now so asyncpg doesn't cold-start
+    try:
+        from sqlalchemy import text
+        from .db import engine
+        async with engine.connect() as conn:
+            await conn.execute(text("SELECT 1"))
+        logger.info("DB connection pool warmed up")
+    except Exception as exc:
+        logger.warning("DB warmup failed (non-fatal): %s", exc)
+
+    # Warm Redis: open the connection now instead of on first request
+    try:
+        redis_ok = await redis_cache.ping()
+        logger.info("Redis warmed up (reachable=%s)", redis_ok)
+    except Exception as exc:
+        logger.warning("Redis warmup failed (non-fatal): %s", exc)
+    # ─────────────────────────────────────────────────────────────────────────
+
     yield
     await redis_cache.close()
     logger.info("DataPulse API shutdown complete")
@@ -120,6 +152,7 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
+app.add_middleware(GZipMiddleware, minimum_size=1024)  # compress responses > 1KB
 app.add_middleware(
     CORSMiddleware,
     allow_origins=origins,
@@ -127,6 +160,14 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+@app.middleware("http")
+async def add_security_headers(request: Request, call_next):
+    response = await call_next(request)
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    response.headers["X-Frame-Options"] = "DENY"
+    response.headers["X-XSS-Protection"] = "1; mode=block"
+    return response
 
 @app.exception_handler(Exception)
 async def catch_all_exception_handler(request: Request, exc: Exception):
@@ -157,6 +198,31 @@ async def get_current_user_id(
     return int(payload["sub"])
 
 
+async def check_ip_rate_limit(request: Request):
+    client_ip = request.client.host if request.client else "unknown"
+    key = f"ratelimit:ip:{client_ip}"
+    try:
+        count = await redis_cache.increment_with_ttl(key, 60)
+        if count > 5:
+            raise HTTPException(status_code=429, detail="Too many requests from this IP. Please try again in a minute.")
+    except Exception as exc:
+        if isinstance(exc, HTTPException):
+            raise exc
+        logger.warning(f"Rate limiting failed for {key}: {exc}")
+
+async def check_user_rate_limit(user_id: int = Depends(get_current_user_id)):
+    key = f"ratelimit:user_analyze:{user_id}"
+    try:
+        count = await redis_cache.increment_with_ttl(key, 60)
+        if count > 5:
+            raise HTTPException(status_code=429, detail="Too many analysis requests. Please try again in a minute.")
+    except Exception as exc:
+        if isinstance(exc, HTTPException):
+            raise exc
+        logger.warning(f"Rate limiting failed for {key}: {exc}")
+
+
+
 
 
 @app.get("/health", response_model=HealthResponse, tags=["system"])
@@ -180,7 +246,7 @@ async def health_check(db: AsyncSession = Depends(get_db)):
 
 
 
-@app.post("/auth/register", response_model=AuthResponse, status_code=status.HTTP_201_CREATED, tags=["auth"])
+@app.post("/auth/register", response_model=AuthResponse, status_code=status.HTTP_201_CREATED, tags=["auth"], dependencies=[Depends(check_ip_rate_limit)])
 async def register(body: UserRegister, db: AsyncSession = Depends(get_db)):
     result = await register_user(db, body.email, body.password, body.name)
     if not result["success"]:
@@ -188,7 +254,7 @@ async def register(body: UserRegister, db: AsyncSession = Depends(get_db)):
     return AuthResponse(success=True, message=result["message"])
 
 
-@app.post("/auth/login", response_model=TokenResponse, tags=["auth"])
+@app.post("/auth/login", response_model=TokenResponse, tags=["auth"], dependencies=[Depends(check_ip_rate_limit)])
 async def login(body: UserLogin, db: AsyncSession = Depends(get_db), response: Response = None):
     result = await login_user(db, body.email, body.password)
     if not result["success"]:
@@ -226,7 +292,7 @@ async def login(body: UserLogin, db: AsyncSession = Depends(get_db), response: R
     )
 
 
-@app.post("/auth/forgot-password", response_model=ForgotPasswordResponse, tags=["auth"])
+@app.post("/auth/forgot-password", response_model=ForgotPasswordResponse, tags=["auth"], dependencies=[Depends(check_ip_rate_limit)])
 async def forgot_password(body: ForgotPasswordRequest, db: AsyncSession = Depends(get_db)):
     result = await request_password_reset(db, body.email)
     return ForgotPasswordResponse(
@@ -236,7 +302,7 @@ async def forgot_password(body: ForgotPasswordRequest, db: AsyncSession = Depend
     )
 
 
-@app.post("/auth/reset-password", response_model=AuthResponse, tags=["auth"])
+@app.post("/auth/reset-password", response_model=AuthResponse, tags=["auth"], dependencies=[Depends(check_ip_rate_limit)])
 async def reset_password(body: ResetPasswordRequest, db: AsyncSession = Depends(get_db)):
     result = await reset_password_with_token(db, body.token, body.new_password)
     if not result.get("success"):
@@ -368,7 +434,7 @@ async def me(
 
 
 
-@app.post("/analyze", tags=["analysis"])
+@app.post("/analyze", tags=["analysis"], dependencies=[Depends(check_user_rate_limit)])
 async def analyze(
     file: UploadFile = File(...),
     user_id: int = Depends(get_current_user_id),
@@ -511,8 +577,15 @@ async def analyze(
     result["raw_df"]   = preview_raw
     result["clean_df"] = preview_clean
 
-    if state.errors or state.partial:
-        logger.error("Pipeline failed for user %d / %s: %s", user_id, filename, state.errors)
+    # Only hard-fail if the core pipeline produced nothing useful.
+    # Non-fatal errors from sub-agents (e.g. one chart builder failing) are
+    # returned as warnings alongside real results so users still get insights.
+    has_stats    = bool(result.get("stats_summary"))
+    has_insights = bool(result.get("insights"))
+    is_fatal     = not has_stats or not has_insights
+
+    if is_fatal and (state.errors or state.partial):
+        logger.error("Pipeline critically failed for user %d / %s: %s", user_id, filename, state.errors)
         raise HTTPException(
             status_code=500,
             detail={
@@ -521,6 +594,12 @@ async def analyze(
                 "errors": state.errors,
                 "completed_agents": state.completed_agents,
             },
+        )
+    elif state.errors:
+        # Non-fatal warnings: log them but continue — the result is still usable
+        logger.warning(
+            "Pipeline completed with non-fatal errors for user %d / %s: %s",
+            user_id, filename, state.errors,
         )
 
     # Fix #6: compute serialized charts once, reuse for both DB save and response
@@ -542,9 +621,18 @@ async def analyze(
 
     result["charts"] = serialized_charts
     result["partial"] = False
-    result = sanitize_floats(result)
+    if state.errors:
+        result["warnings"] = state.errors   # surface non-fatal errors to frontend
 
-    return {"from_cache": False, "pipeline_version": PIPELINE_VERSION, **result}
+    # orjson serialises NaN/Inf → null natively and is ~10x faster than
+    # the manual recursive sanitize_floats walk on large result dicts.
+    try:
+        import orjson
+        safe_result = orjson.loads(orjson.dumps(result, option=orjson.OPT_NON_STR_KEYS))
+    except Exception:
+        safe_result = sanitize_floats(result)   # fallback if orjson not available
+
+    return {"from_cache": False, "pipeline_version": PIPELINE_VERSION, **safe_result}
 
 
 
@@ -650,26 +738,44 @@ async def chat_with_analysis(
                 details = []
                 for trace in c.get("data", []):
                     ttype = trace.get("type", "unknown")
-                    if ttype in ("pie", "pie"):
+                    if ttype in ("pie", "funnelarea"):
                         labels = trace.get("labels") or trace.get("x") or []
                         values = trace.get("values") or trace.get("y") or []
                         if isinstance(labels, list) and isinstance(values, list):
                             pairs = [f"{l}: {val}" for l, val in zip(labels[:10], values[:10])]
-                            details.append(f"Pie Breakdown: {', '.join(pairs)}")
+                            details.append(f"Pie/Donut Breakdown: {', '.join(pairs)}")
+                        else:
+                            details.append("Pie/Donut chart")
                     elif ttype in ("bar", "scatter", "violin", "box"):
                         x = (trace.get("x") or [])[:8]
                         y = (trace.get("y") or [])[:8]
                         details.append(f"{ttype.capitalize()} Data: X={x}, Y={y}")
+                    elif ttype in ("heatmap", "choropleth"):
+                        z_sample = (trace.get("z") or [])[:3]
+                        details.append(f"Heatmap with z-values (sample): {z_sample}")
+                    elif ttype == "histogram":
+                        x = (trace.get("x") or [])[:8]
+                        details.append(f"Histogram of: {x}")
                     else:
                         details.append(f"{ttype} chart")
-                title = c.get("layout", {}).get("title", {}).get("text", k) if isinstance(c.get("layout", {}).get("title"), dict) else k
-                charts_summary[k] = f"Title '{title}' - " + " | ".join(details)
+                # Safely extract title: layout.title can be a str or dict
+                layout_title = c.get("layout", {}).get("title", {})
+                if isinstance(layout_title, dict):
+                    title = layout_title.get("text") or k
+                elif isinstance(layout_title, str) and layout_title:
+                    title = layout_title
+                else:
+                    title = k
+                charts_summary[k] = f"[key='{k}'] Title '{title}' \u2014 " + (" | ".join(details) if details else "chart")
             except Exception as e:
                 import traceback
-                print("CHART EXCEPTION:", k, traceback.format_exc())
-                charts_summary[k] = f"Visual chart (metadata only)"
+                logger.warning("Chart summary parse failed for key '%s': %s", k, traceback.format_exc())
+                charts_summary[k] = f"[key='{k}'] Visual chart (parse error)"
     else:
         charts_summary = charts_data
+
+    # Build a concise list of EXACT chart keys so the LLM never invents one
+    exact_chart_keys = list(charts_summary.keys()) if isinstance(charts_summary, dict) else []
     outlier_summary = context.get("outlierSummary") or [
         {"column": col, "count": count} for col, count in top_outliers
     ]
@@ -683,8 +789,10 @@ async def chat_with_analysis(
         "If context is insufficient, state exactly which information is missing professionally.\n"
         "IMPORTANT BEHAVIORAL RULES:\n"
         "1. Answer ONLY what the user asks. If the user's input is conversational (e.g., 'hello', 'no', 'thanks'), just reply naturally. DO NOT spontaneously analyze the data or throw random charts unless the user explicitly asks a question about the data.\n"
-        "2. If you are explaining, describing, or referencing any chart from 'Available Charts', you MUST format it exactly like this: `[CHART: chart_key_name]` so the application can render it. Put the chart tag first, and explain it below.\n"
-        "3. Never just put the chart name in backticks. You MUST use the bracket format `[CHART: key]`.\n\n"
+        f"2. The dataset has exactly these charts available (EXACT keys, copy verbatim): {exact_chart_keys}. "
+        "When referencing or explaining any chart, you MUST use the format `[CHART: exact_key]` where exact_key is one of the keys listed above, copied verbatim with no changes. "
+        "Never invent, shorten, or modify a chart key. If the chart does not exist in the list above, do NOT reference it.\n"
+        "3. Never just put the chart name in backticks. You MUST use the bracket format `[CHART: key]` using only keys from the list in rule 2.\n\n"
         f"File: {file_name}\n"
         f"Dataset: {profile.get('label', 'unknown')} ({profile.get('domain', 'general')})\n"
         f"Data Quality: {quality}\n"
@@ -698,11 +806,9 @@ async def chat_with_analysis(
     )
 
     api_key = os.getenv("GROQ_API_KEY")
-    if api_key:
+    client = _get_groq_client()   # reuse module-level singleton
+    if client:
         try:
-            from groq import Groq
-
-            client = Groq(api_key=api_key)
             completion = client.chat.completions.create(
                 model=os.getenv("GROQ_MODEL", "llama-3.1-8b-instant"),
                 messages=[
