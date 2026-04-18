@@ -10,10 +10,10 @@ const GOOGLE_CLIENT_ID = import.meta.env.VITE_GOOGLE_CLIENT_ID;
  * Login.jsx — DataPulse auth page (Premium Dark SaaS System)
  */
 
-function PasswordInput({ id, placeholder, value, onChange, onKeyDown }) {
+function PasswordInput({ id, placeholder, value, onChange, onKeyDown, disabled }) {
   const [show, setShow] = useState(false);
   return (
-    <div style={{ position: "relative" }}>
+    <div style={{ position: "relative", opacity: disabled ? 0.6 : 1 }}>
       <input
         id={id}
         className="input-field"
@@ -23,6 +23,7 @@ function PasswordInput({ id, placeholder, value, onChange, onKeyDown }) {
         value={value}
         onChange={onChange}
         onKeyDown={onKeyDown}
+        disabled={disabled}
       />
       <button
         type="button"
@@ -43,6 +44,7 @@ function PasswordInput({ id, placeholder, value, onChange, onKeyDown }) {
           letterSpacing: "0.05em",
           padding: "4px"
         }}
+        disabled={disabled}
       >
         {show ? "Hide" : "Show"}
       </button>
@@ -50,7 +52,7 @@ function PasswordInput({ id, placeholder, value, onChange, onKeyDown }) {
   );
 }
 
-function GoogleAuthComponent({ onLogin, setError, setLoading, setTab }) {
+function GoogleAuthComponent({ onLogin, setError, loading, setLoading, setTab }) {
   if (!GOOGLE_CLIENT_ID) {
     return null;
   }
@@ -69,7 +71,9 @@ function GoogleAuthComponent({ onLogin, setError, setLoading, setTab }) {
           border: '1px solid rgba(99,102,241,0.4)',
           padding: '2px', 
           backgroundColor: '#ffffff',
-          transition: 'transform 0.2s ease, box-shadow 0.2s ease'
+          transition: 'transform 0.2s ease, box-shadow 0.2s ease',
+          pointerEvents: loading ? 'none' : 'auto',
+          opacity: loading ? 0.6 : 1
         }}>
           <GoogleLogin
             onSuccess={async (credentialResponse) => {
@@ -127,12 +131,13 @@ function LoginForm({ onLogin, onForgot }) {
         <input
           id="login-email"
           className="input-field"
-          style={{ width: "100%", backgroundColor: '#f1f5f9', color: '#0f172a' }}
+          style={{ width: "100%", backgroundColor: '#f1f5f9', color: '#0f172a', opacity: loading ? 0.6 : 1 }}
           type="email"
           placeholder="you@example.com"
           value={email}
           onChange={(e) => setEmail(e.target.value)}
           onKeyDown={(e) => e.key === "Enter" && submit()}
+          disabled={loading}
         />
       </div>
 
@@ -144,6 +149,7 @@ function LoginForm({ onLogin, onForgot }) {
           value={password}
           onChange={(e) => setPassword(e.target.value)}
           onKeyDown={(e) => e.key === "Enter" && submit()}
+          disabled={loading}
         />
       </div>
 
@@ -158,7 +164,7 @@ function LoginForm({ onLogin, onForgot }) {
         Forgot your password?
       </button>
       
-      <GoogleAuthComponent onLogin={onLogin} setError={setError} setLoading={setLoading} setTab={() => {}} />
+      <GoogleAuthComponent onLogin={onLogin} setError={setError} loading={loading} setLoading={setLoading} setTab={() => {}} />
     </div>
   );
 }
@@ -316,29 +322,29 @@ function RegisterForm({ onLogin, setTab }) {
       
       <div className="flex-col gap-8">
         <label style={{ fontSize: '13px', fontWeight: 600, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Username</label>
-        <input id="reg-name" className="input-field" style={{ width: "100%", backgroundColor: '#f1f5f9', color: '#0f172a' }} type="text" placeholder="johndoe123" value={name} onChange={(e) => setName(e.target.value)} />
+        <input id="reg-name" className="input-field" style={{ width: "100%", backgroundColor: '#f1f5f9', color: '#0f172a', opacity: loading ? 0.6 : 1 }} type="text" placeholder="johndoe123" value={name} onChange={(e) => setName(e.target.value)} disabled={loading} />
       </div>
 
       <div className="flex-col gap-8">
         <label style={{ fontSize: '13px', fontWeight: 600, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Email address</label>
-        <input id="reg-email" className="input-field" style={{ width: "100%", backgroundColor: '#f1f5f9', color: '#0f172a' }} type="email" placeholder="you@example.com" value={email} onChange={(e) => setEmail(e.target.value)} />
+        <input id="reg-email" className="input-field" style={{ width: "100%", backgroundColor: '#f1f5f9', color: '#0f172a', opacity: loading ? 0.6 : 1 }} type="email" placeholder="you@example.com" value={email} onChange={(e) => setEmail(e.target.value)} disabled={loading} />
       </div>
 
       <div className="flex-col gap-8">
         <label style={{ fontSize: '13px', fontWeight: 600, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Secure Password</label>
-        <PasswordInput id="reg-password" placeholder="••••••••" value={password} onChange={(e) => setPassword(e.target.value)} />
+        <PasswordInput id="reg-password" placeholder="••••••••" value={password} onChange={(e) => setPassword(e.target.value)} disabled={loading} />
       </div>
 
       <div className="flex-col gap-8">
         <label style={{ fontSize: '13px', fontWeight: 600, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Confirm Password</label>
-        <PasswordInput id="reg-confirm" placeholder="••••••••" value={confirm} onChange={(e) => setConfirm(e.target.value)} onKeyDown={(e) => e.key === "Enter" && submit()} />
+        <PasswordInput id="reg-confirm" placeholder="••••••••" value={confirm} onChange={(e) => setConfirm(e.target.value)} onKeyDown={(e) => e.key === "Enter" && submit()} disabled={loading} />
       </div>
 
       <button id="reg-submit" className="btn-primary" style={{ width: "100%", marginTop: '16px' }} onClick={submit} disabled={loading}>
         {loading ? "REGISTERING…" : "REGISTER"}
       </button>
 
-      <GoogleAuthComponent onLogin={onLogin} setError={setError} setLoading={setLoading} setTab={setTab} />
+      <GoogleAuthComponent onLogin={onLogin} setError={setError} loading={loading} setLoading={setLoading} setTab={setTab} />
     </div>
   );
 }

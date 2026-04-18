@@ -37,7 +37,7 @@ export function clearToken() {
   accessToken = null;
   // Best-effort: ask backend to clear the HttpOnly refresh cookie.
   // Fire-and-forget is intentional — we don't need to await this.
-  fetch(`${BASE}/auth/logout`, { method: "POST", credentials: "include" }).catch(() => {});
+  fetch(`${BASE}/auth/logout`, { method: "POST", credentials: "include" }).catch(() => { });
 }
 
 async function refreshAccessToken() {
@@ -108,7 +108,7 @@ async function apiFetch(path, options = {}) {
           authErr.status = 401;
           throw authErr;
         }
-        let detail = `HTTP ${retryResp.status}`;
+        let detail = getStatusMessage(retryResp.status);
         try {
           const body = await retryResp.json();
           detail = normalizeErrorDetail(body, detail);
@@ -127,7 +127,7 @@ async function apiFetch(path, options = {}) {
   }
 
   if (!response.ok) {
-    let detail = response.status === 401 ? "Wrong credentials" : `HTTP ${response.status}`;
+    let detail = `HTTP ${response.status}`;
     try {
       const body = await response.json();
       detail = normalizeErrorDetail(body, detail);
@@ -221,24 +221,4 @@ export async function apiDeleteAnalysis(analysisId) {
 
 export async function apiHealth() {
   return apiFetch("/health", { withAuth: false });
-}
-
-/**
- * normalizeErrorDetail
- * ────────────────────
- * Extracts a human-readable error string from a Response body.
- * Works with FastAPI's detail, common message/error fields, etc.
- */
-function normalizeErrorDetail(body, fallback) {
-  if (body && typeof body === "object") {
-    if (body.detail) {
-      // FastAPI details can be strings or arrays of validation objects
-      return typeof body.detail === "string" 
-        ? body.detail 
-        : JSON.stringify(body.detail);
-    }
-    if (body.message) return body.message;
-    if (body.error) return body.error;
-  }
-  return fallback;
 }
