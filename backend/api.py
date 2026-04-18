@@ -1,10 +1,10 @@
 
+
 import io
 import asyncio
 import logging
 import os
 import json
-import re
 from contextlib import asynccontextmanager
 from typing import Annotated
 
@@ -41,7 +41,6 @@ from .auth import (
     verify_refresh_token,
     REFRESH_EXPIRE_DAYS,
 )
-from .agents.plot_generator import generate_on_demand_chart, SUPPORTED_CHART_TYPES
 from .core.constants import APP_VERSION, PIPELINE_VERSION
 from .core.graph import run_pipeline
 from .core.logging_config import configure_logging
@@ -287,6 +286,7 @@ async def login(body: UserLogin, db: AsyncSession = Depends(get_db), response: R
         token_type="bearer",
         user=UserResponse(
             id=user_obj["id"],
+            name=user_obj.get("name"),
             email=user_obj["email"],
             created_at=user_obj["created_at"],
             updated_at=user_obj["updated_at"],
@@ -362,6 +362,7 @@ async def login_with_google(body: GoogleLoginRequest, db: AsyncSession = Depends
         token_type="bearer",
         user=UserResponse(
             id=user_obj["id"],
+            name=user_obj.get("name"),
             email=user_obj["email"],
             created_at=user_obj["created_at"],
             updated_at=user_obj["updated_at"],
@@ -403,6 +404,7 @@ async def refresh_token(request: Request, response: Response, db: AsyncSession =
         token_type="bearer",
         user=UserResponse(
             id=user.id,
+            name=user.name,
             email=user.email,
             created_at=user.created_at,
             updated_at=user.updated_at,
@@ -560,6 +562,7 @@ async def analyze(
         )
 
     # Run the agentic pipeline
+    import asyncio
     state = await asyncio.to_thread(run_pipeline, df)
 
     # ── Critical fix: strip full DataFrames BEFORE model_dump to prevent
@@ -679,56 +682,6 @@ async def remove_analysis(
     return DeleteResponse(success=True, message=result["message"])
 
 
-# ── On-demand chart builder ─────────────────────────────────────────────────
-
-_PLOT_REQUEST_RE = re.compile(
-    r"\[PLOT_REQUEST:\s*(\{.*?\})\s*\]",
-    re.DOTALL,
-)
-
-def _build_generated_charts(llm_text: str, df_records: list[dict]) -> list[dict]:
-    """
-    Parse every [PLOT_REQUEST: {...}] tag in the LLM response and build the
-    corresponding Plotly chart using the on-demand generator.
-
-    Returns a list of result dicts: [{id, fig, error}, ...]
-    """
-    results: list[dict] = []
-    if not df_records:
-        return results  # No data available — nothing to build
-
-    for match in _PLOT_REQUEST_RE.finditer(llm_text):
-        raw_json = match.group(1)
-        try:
-            spec = json.loads(raw_json)
-        except json.JSONDecodeError as exc:
-            logger.warning("Could not parse PLOT_REQUEST JSON: %s | error: %s", raw_json, exc)
-            results.append({
-                "id": "gen_parse_error",
-                "fig": None,
-                "error": f"Chart spec JSON is malformed: {exc}",
-            })
-            continue
-
-        if not isinstance(spec, dict):
-            continue
-
-        # Validate chart_type before calling the generator
-        chart_type = str(spec.get("chart_type") or "").lower().strip()
-        if chart_type not in SUPPORTED_CHART_TYPES:
-            results.append({
-                "id": "gen_unsupported",
-                "fig": None,
-                "error": f"Unsupported chart type '{chart_type}'. Use one of: {sorted(SUPPORTED_CHART_TYPES)}",
-            })
-            continue
-
-        result = generate_on_demand_chart(spec, df_records)
-        results.append(result)
-
-    return results
-
-
 @app.post("/chat", tags=["analysis"])
 async def chat_with_analysis(
     body: ChatRequest,
@@ -766,15 +719,6 @@ async def chat_with_analysis(
     stats = context.get("stats") or context.get("stats_summary") or {}
     insights = context.get("insights") or {}
     file_name = context.get("fileName") or "dataset"
-
-    # On-demand chart generation: receive the clean_df preview from the frontend
-    df_records: list[dict] = context.get("clean_df") or []
-    # Derive available column names so the LLM knows exactly what it can plot
-    available_columns: list[str] = (
-        list(df_records[0].keys()) if df_records else
-        list((stats.get("numeric_columns") or {}).keys()) +
-        list((stats.get("categorical_columns") or {}).keys())
-    )
 
 
     slim_stats = truncate_stats_for_llm(stats)
@@ -842,50 +786,28 @@ async def chat_with_analysis(
     ]
 
     prompt = (
-        "=== EXPERT DATA ANALYST ADVISOR — BEHAVIORAL CONTRACT ===\n"
-        "You are an Expert Data Analyst Advisor. Your ONLY function is to help users understand "
-        "the dataset described below, draw data-driven insights, and recommend or reference relevant visualizations.\n\n"
-        "STRICT SCOPE RULE (HIGHEST PRIORITY):\n"
-        "If the user's question is NOT related to the active dataset or the field of data analysis, "
-        "you MUST respond with EXACTLY this phrase and nothing else: "
-        "'I am an automated data advisor. I can only assist with queries and visualizations related to the current dataset.'\n"
-        "Examples of out-of-scope queries: asking for jokes, writing code unrelated to data, general knowledge questions, "
-        "opinions on topics unrelated to the dataset, creative writing, etc.\n\n"
-        "NO HALLUCINATION RULE:\n"
-        "Never invent data points, column names, metrics, or statistics that do not exist in the dataset context provided. "
-        "If a user asks about a column or metric that is not in the provided stats, explicitly state that it is not present in the dataset.\n\n"
-        "CONVERSATIONAL INPUT RULE:\n"
-        "If the user's input is a simple greeting or social phrase (e.g., 'hello', 'hi', 'thanks', 'okay'), "
-        "reply warmly and professionally in one sentence, then invite them to ask a data question.\n\n"
-        "EXISTING CHART REFERENCE RULE:\n"
-        "To show a pre-generated chart use [CHART: exact_key] with a key from the list above. "
-        "Always follow it with 1-2 sentences: (a) why this chart type was chosen, and (b) the key insight it reveals.\n\n"
-        "NEW PLOT GENERATION RULE (IMPORTANT):\n"
-        f"When the user asks for a visualization that does not already exist, or asks you to 'plot', 'show', 'visualize', or 'generate' something, "
-        "emit a [PLOT_REQUEST: json_spec] tag. The spec MUST use real column names from the Available Columns list below. "
-        "Supported chart_type values: scatter, histogram, bar, ranked_bar, grouped_bar, box, violin, donut, pie, line, heatmap, stacked_bar, freq_bar.\n"
-        "Format: [PLOT_REQUEST: {\"chart_type\": \"...\", \"x\": \"ColName\", \"y\": \"ColName\", \"color\": null, \"title\": \"...\", \"agg\": \"auto\"}]\n"
-        "After the tag, add 1-2 sentences explaining why this chart type was chosen and what insight it reveals.\n"
-        "IMPORTANT: Use column names EXACTLY as they appear in the Available Columns list — no modifications.\n\n"
-        "TONE & FORMAT:\n"
-        "Maintain a friendly, professional, and strictly analytical tone at all times. "
-        "Use precise statistical terminology but always clarify its practical impact. "
-        "Keep answers concise (1-4 sentences) unless a detailed breakdown is explicitly requested. "
-        "Never claim data is missing if it exists in the context provided below.\n\n"
-        "=== ACTIVE DATASET CONTEXT ===\n"
+        "You are an elite, highly professional Senior Data Analyst assistant. "
+        "Provide precise, corporate-grade, and perfectly structured insights based on the provided data context. "
+        "Keep your tone sophisticated, authoritative, but accessible. Use correct statistical terminology when necessary, but clarify its impact cleanly. "
+        "Keep answers strictly to 1-4 sentences to maintain brevity and professionalism. "
+        "Never claim data is missing if it exists in context. "
+        "If context is insufficient, state exactly which information is missing professionally.\n"
+        "IMPORTANT BEHAVIORAL RULES:\n"
+        "1. Answer ONLY what the user asks. If the user's input is conversational (e.g., 'hello', 'no', 'thanks'), just reply naturally. DO NOT spontaneously analyze the data or throw random charts unless the user explicitly asks a question about the data.\n"
+        f"2. The dataset has exactly these charts available (EXACT keys, copy verbatim): {exact_chart_keys}. "
+        "When referencing or explaining any chart, you MUST use the format `[CHART: exact_key]` where exact_key is one of the keys listed above, copied verbatim with no changes. "
+        "Never invent, shorten, or modify a chart key. If the chart does not exist in the list above, do NOT reference it.\n"
+        "3. Never just put the chart name in backticks. You MUST use the bracket format `[CHART: key]` using only keys from the list in rule 2.\n\n"
         f"File: {file_name}\n"
-        f"Dataset Profile: {profile.get('label', 'unknown')} | Domain: {profile.get('domain', 'general')}\n"
-        f"Data Quality Metrics: {quality}\n"
-        f"Pre-Generated Charts (EXACT keys for [CHART: key] references): {exact_chart_keys}\n"
-        f"Chart Data Summaries: {charts_summary}\n"
-        f"Available Columns (use EXACT names in [PLOT_REQUEST] specs): {available_columns}\n"
-        f"Outlier Counts by Column: {outlier_counts}\n"
-        f"Top Outlier Summary: {outlier_summary}\n"
-        f"Strong Correlations: {correlations}\n"
-        f"Full Statistical Summary: {slim_stats}\n"
-        f"AI-Generated Insights: {insights}\n\n"
-        f"=== USER QUESTION ===\n"
-        f"{question}"
+        f"Dataset: {profile.get('label', 'unknown')} ({profile.get('domain', 'general')})\n"
+        f"Data Quality: {quality}\n"
+        f"Available Charts & Data Summaries: {charts_summary}\n"
+        f"Outlier Counts: {outlier_counts}\n"
+        f"Outlier Summary: {outlier_summary}\n"
+        f"Correlations: {correlations}\n"
+        f"Stats: {slim_stats}\n"
+        f"Insights: {insights}\n"
+        f"Question: {question}"
     )
 
     api_key = os.getenv("GROQ_API_KEY")
@@ -895,38 +817,15 @@ async def chat_with_analysis(
             completion = client.chat.completions.create(
                 model=os.getenv("GROQ_MODEL", "llama-3.1-8b-instant"),
                 messages=[
-                    {"role": "system", "content": (
-                        "You are an Expert Data Analyst Advisor. Your PRIMARY function is to assist users in understanding "
-                        "their dataset, drawing insights, and recommending or generating visualizations. "
-                        "STRICT SCOPE: If a question is unrelated to the active dataset or data analysis, respond with EXACTLY: "
-                        "'I am an automated data advisor. I can only assist with queries and visualizations related to the current dataset.' "
-                        "NO HALLUCINATION: Never invent columns, data points, or metrics not present in the context. "
-                        "EXISTING CHART RULE: Reference pre-generated charts with [CHART: key] format. "
-                        "NEW CHART RULE: When asked to plot, visualize, or generate something new, emit "
-                        "[PLOT_REQUEST: {\"chart_type\": \"...\", \"x\": \"ExactColName\", \"y\": \"ExactColName\", \"color\": null, \"title\": \"...\"}] "
-                        "using ONLY column names from the 'Available Columns' list. Follow every chart reference with 1-2 sentences on why that chart type was chosen and what insight it reveals. "
-                        "TONE: Friendly, professional, analytical, and data-driven."
-                    )},
+                    {"role": "system", "content": "You are an elite, highly professional Senior Data Analyst. Deliver precise, corporate-grade responses strictly under 4 sentences. Important: Be conversational but extremely professional! If the user says 'hi' or 'namaste', reply professionally. Do not forcefully analyze data unless requested. If referencing a chart, use the [CHART: key] syntax exactly."},
                     {"role": "user", "content": prompt},
                 ],
                 temperature=0.3,
-                max_tokens=600,
+                max_tokens=350,
             )
-            raw_answer = (completion.choices[0].message.content or "").strip()
-            if raw_answer:
-                # ── Parse [PLOT_REQUEST: {...}] tags from the LLM response ──
-                generated_charts = _build_generated_charts(raw_answer, df_records)
-                # Strip raw [PLOT_REQUEST: ...] tags from the visible answer text
-                clean_answer = re.sub(
-                    r"\[PLOT_REQUEST:\s*\{[^\]]*\}\s*\]",
-                    "",
-                    raw_answer,
-                    flags=re.DOTALL,
-                ).strip()
-                response_payload: dict = {"answer": clean_answer}
-                if generated_charts:
-                    response_payload["generated_charts"] = generated_charts
-                return response_payload
+            answer = (completion.choices[0].message.content or "").strip()
+            if answer:
+                return {"answer": answer}
         except Exception as exc:
             logger.warning("Groq chat failed, using fallback response: %s", exc)
 
