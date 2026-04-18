@@ -26,6 +26,7 @@ for /f "tokens=1" %%V in ('node --version 2^>^&1') do set NODE_VER=%%V
 echo  [OK]  Node.js %NODE_VER% found.
 
 REM ── 2. Check frontend .env file ──────────────────────────────────────────────
+set "SCRIPT_DIR=%~dp0"
 if not exist ".env" (
     echo.
     echo  [WARN] frontend\.env file is missing.
@@ -34,9 +35,9 @@ if not exist ".env" (
     echo         Ask the project owner to send you the frontend\.env file
     echo         and place it here:
     echo.
-    echo         %~dp0frontend\.env
+    echo         !SCRIPT_DIR!frontend\.env
     echo.
-    echo  Continuing anyway — email/password login will still work.
+    echo  Continuing anyway -- email/password login will still work.
     echo.
 )
 

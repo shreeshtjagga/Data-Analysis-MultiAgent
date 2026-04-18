@@ -10,7 +10,7 @@ const PALETTE = ["#6366f1", "#10b981", "#f59e0b", "#06b6d4", "#ef4444", "#a855f7
 const PLOTLY_DARK_LAYOUT = {
   paper_bgcolor: "rgba(0,0,0,0)",
   plot_bgcolor: "rgba(0,0,0,0)",
-  font: { color: "#FFFFFF", family: "'Inter', sans-serif", size: 12 },
+  font: { color: "architect#FFFFFF", family: "'Inter', sans-serif", size: 12 },
   title: { font: { color: "#FFFFFF", size: 14 } },
   xaxis: { gridcolor: "rgba(99,102,241,0.1)", zerolinecolor: "rgba(99,102,241,0.2)", tickfont: { color: "#FFFFFF" } },
   yaxis: { gridcolor: "rgba(99,102,241,0.1)", zerolinecolor: "rgba(99,102,241,0.2)", tickfont: { color: "#FFFFFF" } },
@@ -441,7 +441,7 @@ export default function DataPulse({ user, onLogout }) {
       clearStageTimers();
       setProgress(100);
       log(data.from_cache ? "Loaded accelerated cache." : "System orchestration complete.");
-      
+
       // Delay slightly so user sees 100%
       setTimeout(() => {
         setResult(data);
@@ -715,7 +715,7 @@ export default function DataPulse({ user, onLogout }) {
 
             const innerWidth = chartBoxWidth - 4;
             const innerHeight = chartBoxHeight - 8;
-            
+
             // Base rendering height for Plotly to maintain good font sizes
             const scaleFactor = 320 / innerHeight;
             const renderWidth = Math.round(innerWidth * scaleFactor);
@@ -949,7 +949,7 @@ export default function DataPulse({ user, onLogout }) {
                   {user?.name || user?.email?.split('@')[0] || "Analyst"}
                 </h2>
                 <p style={{ fontSize: '16px', color: 'var(--text-muted)', lineHeight: 1.6, margin: 0 }}>
-                  Ready to architect your data? Connect a datasheet to initialize multi-agent analysis.
+                  Ready to analyze your data? Connect a datasheet to initialize multi-agent analysis.
                 </p>
               </div>
 
