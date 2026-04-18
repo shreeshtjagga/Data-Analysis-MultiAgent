@@ -59,6 +59,52 @@ async function refreshAccessToken() {
   return false;
 }
 
+// ── Error handling helpers ────────────────────────────────────────────────────
+
+function getStatusMessage(status) {
+  const messages = {
+    400: "Bad Request",
+    401: "Unauthorized",
+    403: "Forbidden",
+    404: "Not Found",
+    409: "Conflict",
+    422: "Unprocessable Entity",
+    429: "Too Many Requests",
+    500: "Server Error",
+    502: "Bad Gateway",
+    503: "Service Unavailable"
+  };
+  return messages[status] || `HTTP ${status}`;
+}
+
+function normalizeErrorDetail(body, fallback) {
+  if (!body || typeof body !== 'object') return fallback;
+  
+  // Handle Pydantic validation error (detail is array of validation errors)
+  if (Array.isArray(body.detail)) {
+    const errors = body.detail.map(err => {
+      if (typeof err === 'object') {
+        const field = err.loc ? err.loc[err.loc.length - 1] : 'Unknown field';
+        return `${field}: ${err.msg}`;
+      }
+      return String(err);
+    });
+    return errors.join(' | ') || fallback;
+  }
+  
+  // Handle standard error response with 'detail' field
+  if (typeof body.detail === 'string') {
+    return body.detail;
+  }
+  
+  // Handle 'message' field
+  if (typeof body.message === 'string') {
+    return body.message;
+  }
+  
+  return fallback;
+}
+
 // ── Core fetch helper ─────────────────────────────────────────────────────────
 
 async function apiFetch(path, options = {}) {
@@ -196,10 +242,10 @@ export async function apiAnalyze(file) {
   return apiFetch("/analyze", { method: "POST", body: form });
 }
 
-export async function apiChat(question, context = {}) {
+export async function apiChat(question, context = {}, history = []) {
   return apiFetch("/chat", {
     method: "POST",
-    body: JSON.stringify({ question, context }),
+    body: JSON.stringify({ question, context, history }),
   });
 }
 

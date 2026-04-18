@@ -212,21 +212,24 @@ def generate_on_demand_chart(
             return _err("gen_grouped_bar", "Grouped bar chart requires x (category) and y (numeric) columns.")
         chart = _build_grouped_bar(df, x, y, title, agg=agg, color_col=color)
         if chart is None:
-            chart = _build_grouped_bar(df, y, x, title, agg=agg, color_col=color)
+            # Swap - clear title as it likely matches the original x/y orientation
+            chart = _build_grouped_bar(df, y, x, None, agg=agg, color_col=color)
 
     elif chart_type == "box":
         if not x or not y:
             return _err("gen_box", "Box plot requires x (category) and y (numeric) columns.")
         chart = _build_box(df, x, y, title=title)
         if chart is None:
-            chart = _build_box(df, y, x, title=title)
+            # Swap - clear title
+            chart = _build_box(df, y, x, title=None)
 
     elif chart_type == "violin":
         if not x or not y:
             return _err("gen_violin", "Violin plot requires x (category) and y (numeric) columns.")
         chart = _build_violin(df, x, y, title=title)
         if chart is None:
-            chart = _build_violin(df, y, x, title=title)
+            # Swap - clear title
+            chart = _build_violin(df, y, x, title=None)
 
     elif chart_type in ("donut", "pie"):
         col = x or y

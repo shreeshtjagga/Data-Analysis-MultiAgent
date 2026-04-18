@@ -103,15 +103,22 @@ def _is_likert(s: pd.Series) -> bool:
     )
 
 
-def _is_likely_id(df: pd.DataFrame, col: str) -> bool:
+def _is_high_cardinality_id(df: pd.DataFrame, col: str) -> bool:
+    """True if column is near-unique and named like an ID.
+    These are used only as a last-resort categorical X-axis."""
     s = df[col]
     n = len(df)
+    if n < 5: return False
     nu = s.nunique(dropna=True)
-    if pd.api.types.is_string_dtype(s) or pd.api.types.is_object_dtype(s):
-        return nu > 0.90 * n
-    if pd.api.types.is_integer_dtype(s):
-        return nu > 0.85 * n
-    return False
+    if nu == 0: return False
+
+    col_lower = col.lower()
+    id_kw = ("id", "uuid", "guid", "key", "index", "_id", "pk", "email", "url", "phone", "hash")
+    is_id_named = any(k in col_lower for k in id_kw)
+
+    # Near-perfect uniqueness is required to be an ID
+    if is_id_named: return nu > 0.95 * n
+    return nu > 0.995 * n
 
 
 def _should_sum(name: str, s: pd.Series) -> bool:
@@ -195,29 +202,54 @@ class Chart:
     cols:  set[str] = field(default_factory=set)  # columns used
 
 
-# ── Column classification ────────────────────────────────────────────────────
+# Column name patterns that indicate this is a date/time column even if stored numeric.
+# We include 'year', 'date', etc. so they are classified into date_cols for time-series.
+# Irrelevant personal dates are filtered out later in the builder using _PERSONAL_DATE_KEYWORDS.
+_DATE_NAME_PATTERNS = frozenset({
+    "date", "dob", "birth", "born", "created", "updated", "timestamp",
+    "year", "month", "day", "time", "datetime", "period", "since",
+})
+
+def _is_date_named(col: str) -> bool:
+    """Return True if the column name strongly suggests it's a date/time field."""
+    col_norm = col.lower().replace("_", "").replace("-", "").replace(" ", "")
+    return any(p in col_norm for p in _DATE_NAME_PATTERNS)
+
 
 def _classify(df: pd.DataFrame, excluded: set[str]) -> dict:
-    """Return column lists: num, cat, date, likert, identifier."""
-    num, cat, date_cols, likert = [], [], [], []
+    """Return column lists: num, cat, date, likert, ids."""
+    num, cat, date_cols, likert, ids = [], [], [], [], []
+
+    # If the architect excluded too much (e.g. >50% of cols), ignore the exclusions
+    # This acts as a safety valve for sports/finance data.
+    if len(excluded) > 0.5 * len(df.columns):
+        logger.warning("[VIZ] Architect excluded %d/%d columns. Ignoring exclusions to find charts.", len(excluded), len(df.columns))
+        excluded = set()
 
     for col in df.columns:
         if col in excluded:
             continue
         s = df[col]
-        if _is_likely_id(df, col):
+        # Never skip columns entirely! If it looks like an ID, put it in 'ids'
+        # so it can be used for frequency charts but not as a metric.
+        if _is_high_cardinality_id(df, col):
+            ids.append(col)
             continue
+
         if pd.api.types.is_datetime64_any_dtype(s):
             date_cols.append(col)
         elif pd.api.types.is_numeric_dtype(s):
-            if _is_likert(s):
+            if _is_date_named(col):
+                date_cols.append(col)
+            elif _is_likert(s):
                 likert.append(col)
             else:
                 num.append(col)
         elif pd.api.types.is_string_dtype(s) or pd.api.types.is_object_dtype(s):
             cat.append(col)
 
-    return {"num": num, "cat": cat, "date": date_cols, "likert": likert}
+    logger.info("[VIZ] Final inventory — Num: %d | Cat: %d | Date: %d | IDs: %d", len(num), len(cat), len(date_cols), len(ids))
+    return {"num": num, "cat": cat, "date": date_cols, "likert": likert, "ids": ids}
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -295,7 +327,10 @@ Rules:
 8. For likert/rating columns (multiple), use "likert_bar".
 9. For distribution + outlier check, use "box".
 10. Never repeat the same (x, y) pair. Avoid redundant charts.
-11. Prioritize charts that give REAL business/domain insight, not just counts.
+11. TITLES: Use generic attribute names (e.g., "Sales by Region") NOT values (e.g., "Total 5000 in California"). Use only REAL column names.
+12. Prioritize charts that give REAL business/domain insight, not just counts.
+13. CRITICAL: NEVER use date-of-birth, age, dob, birth_date, or any personal date column as a raw chart axis. These columns contain personal data and produce meaningless spikes. If you want birth year distribution, use a histogram on a derived year — but only if birth-year is explicitly a separate numeric column.
+14. CRITICAL: datetime_columns listed in the profile are DATE columns. Never use them as Y-axis values. Only use them as X-axis for time-series (line charts) when paired with a meaningful numeric Y.
 
 Respond ONLY with valid JSON — a list of up to {MAX_OUTPUT_CHARTS} objects:
 [
@@ -745,22 +780,66 @@ def _build_freq_bar(df: pd.DataFrame, cat_col: str,
                  score=score, cols={cat_col})
 
 
+def _build_freq_bar_loose(df: pd.DataFrame, cat_col: str, title: str = "") -> Optional[Chart]:
+    """More permissive frequency/count bar chart used only as an emergency fallback.
+
+    Allows higher cardinality (up to 500) and lower completeness thresholds so
+    we can still visualise datasets with many unique values by showing the
+    top categories.
+    """
+    if cat_col not in df.columns:
+        return None
+    n = df[cat_col].nunique(dropna=True)
+    if not (2 <= n <= 500):
+        return None
+    comp = _completeness(df[cat_col])
+    if comp < 0.20:
+        return None
+
+    vc = df[cat_col].value_counts().head(25).reset_index()
+    vc.columns = [cat_col, "count"]
+    chart_title = title or f"Frequency of {cat_col} (top 25)"
+    horizontal = n > 10
+    if horizontal:
+        fig = px.bar(vc, y=cat_col, x="count", orientation="h",
+                     title=chart_title, color=cat_col)
+        fig.update_layout(yaxis=dict(autorange="reversed"))
+    else:
+        fig = px.bar(vc, x=cat_col, y="count", title=chart_title, color=cat_col)
+        fig.update_layout(xaxis_tickangle=-25, xaxis_automargin=True)
+    fig.update_layout(showlegend=False)
+    score = 30 + comp * 30
+    return Chart(key=f"freq_bar_loose_{cat_col}", fig=_style(fig, 440),
+                 score=score, cols={cat_col})
+
+
 # ═══════════════════════════════════════════════════════════════════════════
 # LLM PLAN → CHART EXECUTION
 # ═══════════════════════════════════════════════════════════════════════════
 
-def _execute_plan(df: pd.DataFrame, plan: list[dict], cols: dict) -> list[Chart]:
+def _execute_plan(df: pd.DataFrame, plan: list[dict], cols: dict, stats: dict) -> list[Chart]:
     """Turn LLM chart plan into actual Chart objects."""
     charts: list[Chart] = []
     used_keys: set[str] = set()
+
+    # Build col_types once for the whole plan
+    col_names = stats.get("columns") or []
+    col_types = {}
+    for c in stats.get("numeric_columns", {}).keys():
+        col_types[c] = "numeric"
+    for c in stats.get("categorical_columns", {}).keys():
+        col_types[c] = "categorical"
+    for c in (col_names if isinstance(col_names, list) else []):
+        if c not in col_types:
+            col_types[c] = "unknown"
 
     for item in plan:
         ct   = item.get("chart_type", "")
         x    = item.get("x")
         y    = item.get("y")
-        col  = item.get("color")
-        ttl  = item.get("title", "")
+        ttl  = item.get("title")
         agg  = item.get("agg", "auto")
+        col  = item.get("color")
         log_ = bool(item.get("log_scale", False))
 
         # Validate columns exist
@@ -777,18 +856,19 @@ def _execute_plan(df: pd.DataFrame, plan: list[dict], cols: dict) -> list[Chart]
             # x=entity col (cat or low-card num), y=metric
             chart = _build_ranked_bar(df, x, y, ttl, agg=agg, color_col=col)
             if chart is None and y and x:
-                # try swapped
-                chart = _build_ranked_bar(df, y, x, ttl, agg=agg, color_col=col)
+                # try swapped - clear the LLM title because it is now semantically incorrect for the swapped axes
+                chart = _build_ranked_bar(df, y, x, None, agg=agg, color_col=col)
 
         elif ct == "grouped_bar" and x and y:
             chart = _build_grouped_bar(df, x, y, ttl, agg=agg, color_col=col)
             if chart is None:
-                chart = _build_grouped_bar(df, y, x, ttl, agg=agg, color_col=col)
+                # try swapped - clear the LLM title because it is now semantically incorrect for the swapped axes
+                chart = _build_grouped_bar(df, y, x, None, agg=agg, color_col=col)
 
         elif ct == "histogram" and x:
             chart = _build_histogram(df, x, log_scale=log_, title=ttl)
             if chart is None and y:
-                chart = _build_histogram(df, y, log_scale=log_, title=ttl)
+                chart = _build_histogram(df, y, log_scale=log_, title=None)
 
         elif ct == "scatter" and x and y:
             # Ensure both are numeric; if LLM mixes cat+num, swap them
@@ -797,7 +877,20 @@ def _execute_plan(df: pd.DataFrame, plan: list[dict], cols: dict) -> list[Chart]
             if x_num and y_num:
                 chart = _build_scatter(df, x, y, color_col=col, title=ttl)
             elif not x_num and y_num:
-                # x is categorical — find best numeric fallback for x
+                # x is categorical — find best numeric fallback for x OR use y as x if y is numeric
+                chart = _build_scatter(df, y, x, color_col=col, title=None) if pd.api.types.is_numeric_dtype(df[y]) else None
+            elif x_num and not y_num:
+                chart = _build_scatter(df, x, y, color_col=col, title=None) # fallback will handle
+        
+        elif ct == "box" and x and y:
+            chart = _build_box(df, x, y, title=ttl)
+            if chart is None:
+                chart = _build_box(df, y, x, title=None)
+
+        elif ct == "violin" and x and y:
+            chart = _build_violin(df, x, y, title=ttl)
+            if chart is None:
+                chart = _build_violin(df, y, x, title=None)
                 x_fallback = next((c for c in cols["num"] if c != y), None)
                 if x_fallback:
                     chart = _build_scatter(df, x_fallback, y, color_col=x if x in df.columns else col, title=ttl)
@@ -922,11 +1015,30 @@ def _heuristic_plan(df: pd.DataFrame, cols: dict, stats: dict) -> list[Chart]:
     cat  = cols["cat"]
     date = cols["date"]
     likert = cols["likert"]
+    ids  = cols["ids"]
     strong_corrs = stats.get("strong_correlations", [])
 
-    # 1. Time-series (highest priority when date exists)
-    if date and num:
-        _add(_build_line(df, date[0], num))
+    # CRITICAL FIX: If we have very few categorical columns but many IDs,
+    # treat low-cardinality IDs as categorical fallback (e.g., gender, position, country_name).
+    # This handles cases where columns are misclassified as "high-cardinality IDs"
+    # when they're actually meaningful categorical features.
+    if len(cat) < 2 and ids:
+        low_card_ids = [c for c in ids if 2 <= df[c].nunique(dropna=True) <= 500]
+        cat.extend(low_card_ids[:5])  # Add up to 5 low-cardinality IDs to cat
+        if low_card_ids:
+            logger.info("[VIZ] Promoted %d low-cardinality IDs to categorical for chart generation", len(low_card_ids[:5]))
+
+    # Filter out personal/biographical date columns — they are not useful for time-series.
+    # 'year', 'month', 'date' etc. are intentionally kept.
+    _PERSONAL_DATE_KEYWORDS = ("dob", "dateofbirth", "birthdate", "borndate", "birthyear", "birthday", "yob")
+    plottable_dates = [
+        d for d in date
+        if not any(kw in d.lower().replace("_", "") for kw in _PERSONAL_DATE_KEYWORDS)
+    ]
+
+    # 1. Time-series (highest priority when a real date column exists)
+    if plottable_dates and num:
+        _add(_build_line(df, plottable_dates[0], num))
 
     # 2. Correlation heatmap (when 3+ numeric cols)
     if len(num) >= 3:
@@ -992,11 +1104,28 @@ def _heuristic_plan(df: pd.DataFrame, cols: dict, stats: dict) -> list[Chart]:
     if len(small_cats) >= 2:
         _add(_build_stacked_bar(df, small_cats[0], small_cats[1]))
 
-    # 10. Frequency bar for any remaining cat columns
-    for cat_col in cat:
-        if len(charts) >= MAX_OUTPUT_CHARTS:
-            break
-        _add(_build_freq_bar(df, cat_col))
+    # 10. LAST RESORT SAFETY NET: if still no charts, force frequency bars for EVERYTHING
+    if not charts:
+        logger.warning("[VIZ] Heuristic rules produced zero charts — triggering emergency fallback")
+        # Try ANY non-numeric column first (including IDs), sorted by cardinality
+        all_possible_categorical = cat + ids
+        # Filter to low/medium cardinality columns that can actually be visualized
+        viable_cols = [c for c in all_possible_categorical 
+                      if 2 <= df[c].nunique(dropna=True) <= 500]
+        
+        if viable_cols:
+            logger.info("[VIZ] Emergency fallback using %d viable categorical columns", len(viable_cols))
+            for cname in viable_cols[:10]:
+                c = _build_freq_bar(df, cname)
+                if c is None:
+                    c = _build_freq_bar_loose(df, cname)
+                _add(c)
+        
+        # If still nothing, try histograms for any numeric
+        if not charts and num:
+            logger.info("[VIZ] Emergency fallback: no categorical found, trying numeric histograms")
+            for cname in num[:5]:
+                _add(_build_histogram(df, cname))
 
     return charts
 
@@ -1217,7 +1346,7 @@ Respond ONLY with valid JSON:
                 replacement_spec = ev.get("replacement")
                 if replacement_spec and isinstance(replacement_spec, dict):
                     logger.info("[AGENTIC] REPLACE '%s' → %s — %s", key, replacement_spec, reason)
-                    new_charts = _execute_plan(df, [replacement_spec], cols)
+                    new_charts = _execute_plan(df, [replacement_spec], cols, stats)
                     if new_charts and _chart_has_signal(new_charts[0]):
                         logger.info("[AGENTIC] Replacement built successfully: %s", new_charts[0].key)
                         final_charts.append(new_charts[0])
@@ -1270,7 +1399,7 @@ def _select_charts(df: pd.DataFrame, stats: dict) -> dict[str, go.Figure]:
     # ── PHASE 3: Execute LLM plan specs → Chart objects, then merge ──────
     llm_charts: list[Chart] = []
     if plan:
-        llm_charts = _execute_plan(df, plan, cols)
+        llm_charts = _execute_plan(df, plan, cols, stats)
         logger.info("[VIZ] Phase 1 done — %d LLM-planned charts built", len(llm_charts))
     else:
         logger.info("[VIZ] Phase 1 skipped (no API key or LLM failed)")
@@ -1286,6 +1415,9 @@ def _select_charts(df: pd.DataFrame, stats: dict) -> dict[str, go.Figure]:
         logger.warning("[VIZ] No charts generated — bare fallback")
         for col in df.columns:
             fb = _build_freq_bar(df, col) or _build_histogram(df, col)
+            # Try a looser freq-bar generator if the strict one fails
+            if fb is None:
+                fb = _build_freq_bar_loose(df, col)
             if fb and _chart_has_signal(fb):
                 all_charts = [fb]
                 break
@@ -1346,7 +1478,7 @@ def run(state: AnalysisState) -> AnalysisState:
             agent="visualizer",
             error_type="agent",
         )
-        logger.exception("Agentic Visualizer v4.0 error")
+        logger.exception("Agentic Visualizer v5.0 error")
 
     return state
 

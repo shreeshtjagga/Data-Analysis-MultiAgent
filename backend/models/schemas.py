@@ -139,6 +139,7 @@ class AnalysisListResponse(BaseModel):
 class ChatRequest(BaseModel):
     question: str = Field(..., min_length=1, max_length=1200)
     context: dict[str, Any] = Field(default_factory=dict)
+    history: Optional[List[dict[str, str]]] = Field(default_factory=list)
 
 
 class AuthResponse(BaseModel):

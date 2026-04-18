@@ -6,10 +6,11 @@ import logging
 import os
 import json
 from contextlib import asynccontextmanager
+from datetime import datetime
 from typing import Annotated
 
 import pandas as pd
-from fastapi import Depends, FastAPI, File, HTTPException, UploadFile, status, Request, Response, Query
+from fastapi import Depends, FastAPI, File, HTTPException, UploadFile, status, Request, Response, Query, BackgroundTasks
 from fastapi.responses import JSONResponse
 from fastapi.middleware.gzip import GZipMiddleware
 import traceback
@@ -46,6 +47,7 @@ from .core.graph import run_pipeline
 from .core.logging_config import configure_logging
 from .core.upload_parsing import read_csv_with_fallback, validate_upload_magic
 from .core.utils import sanitize_floats, truncate_stats_for_llm
+from .core.data_agent import run_data_query
 from .db import get_db, init_db
 from .models.schemas import (
     AnalysisListResponse,
@@ -252,7 +254,22 @@ async def register(body: UserRegister, db: AsyncSession = Depends(get_db)):
     result = await register_user(db, body.email, body.password, body.name)
     if not result["success"]:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=result["message"])
-    return AuthResponse(success=True, message=result["message"])
+    
+    # Build the user response object
+    now = datetime.utcnow()
+    user_response = UserResponse(
+        id=result["user_id"],
+        name=result.get("name"),
+        email=result["email"],
+        created_at=now,
+        updated_at=now
+    )
+    
+    return AuthResponse(
+        success=True, 
+        message=result["message"],
+        user=user_response
+    )
 
 
 @app.post("/auth/login", response_model=TokenResponse, tags=["auth"], dependencies=[Depends(check_ip_rate_limit)])
@@ -438,8 +455,27 @@ async def me(
 
 
 
+
+# ── Utility for background storage ───────────────────────────────────────
+# Use an absolute path so the file is always written to the same location
+# that data_agent.py reads from, regardless of the server's working directory.
+_API_FILE_DIR = os.path.dirname(os.path.abspath(__file__))   # .../backend/
+_PARQUET_STORAGE_DIR = os.path.join(_API_FILE_DIR, "storage", "data")
+
+def persist_full_data_backend(df: pd.DataFrame, file_hash: str):
+    """Saves cleaned DataFrame to Parquet in the background."""
+    try:
+        os.makedirs(_PARQUET_STORAGE_DIR, exist_ok=True)
+        storage_path = os.path.join(_PARQUET_STORAGE_DIR, f"{file_hash}.parquet")
+        df.to_parquet(storage_path, index=False)
+        logger.info("Background storage: Saved full data to %s", storage_path)
+    except Exception as exc:
+        logger.warning("Background storage failed for %s: %s", file_hash, exc)
+
+
 @app.post("/analyze", tags=["analysis"], dependencies=[Depends(check_user_rate_limit)])
 async def analyze(
+    background_tasks: BackgroundTasks,
     file: UploadFile = File(...),
     user_id: int = Depends(get_current_user_id),
     db: AsyncSession = Depends(get_db),
@@ -565,8 +601,12 @@ async def analyze(
     import asyncio
     state = await asyncio.to_thread(run_pipeline, df)
 
-    # ── Critical fix: strip full DataFrames BEFORE model_dump to prevent
-    # serialising 30k rows as Python dicts (≈500 MB RAM spike).            ──
+    # ── Full Data Persistence (Background) ───────────────────────────────────
+    if getattr(state, "clean_df", None) is not None:
+        background_tasks.add_task(persist_full_data_backend, state.clean_df.copy(), file_hash)
+
+    # ── Strip full DataFrames BEFORE model_dump to prevent serialising
+    # 30k rows as Python dicts (≈500 MB RAM spike). ───────────────────────────
     preview_raw = json.loads(
         state.raw_df.head(100).to_json(orient="records")
     ) if getattr(state, "raw_df", None) is not None else []
@@ -581,23 +621,22 @@ async def analyze(
     result = state.model_dump()
     result["raw_df"]   = preview_raw
     result["clean_df"] = preview_clean
+    result["file_hash"] = file_hash  # Crucial for chat context
 
-    # Only hard-fail if the core pipeline produced nothing useful.
-    # Non-fatal errors from sub-agents (e.g. one chart builder failing) are
-    # returned as warnings alongside real results so users still get insights.
-    has_stats    = bool(result.get("stats_summary"))
-    has_insights = bool(result.get("insights"))
-    is_fatal     = not has_stats or not has_insights
+    # Only hard-fail if BOTH stats and insights are completely empty.
+    # Partial data (e.g., architect succeeded but statistician failed) still yields a usable page.
+    has_stats    = bool(result.get("stats_summary") and result["stats_summary"].get("row_count"))
+    has_insights = bool(result.get("insights") and result["insights"].get("findings"))
+    # True last-resort: literally nothing was produced
+    is_fatal = not has_stats and not has_insights
 
-    if is_fatal and (state.errors or state.partial):
+    if is_fatal:
         logger.error("Pipeline critically failed for user %d / %s: %s", user_id, filename, state.errors)
         raise HTTPException(
             status_code=500,
             detail={
-                "message": "Analysis pipeline failed",
-                "partial": True,
-                "errors": state.errors,
-                "completed_agents": state.completed_agents,
+                "message": "Analysis pipeline failed — no statistics or insights were produced. Please check the dataset format and try again.",
+                "errors": [str(e) for e in state.errors],
             },
         )
     elif state.errors:
@@ -785,49 +824,129 @@ async def chat_with_analysis(
         {"column": col, "count": count} for col, count in top_outliers
     ]
 
-    prompt = (
-        "You are an elite, highly professional Senior Data Analyst assistant. "
-        "Provide precise, corporate-grade, and perfectly structured insights based on the provided data context. "
-        "Keep your tone sophisticated, authoritative, but accessible. Use correct statistical terminology when necessary, but clarify its impact cleanly. "
-        "Keep answers strictly to 1-4 sentences to maintain brevity and professionalism. "
-        "Never claim data is missing if it exists in context. "
-        "If context is insufficient, state exactly which information is missing professionally.\n"
-        "IMPORTANT BEHAVIORAL RULES:\n"
-        "1. Answer ONLY what the user asks. If the user's input is conversational (e.g., 'hello', 'no', 'thanks'), just reply naturally. DO NOT spontaneously analyze the data or throw random charts unless the user explicitly asks a question about the data.\n"
-        f"2. The dataset has exactly these charts available (EXACT keys, copy verbatim): {exact_chart_keys}. "
-        "When referencing or explaining any chart, you MUST use the format `[CHART: exact_key]` where exact_key is one of the keys listed above, copied verbatim with no changes. "
-        "Never invent, shorten, or modify a chart key. If the chart does not exist in the list above, do NOT reference it.\n"
-        "3. Never just put the chart name in backticks. You MUST use the bracket format `[CHART: key]` using only keys from the list in rule 2.\n\n"
-        f"File: {file_name}\n"
-        f"Dataset: {profile.get('label', 'unknown')} ({profile.get('domain', 'general')})\n"
-        f"Data Quality: {quality}\n"
-        f"Available Charts & Data Summaries: {charts_summary}\n"
-        f"Outlier Counts: {outlier_counts}\n"
-        f"Outlier Summary: {outlier_summary}\n"
-        f"Correlations: {correlations}\n"
-        f"Stats: {slim_stats}\n"
-        f"Insights: {insights}\n"
-        f"Question: {question}"
+    # Enhanced System Prompt for strict grounding and context awareness
+    system_prompt = (
+        "You are an elite Senior Data Analyst. You answer questions grounded in the provided dataset context."
+        "Tone: Professional, authoritative, yet accessible. "
+        "Brevity: Keep responses strictly between 1-4 sentences.\n"
+        "Grounding Rules:\n"
+        "1. MANDATORY: If you receive an 'ADDITIONAL DATA FROM FULL DATASET QUERY' block, you MUST use "
+        "   those exact values to answer the question. Never say 'I don't have that information' if data was fetched.\n"
+        "2. Never invent data. If no data was fetched and it's not in the stats, say you don't have it.\n"
+        "3. If the user is chatty (hi, thanks), be polite but do not spontaneously analyze data.\n"
+        f"4. Referencing Charts: Use exactly `[CHART: key]` using only these keys: {exact_chart_keys}. Never modify them.\n"
+        "5. Use previous messages to maintain continuity. If a user says 'Why?', refer to your previous explanation."
     )
 
-    api_key = os.getenv("GROQ_API_KEY")
-    client = _get_groq_client()   # reuse module-level singleton
+    # Data Context Block (separated from the user's actual question to prevent prompt injection/confusion)
+    data_context = (
+        f"Context for file '{file_name}':\n"
+        f"- Profile: {profile.get('label', 'unknown')} ({profile.get('domain', 'general')})\n"
+        f"- Quality: {quality}\n"
+        f"- Charts Summary: {charts_summary}\n"
+        f"- Stats: {slim_stats}\n"
+        f"- Insights: {insights}\n"
+    )
+
+    history_msgs = []
+    if body.history:
+        for m in body.history:
+            # Validate roles to match standard LLM expectations
+            role = "assistant" if m.get("role") in ["assistant", "ai"] else "user"
+            history_msgs.append({"role": role, "content": m.get("content", "")})
+
+    # Final message sequence
+    messages = [
+        {"role": "system", "content": system_prompt},
+        {"role": "system", "content": f"DATA CONTEXT:\n{data_context}"}
+    ]
+    messages.extend(history_msgs)
+    messages.append({"role": "user", "content": question})
+
+    client = _get_groq_client()
     if client:
         try:
+            # ── Phase 1: Intent & Data Retrieval ─────────────────────────────
+            # Determine if we need to query the full dataset
+            file_hash = context.get("file_hash")
+            data_result = None
+            
+            # Optimization: Skip intent check for simple greetings to avoid latency and errors
+            is_greeting = any(g in question.lower() for g in ["hello", "hi", "hey", "thanks", "thank you"])
+            
+            if file_hash and not is_greeting:
+                try:
+                    # stats['columns'] is a plain list of names, not a typed dict.
+                    # Build col_types from the actual typed sub-dicts in stats_summary.
+                    col_types = {}
+                    for c in stats.get("numeric_columns", {}).keys():
+                        col_types[c] = "numeric"
+                    for c in stats.get("categorical_columns", {}).keys():
+                        col_types[c] = "categorical"
+                    # Add any remaining columns from the columns list
+                    for c in (stats.get("columns") or []):
+                        if c not in col_types:
+                            col_types[c] = "unknown"
+                    intent_prompt = (
+                        "You are a Data Query Planner. Given a user question, decide if it needs querying the FULL dataset.\n"
+                        "If YES, return ONLY a single JSON object with 'type' and 'params'. If NO, return 'NONE'.\n\n"
+                        "SUPPORTED QUERY TYPES (pick the best one):\n"
+                        "0. filter_lookup - look up a column value for a specific entity. USE THIS FIRST for 'what is X for Y', 'find the ID of Z', 'what is country_id for India'.\n"
+                        "   CRITICAL: NEVER use aggregate/mean/median on an ID or code column. Always look it up by filtering.\n"
+                        "   Example: {\"type\":\"filter_lookup\",\"params\":{\"filter_col\":\"country_name\",\"filter_val\":\"India\",\"result_col\":\"country_id\"}}\n"
+                        "1. filter_group  - filter rows then group+count. USE for 'what X in year Y', 'most popular brand in 2021'.\n"
+                        "   Example: {\"type\":\"filter_group\",\"params\":{\"group_by\":\"Brand\",\"func\":\"count\",\"n\":5,\"filters\":[{\"column\":\"Year\",\"op\":\"year\",\"value\":2021}]}}\n"
+                        "2. value_counts  - count each category. USE for 'how many of each X', 'distribution of Y'.\n"
+                        "   Example: {\"type\":\"value_counts\",\"params\":{\"column\":\"Category\",\"n\":10}}\n"
+                        "3. group_aggregate - group by column, aggregate another. USE for 'total sales per region'.\n"
+                        "   Example: {\"type\":\"group_aggregate\",\"params\":{\"group_by\":\"Region\",\"column\":\"Revenue\",\"func\":\"sum\",\"n\":10}}\n"
+                        "4. aggregate     - single stat on one column. USE for 'average price', 'total revenue'. NEVER for IDs or codes.\n"
+                        "   Example: {\"type\":\"aggregate\",\"params\":{\"column\":\"Price\",\"func\":\"mean\"}}\n"
+                        "5. top_n         - top rows sorted by a column. USE for 'top 5 most expensive'.\n"
+                        "   Example: {\"type\":\"top_n\",\"params\":{\"column\":\"Sales\",\"n\":5}}\n"
+                        "6. lookup        - get a specific row. USE for 'what is in row 500'.\n"
+                        "   Example: {\"type\":\"lookup\",\"params\":{\"row_index\":500}}\n"
+                        "7. row_count     - count rows matching a condition.\n"
+                        "   Example: {\"type\":\"row_count\",\"params\":{\"filters\":[{\"column\":\"Status\",\"op\":\"eq\",\"value\":\"Active\"}]}}\n\n"
+                        "Filter ops: 'eq' (exact match), 'contains' (text), 'gt/lt/gte/lte' (numeric), 'year' (extract year from date), 'month'.\n\n"
+                        f"Dataset columns and types: {col_types}\n"
+                        f"User question: {question}\n\n"
+                        "Return ONLY the JSON or 'NONE'. No explanation."
+                    )
+                    intent_resp = client.chat.completions.create(
+                        model=os.getenv("GROQ_MODEL", "llama-3.1-8b-instant"),
+                        messages=[{"role": "system", "content": intent_prompt}],
+                        max_tokens=200,
+                        temperature=0,
+                    )
+                    intent_text = (intent_resp.choices[0].message.content or "").strip()
+                    logger.info("Intent LLM response: %s", intent_text)
+                    if "{" in intent_text and "}" in intent_text:
+                        import json as std_json
+                        query_plan = std_json.loads(intent_text[intent_text.find("{"):intent_text.rfind("}")+1])
+                        data_result = run_data_query(file_hash, query_plan.get("type"), query_plan.get("params", {}))
+                        logger.info("Data Agent result: %s", str(data_result)[:300])
+                except Exception as e:
+                    logger.warning("Intent pass failed (skipping data retrieval): %s", e)
+
+            # ── Phase 2: Synthesis ───────────────────────────────────────────
+            if data_result:
+                messages.append({
+                    "role": "system", 
+                    "content": f"ADDITIONAL DATA FROM FULL DATASET QUERY:\n{data_result}"
+                })
+
             completion = client.chat.completions.create(
                 model=os.getenv("GROQ_MODEL", "llama-3.1-8b-instant"),
-                messages=[
-                    {"role": "system", "content": "You are an elite, highly professional Senior Data Analyst. Deliver precise, corporate-grade responses strictly under 4 sentences. Important: Be conversational but extremely professional! If the user says 'hi' or 'namaste', reply professionally. Do not forcefully analyze data unless requested. If referencing a chart, use the [CHART: key] syntax exactly."},
-                    {"role": "user", "content": prompt},
-                ],
-                temperature=0.3,
-                max_tokens=350,
+                messages=messages,
+                temperature=0.2,
+                max_tokens=400,
             )
             answer = (completion.choices[0].message.content or "").strip()
             if answer:
-                return {"answer": answer}
+                return {"answer": answer, "data_queried": bool(data_result)}
         except Exception as exc:
-            logger.warning("Groq chat failed, using fallback response: %s", exc)
+            logger.warning("Groq chat failed: %s", exc)
 
 
     q_lower = question.lower()
@@ -856,6 +975,12 @@ async def chat_with_analysis(
             return {"answer": f"The strongest reported correlation is {top.get('col1')} and {top.get('col2')} with r={float(top.get('correlation', 0)):.3f}."}
         return {"answer": "No strong correlations were provided in the current analysis context."}
 
+    # ── Greeting / non-data fallback — never dump stats on a casual message ──
+    is_greeting_fallback = any(g in q_lower for g in ["hello", "hi", "hey", "thanks", "thank you", "bye", "okay", "ok"])
+    if is_greeting_fallback:
+        return {"answer": "Hello! I'm your data analyst. Feel free to ask me anything about your dataset."}
+
+    # Generic data summary (only reached for genuinely stat-related questions)
     parts = [f"I analyzed {file_name} with {row_count} rows and {col_count} columns."]
     if completeness is not None:
         parts.append(f"Data completeness is {float(completeness):.2f}%.")
