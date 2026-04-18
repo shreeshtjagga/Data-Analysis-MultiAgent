@@ -1,5 +1,3 @@
-
-
 import logging
 import os
 import ssl
@@ -17,6 +15,8 @@ from sqlalchemy import (
 )
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.orm import DeclarativeBase, relationship
+
+from .core.utils import rewrite_local_dev_host
 
 logger = logging.getLogger(__name__)
 
@@ -83,7 +83,6 @@ DATABASE_URL = os.getenv(
     "DATABASE_URL",
     "postgresql+asyncpg://datapulse:datapulse_secret@localhost:5432/datapulse",
 )
-
 
 if DATABASE_URL.startswith("postgresql://") or DATABASE_URL.startswith("postgres://"):
     DATABASE_URL = DATABASE_URL.replace("postgres://", "postgresql+asyncpg://", 1)

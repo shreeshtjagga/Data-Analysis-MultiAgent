@@ -1,5 +1,4 @@
 
-
 import hashlib
 import json
 import logging
@@ -7,7 +6,6 @@ from datetime import datetime, timezone, timedelta
 from typing import Optional
 
 import pandas as pd
-import plotly.graph_objects as go
 from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -46,19 +44,6 @@ def _serialize_charts(charts: dict) -> dict:
         except Exception as exc:
             logger.warning("Failed to serialise chart '%s': %s", key, exc)
     return out
-
-
-def _deserialize_charts(charts: dict) -> dict:
-    if not charts:
-        return {}
-    out = {}
-    for key, fig_data in charts.items():
-        try:
-            out[key] = go.Figure(fig_data)
-        except Exception as exc:
-            logger.warning("Failed to restore chart '%s': %s", key, exc)
-    return out
-
 
 def compute_file_hash(file_bytes: bytes, file_name: Optional[str] = None) -> str:
     h = hashlib.sha256()

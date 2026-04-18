@@ -813,8 +813,10 @@ export default function DataPulse({ user, onLogout }) {
       dataQuality: chatStats?.data_quality || {},
       correlations: chatStats?.strong_correlations?.slice(0, 5),
       charts: result?.charts || {},
+      // Include the 100-row clean_df preview so the backend can generate new charts on demand
+      clean_df: result?.clean_df || [],
     };
-  }, [chatStats, chatInsights, fileName, result?.charts, datasetTypeLabel]);
+  }, [chatStats, chatInsights, fileName, result?.charts, result?.clean_df, datasetTypeLabel]);
 
   const sendChat = useCallback(async () => {
     const q = chatInput.trim();
@@ -824,10 +826,16 @@ export default function DataPulse({ user, onLogout }) {
     setChatLoading(true);
     try {
       const resp = await apiChat(q, chatContext || {});
-      setChatMsgs((p) => [...p, { role: "ai", text: (resp.answer || "").trim() || "No response generated." }].slice(-MAX_CHAT_MESSAGES));
+      const aiMessage = {
+        role: "ai",
+        text: (resp.answer || "").trim() || "No response generated.",
+        // Attach any on-demand generated charts so they render inside this bubble
+        generatedCharts: Array.isArray(resp.generated_charts) ? resp.generated_charts : [],
+      };
+      setChatMsgs((p) => [...p, aiMessage].slice(-MAX_CHAT_MESSAGES));
     } catch (err) {
       const detail = err?.message || "Unable to reach AI";
-      setChatMsgs((p) => [...p, { role: "ai", text: `Chat error: ${detail}` }].slice(-MAX_CHAT_MESSAGES));
+      setChatMsgs((p) => [...p, { role: "ai", text: `Chat error: ${detail}`, generatedCharts: [] }].slice(-MAX_CHAT_MESSAGES));
     }
     setChatLoading(false);
   }, [chatInput, chatLoading, result, chatContext]);
@@ -1090,68 +1098,167 @@ export default function DataPulse({ user, onLogout }) {
               {/* Chat Box (only if done) */}
               {phase === "done" && result && (
                 <div className="card flex-col gap-16" style={{ padding: '20px', flex: 1, display: 'flex', overflow: 'hidden' }}>
-                  <strong style={{ fontSize: '14px', color: 'var(--text-main)', fontFamily: 'Syne, sans-serif' }}>Analyst Advisor</strong>
+                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                    <strong style={{ fontSize: '14px', color: 'var(--text-main)', fontFamily: 'Syne, sans-serif' }}>Expert Analyst Advisor</strong>
+                    <span
+                      title="This advisor only answers questions about the active dataset."
+                      style={{
+                        fontSize: '10px',
+                        padding: '3px 8px',
+                        background: 'rgba(99,102,241,0.12)',
+                        border: '1px solid rgba(99,102,241,0.25)',
+                        borderRadius: '100px',
+                        color: 'var(--primary-500)',
+                        letterSpacing: '0.08em',
+                        textTransform: 'uppercase',
+                        cursor: 'default',
+                      }}
+                    >Dataset Scope</span>
+                  </div>
                   <div ref={chatContainerRef} style={{ flex: 1, overflowY: "auto", display: "flex", flexDirection: "column", gap: "12px", background: 'var(--bg-input)', padding: '16px', borderRadius: '12px', border: '1px solid var(--border-subtle)' }}>
                     {chatMsgs.length === 0 ? (
                       <div style={{ margin: 'auto', textAlign: 'center', display: 'flex', flexDirection: 'column', gap: '10px', maxWidth: '310px', background: 'linear-gradient(180deg, rgba(99,102,241,0.08), rgba(6,9,18,0.05))', border: '1px solid rgba(99,102,241,0.2)', borderRadius: '12px', padding: '16px 18px' }}>
-                        <strong style={{ fontSize: '16px', color: 'var(--text-main)', fontFamily: "'Inter', sans-serif", letterSpacing: '0.02em' }}>I am your Data Analyst.</strong>
-                        <p style={{ fontSize: '13px', color: '#cbd5e1', lineHeight: 1.55, fontFamily: "'Inter', sans-serif" }}>Feel free to ask me any questions about your data.</p>
+                        <strong style={{ fontSize: '16px', color: 'var(--text-main)', fontFamily: "'Inter', sans-serif", letterSpacing: '0.02em' }}>Expert Data Analyst Advisor</strong>
+                        <p style={{ fontSize: '13px', color: '#cbd5e1', lineHeight: 1.55, fontFamily: "'Inter', sans-serif" }}>Ask me anything about your dataset — insights, trends, outliers, or which chart reveals the story best.</p>
+                        <div style={{ fontSize: '11px', color: 'var(--text-muted)', borderTop: '1px solid rgba(99,102,241,0.15)', paddingTop: '8px', opacity: 0.8 }}>⚠ Responses are limited to the active dataset only.</div>
                       </div>
                     ) : chatMsgs.map((m, i) => (
                       <div
                         key={i}
                         style={{
                           alignSelf: m.role === 'user' ? 'flex-end' : 'flex-start',
-                          background: m.role === 'user'
-                            ? 'linear-gradient(135deg, #6366f1 0%, #4f46e5 100%)'
-                            : 'rgba(30, 41, 59, 0.5)',
-                          color: m.role === 'user' ? '#FFFFFF' : 'var(--text-main)',
-                          padding: '12px 18px',
-                          borderRadius: m.role === 'user' ? '18px 18px 4px 18px' : '18px 18px 18px 4px',
-                          fontSize: '13px',
+                          display: 'flex',
+                          flexDirection: 'column',
+                          gap: '8px',
                           maxWidth: m.role === 'user' ? '90%' : '100%',
-                          border: m.role === 'user' ? '1px solid rgba(255,255,255,0.1)' : '1px solid rgba(99,102,241,0.2)',
-                          boxShadow: m.role === 'user' ? '0 4px 15px rgba(99,102,241,0.3)' : '0 4px 15px rgba(0,0,0,0.2)',
-                          lineHeight: 1.5,
-                          marginBottom: '4px'
+                          marginBottom: '4px',
                         }}
                       >
-                        {(() => {
-                          if (m.role !== 'ai' || !m.text.includes('[CHART:')) return m.text;
-                          const parts = m.text.split(/(\[CHART:\s*[^\]]+\])/);
-                          return parts.map((part, pIdx) => {
-                            const match = part.match(/\[CHART:\s*([^\]]+)\]/);
-                            if (match && result?.charts?.[match[1]]) {
-                              const figStr = result.charts[match[1]];
-                              let parsedFig = typeof figStr === "string" ? JSON.parse(figStr) : figStr;
-                              const data = Array.isArray(parsedFig?.data) ? parsedFig.data : [];
-                              const layout = (parsedFig?.layout && typeof parsedFig.layout === 'object') ? parsedFig.layout : {};
-                              return PlotComponent ? (
-                                <div key={pIdx} style={{ margin: '16px 0', border: '1px solid rgba(99,102,241,0.2)', borderRadius: '12px', overflow: 'hidden', padding: '12px', background: 'rgba(0,0,0,0.3)', width: '100%' }}>
+                        {/* Text bubble */}
+                        <div
+                          style={{
+                            background: m.role === 'user'
+                              ? 'linear-gradient(135deg, #6366f1 0%, #4f46e5 100%)'
+                              : 'rgba(30, 41, 59, 0.5)',
+                            color: m.role === 'user' ? '#FFFFFF' : 'var(--text-main)',
+                            padding: '12px 18px',
+                            borderRadius: m.role === 'user' ? '18px 18px 4px 18px' : '18px 18px 18px 4px',
+                            fontSize: '13px',
+                            border: m.role === 'user' ? '1px solid rgba(255,255,255,0.1)' : '1px solid rgba(99,102,241,0.2)',
+                            boxShadow: m.role === 'user' ? '0 4px 15px rgba(99,102,241,0.3)' : '0 4px 15px rgba(0,0,0,0.2)',
+                            lineHeight: 1.5,
+                          }}
+                        >
+                          {(() => {
+                            if (m.role !== 'ai' || !m.text.includes('[CHART:')) return m.text;
+                            const parts = m.text.split(/(\[CHART:\s*[^\]]+\])/);
+                            return parts.map((part, pIdx) => {
+                              const match = part.match(/\[CHART:\s*([^\]]+)\]/);
+                              if (match && result?.charts?.[match[1]]) {
+                                const figStr = result.charts[match[1]];
+                                let parsedFig = typeof figStr === "string" ? JSON.parse(figStr) : figStr;
+                                const data = Array.isArray(parsedFig?.data) ? parsedFig.data : [];
+                                const layout = (parsedFig?.layout && typeof parsedFig.layout === 'object') ? parsedFig.layout : {};
+                                return PlotComponent ? (
+                                  <div key={pIdx} style={{ margin: '16px 0', border: '1px solid rgba(99,102,241,0.2)', borderRadius: '12px', overflow: 'hidden', padding: '12px', background: 'rgba(0,0,0,0.3)', width: '100%' }}>
+                                    <PlotComponent
+                                      data={data.map(t => ({ ...t, textfont: { color: "#FFFFFF" } }))}
+                                      layout={{
+                                        ...PLOTLY_DARK_LAYOUT,
+                                        ...layout,
+                                        paper_bgcolor: "rgba(0,0,0,0)",
+                                        plot_bgcolor: "rgba(0,0,0,0)",
+                                        font: { color: "#FFFFFF", family: "'Inter', sans-serif" },
+                                        hoverlabel: { bgcolor: "rgba(8,12,24,0.98)", font: { color: "#F8FAFC", size: 12 }, bordercolor: "rgba(99,102,241,0.85)" },
+                                        height: 280,
+                                        margin: { l: 40, r: 20, t: 40, b: 40 },
+                                        title: { ...(layout.title || {}), font: { size: 14, color: '#fff', weight: 'bold' }, y: 0.95, yanchor: 'top' },
+                                        legend: { orientation: "h", yanchor: "top", y: -0.2, xanchor: "center", x: 0.5, font: { size: 10, color: "rgba(255,255,255,0.7)" } }
+                                      }}
+                                      config={PLOTLY_CONFIG}
+                                      style={{ width: "100%", height: "280px" }}
+                                    />
+                                  </div>
+                                ) : <div key={pIdx} style={{ color: 'var(--primary-500)' }}>[Rendering Chart...]</div>;
+                              }
+                              if (match) return null;
+                              return <span key={pIdx}>{part}</span>;
+                            });
+                          })()}
+                        </div>
+
+                        {/* On-demand generated charts — rendered BELOW the text bubble */}
+                        {m.role === 'ai' && Array.isArray(m.generatedCharts) && m.generatedCharts.map((gc, gcIdx) => (
+                          <div key={`gc-${gcIdx}`} style={{ width: '100%' }}>
+                            {gc.error ? (
+                              /* Error state */
+                              <div style={{
+                                padding: '12px 16px',
+                                background: 'rgba(239,68,68,0.08)',
+                                border: '1px solid rgba(239,68,68,0.25)',
+                                borderRadius: '12px',
+                                fontSize: '12px',
+                                color: 'var(--error)',
+                                lineHeight: 1.5,
+                              }}>
+                                <span style={{ fontWeight: 700, marginRight: '6px' }}>⚠ Chart Error:</span>{gc.error}
+                              </div>
+                            ) : gc.fig && PlotComponent ? (
+                              /* Successful chart */
+                              <div style={{
+                                border: '1px solid rgba(99,102,241,0.25)',
+                                borderRadius: '14px',
+                                overflow: 'hidden',
+                                background: 'rgba(0,0,0,0.35)',
+                              }}>
+                                {/* Generated chart badge */}
+                                <div style={{
+                                  padding: '6px 14px',
+                                  borderBottom: '1px solid rgba(99,102,241,0.15)',
+                                  display: 'flex',
+                                  alignItems: 'center',
+                                  gap: '6px',
+                                  background: 'rgba(99,102,241,0.08)',
+                                }}>
+                                  <span style={{ fontSize: '10px', color: 'var(--primary-500)' }}>✦</span>
+                                  <span style={{
+                                    fontSize: '10px',
+                                    color: 'var(--primary-500)',
+                                    textTransform: 'uppercase',
+                                    letterSpacing: '0.1em',
+                                    fontWeight: 700,
+                                  }}>Generated Chart</span>
+                                  <span style={{ fontSize: '10px', color: 'var(--text-muted)', marginLeft: 'auto' }}>{gc.id}</span>
+                                </div>
+                                <div style={{ padding: '8px' }}>
                                   <PlotComponent
-                                    data={data.map(t => ({ ...t, textfont: { color: "#FFFFFF" } }))}
+                                    data={(gc.fig.data || []).map(t => ({ ...t, textfont: { color: "#FFFFFF" } }))}
                                     layout={{
                                       ...PLOTLY_DARK_LAYOUT,
-                                      ...layout,
+                                      ...(gc.fig.layout || {}),
                                       paper_bgcolor: "rgba(0,0,0,0)",
                                       plot_bgcolor: "rgba(0,0,0,0)",
-                                      font: { color: "#FFFFFF", family: "'Inter', sans-serif" },
+                                      font: { color: "#FFFFFF", family: "'Inter', sans-serif", size: 11 },
                                       hoverlabel: { bgcolor: "rgba(8,12,24,0.98)", font: { color: "#F8FAFC", size: 12 }, bordercolor: "rgba(99,102,241,0.85)" },
-                                      height: 280,
-                                      margin: { l: 40, r: 20, t: 40, b: 40 },
-                                      title: { ...(layout.title || {}), font: { size: 14, color: '#fff', weight: 'bold' }, y: 0.95, yanchor: 'top' },
-                                      legend: { orientation: "h", yanchor: "top", y: -0.2, xanchor: "center", x: 0.5, font: { size: 10, color: "rgba(255,255,255,0.7)" } }
+                                      height: 300,
+                                      margin: { l: 45, r: 16, t: 36, b: 45 },
+                                      title: {
+                                        ...(gc.fig.layout?.title || {}),
+                                        font: { size: 13, color: '#FFFFFF', weight: 'bold' },
+                                        y: 0.97, yanchor: 'top',
+                                      },
+                                      xaxis: { ...(gc.fig.layout?.xaxis || {}), tickfont: { color: "#FFFFFF", size: 10 }, gridcolor: "rgba(99,102,241,0.1)", automargin: true },
+                                      yaxis: { ...(gc.fig.layout?.yaxis || {}), tickfont: { color: "#FFFFFF", size: 10 }, gridcolor: "rgba(99,102,241,0.1)", automargin: true },
+                                      showlegend: false,
                                     }}
-                                    config={PLOTLY_CONFIG}
-                                    style={{ width: "100%", height: "280px" }}
+                                    config={{ ...PLOTLY_CONFIG, modeBarButtons: [['zoomIn2d', 'zoomOut2d', 'resetScale2d', 'toImage']] }}
+                                    style={{ width: "100%", height: "300px" }}
                                   />
                                 </div>
-                              ) : <div key={pIdx} style={{ color: 'var(--primary-500)' }}>[Rendering Chart...]</div>;
-                            }
-                            if (match) return null; // hide broken chart tags if it doesn't exist
-                            return <span key={pIdx}>{part}</span>;
-                          });
-                        })()}
+                              </div>
+                            ) : null}
+                          </div>
+                        ))}
                       </div>
                     ))}
                     {chatLoading && <div style={{ fontSize: '13px', color: 'var(--primary-500)', fontFamily: "'Outfit', monospace" }}>Gener...</div>}

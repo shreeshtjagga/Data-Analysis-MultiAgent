@@ -233,7 +233,6 @@ p, body { font-size: var(--font-body); font-weight: 400; color: var(--text-muted
   text-align: center;
   background: radial-gradient(circle at center, rgba(99,102,241,0.08) 0%, transparent 100%);
   cursor: pointer;
-  transition: transform 0.3s cubic-bezier(0.34, 1.56, 0.64, 1), border-color 0.3s ease, box-shadow 0.3s ease;
   display: flex;
   flex-direction: column;
   align-items: center;

@@ -136,16 +136,6 @@ class AnalysisListResponse(BaseModel):
     analyses: List[AnalysisHistoryList]
 
 
-class AnalysisStatsSummary(BaseModel):
-    row_count: int
-    column_count: int
-    missing_cells: int
-    duplicate_rows: int
-    completeness: float
-    outlier_cols: int
-    strong_correlations: int
-
-
 class ChatRequest(BaseModel):
     question: str = Field(..., min_length=1, max_length=1200)
     context: dict[str, Any] = Field(default_factory=dict)

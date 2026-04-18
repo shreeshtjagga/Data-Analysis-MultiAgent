@@ -3,10 +3,47 @@ import pandas as pd
 import numpy as np
 import logging
 import math
+import os
 from datetime import date, datetime
 from typing import Any, Optional, Tuple
+from urllib.parse import urlparse, urlunparse
 
 logger = logging.getLogger(__name__)
+
+
+def rewrite_local_dev_host(url: str, service_name: str) -> str:
+    """
+    In local development, rewrite docker-compose service hosts (e.g. redis, db)
+    to localhost when the app is not running inside a container.
+    """
+    app_env = os.getenv("APP_ENV", "production").lower()
+    if app_env != "development" or os.path.exists("/.dockerenv"):
+        return url
+
+    parsed = urlparse(url)
+    if parsed.hostname != service_name:
+        return url
+
+    netloc = parsed.netloc
+    if "@" in netloc:
+        auth, host_port = netloc.rsplit("@", 1)
+        if host_port.startswith(f"{service_name}:"):
+            netloc = f"{auth}@localhost:{host_port.split(':', 1)[1]}"
+        elif host_port == service_name:
+            netloc = f"{auth}@localhost"
+    else:
+        if netloc.startswith(f"{service_name}:"):
+            netloc = f"localhost:{netloc.split(':', 1)[1]}"
+        elif netloc == service_name:
+            netloc = "localhost"
+
+    rewritten = urlunparse(parsed._replace(netloc=netloc))
+    logger.warning(
+        "%s host '%s' detected in local dev; using localhost instead",
+        service_name.upper(),
+        service_name,
+    )
+    return rewritten
 
 
 def _parse_salary_range(series: pd.Series) -> pd.Series:
