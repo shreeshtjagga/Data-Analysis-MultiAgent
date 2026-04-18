@@ -120,6 +120,21 @@ function ChartPanel({ result, PlotComponent }) {
   }
 
   const charts = result?.charts || {};
+
+  // Priority order: most informative chart types first
+  const CHART_PRIORITY = {
+    timeseries: 0, line: 1, scatter: 2, heatmap: 3,
+    ranked_bar: 4, grouped_bar: 5, stacked: 6, box: 7,
+    violin: 8, likert: 9, freq: 10, histogram: 11,
+    donut: 12, pie: 13,
+  };
+  const getChartPriority = (key) => {
+    for (const prefix of Object.keys(CHART_PRIORITY)) {
+      if (key.startsWith(prefix)) return CHART_PRIORITY[prefix];
+    }
+    return 99;
+  };
+
   const entries = Object.entries(charts)
     .map(([key, value]) => {
       let fig = value;
@@ -134,7 +149,8 @@ function ChartPanel({ result, PlotComponent }) {
       const data = Array.isArray(fig.data) ? fig.data : [];
       const layout = fig.layout && typeof fig.layout === "object" ? fig.layout : {};
       return [key, { data, layout }, desc];
-    });
+    })
+    .sort((a, b) => getChartPriority(a[0]) - getChartPriority(b[0]));
 
   if (entries.length === 0) {
     return <div style={{ color: "var(--text-muted)", fontSize: "14px" }}>No charts available.</div>;
