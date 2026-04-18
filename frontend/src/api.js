@@ -108,7 +108,7 @@ async function apiFetch(path, options = {}) {
           authErr.status = 401;
           throw authErr;
         }
-        let detail = `HTTP ${retryResp.status}`;
+        let detail = getStatusMessage(retryResp.status);
         try {
           const body = await retryResp.json();
           detail = normalizeErrorDetail(body, detail);
@@ -127,7 +127,7 @@ async function apiFetch(path, options = {}) {
   }
 
   if (!response.ok) {
-    let detail = `HTTP ${response.status}`;
+    let detail = getStatusMessage(response.status);
     try {
       const body = await response.json();
       detail = normalizeErrorDetail(body, detail);
@@ -239,4 +239,26 @@ function normalizeErrorDetail(body, fallback) {
   if (body.message) return body.message;
   if (body.error) return body.error;
   return fallback;
+}
+
+/**
+ * Maps standard HTTP status codes to user-friendly messages for cases where
+ * the server does not return a specific JSON error detail.
+ */
+function getStatusMessage(status) {
+  switch (status) {
+    case 400: return "Bad Request: The data provided was invalid.";
+    case 401: return "Invalid Credentials or Session Expired.";
+    case 403: return "Access Denied: You do not have permission required for this action.";
+    case 404: return "Resource Not Found: The requested data does not exist.";
+    case 408: return "Request Timeout: The server took too long to respond.";
+    case 413: return "Payload Too Large: The requested upload exceeds allowed limits.";
+    case 422: return "Unprocessable Entity: The submitted file or data is malformed.";
+    case 429: return "Too Many Requests: Please slow down and try again later.";
+    case 500: return "Internal Server Error: Something went wrong on our server.";
+    case 502: return "Bad Gateway: The upstream server failed.";
+    case 503: return "Service Unavailable: The server is currently overloaded or down for maintenance.";
+    case 504: return "Gateway Timeout: The server took too long to return a response.";
+    default: return `Unexpected Network Error (HTTP ${status})`;
+  }
 }
