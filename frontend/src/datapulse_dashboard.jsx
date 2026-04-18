@@ -281,16 +281,79 @@ function ChartPanel({ result, PlotComponent }) {
 
                 <div className="chart-back-divider" />
 
-                <div className="chart-back-section-label">AI Narrative</div>
-                <p className="chart-back-description">
-                  {desc || "Our multi-agent orchestration performed a deep vector analysis on this distribution. The patterns identified suggest a strong alignment with normalized expectations for this domain."}
-                </p>
+                {(() => {
+                  const plotTypeObj = fig.data?.[0]?.type;
+                  const plotTypeInfo = plotTypeObj ? plotTypeObj.charAt(0).toUpperCase() + plotTypeObj.slice(1).replace('scatter', 'Scatter Plot').replace('bar', 'Bar Chart').replace('pie', 'Pie Chart').replace('histogram', 'Histogram') : 'Data Plot';
+                  const xAxisTitle = cleanAxisTitle(fig.layout?.xaxis?.title?.text || fig.layout?.xaxis?.title || 'the primary variable');
+                  const yAxisTitle = cleanAxisTitle(fig.layout?.yaxis?.title?.text || fig.layout?.yaxis?.title || 'the secondary variable');
+                  
+                  let plotDetails = `This visualization is rendered as a ${plotTypeInfo.toLowerCase()}, primarily examining the correlative distribution between ${xAxisTitle} and ${yAxisTitle}.`;
+                  if (plotTypeObj === 'pie' || plotTypeObj === 'donut' || plotTypeObj === 'funnelarea') {
+                     plotDetails = `This ${plotTypeInfo.toLowerCase()} breaks down the relative market or categorical proportion, strictly delineating the dataset across segmented domains.`;
+                  } else if (plotTypeObj === 'histogram') {
+                     plotDetails = `Rendered as a ${plotTypeInfo.toLowerCase()}, this chart visualizes the precise frequency distribution of ${xAxisTitle}, isolating common intervals and demonstrating total data spread.`;
+                  } else if (plotTypeObj === 'heatmap' || plotTypeObj === 'choropleth') {
+                     plotDetails = `This ${plotTypeInfo.toLowerCase()} maps variable matrix intensity across a 2-dimensional grid, instantly revealing clustered areas of high or low density.`;
+                  }
 
-                <div className="chart-back-section-label">Core Revelation</div>
-                <div className="chart-back-insight-item">
-                  <div className="chart-back-insight-dot" />
-                  <span>{desc ? "The statistical significance of this variance suggests a primary pivot point for strategy." : "Automated outlier detection confirmed data integrity within this specific dimension."}</span>
-                </div>
+                  let revelationInfo = desc || `Initial vector analysis indicates distinct structural patterns within this specific dimension. The rendering highlights variance that may point towards potential outlier clusters or a strong central behavioral tendency.`;
+                  
+                  if (!desc && Array.isArray(fig.data) && fig.data.length > 0) {
+                      const firstTrace = fig.data[0];
+                      const dataPoints = firstTrace.x?.length || firstTrace.labels?.length || firstTrace.values?.length || 0;
+                      
+                      let extraDetails = "";
+                      let numericArr = null;
+                      let labelStr = "";
+                      if (Array.isArray(firstTrace.y) && firstTrace.y.length > 0 && typeof firstTrace.y[0] === 'number' && !isNaN(firstTrace.y[0])) {
+                          numericArr = firstTrace.y.filter(n => typeof n === 'number' && !isNaN(n));
+                          labelStr = yAxisTitle;
+                      } else if (Array.isArray(firstTrace.x) && firstTrace.x.length > 0 && typeof firstTrace.x[0] === 'number' && !isNaN(firstTrace.x[0])) {
+                          numericArr = firstTrace.x.filter(n => typeof n === 'number' && !isNaN(n));
+                          labelStr = xAxisTitle;
+                      } else if (Array.isArray(firstTrace.values) && firstTrace.values.length > 0 && typeof firstTrace.values[0] === 'number' && !isNaN(firstTrace.values[0])) {
+                          numericArr = firstTrace.values.filter(n => typeof n === 'number' && !isNaN(n));
+                          labelStr = "proportional values";
+                      }
+
+                      if (numericArr && numericArr.length > 0) {
+                          const min = Math.min(...numericArr);
+                          const max = Math.max(...numericArr);
+                          const avg = numericArr.reduce((a,b) => a+b, 0) / numericArr.length;
+                          const f = (n) => (Math.abs(n) > 1000 ? n.toLocaleString(undefined, {maximumFractionDigits: 1}) : (Number.isInteger(n) ? n : n.toFixed(2)));
+                          
+                          if (min !== max) {
+                              extraDetails = ` The underlying mapped ${labelStr.toLowerCase().replace('the ', '')} spans a range from ${f(min)} to ${f(max)}, converging on a mean average of approximately ${f(avg)}.`;
+                          }
+                      }
+                      
+                      if (plotTypeObj === 'bar' && Array.isArray(firstTrace.x) && firstTrace.x.length > 0 && typeof firstTrace.x[0] === 'string') {
+                          const topCategories = firstTrace.x.slice(0, 3).join(", ");
+                          extraDetails += ` Prominent sub-categories logged include ${topCategories}.`;
+                      }
+
+                      if (dataPoints > 0) {
+                          revelationInfo = `The primary algorithmic pass successfully mapped ${dataPoints} continuous observations.${extraDetails} These underlying characteristics showcase strong intrinsic relationships alongside measurable variance.`;
+                      } else if (fig.data.length > 1) {
+                          revelationInfo = `This configuration overlays ${fig.data.length} distinct data series.${extraDetails} Viewing these intersecting layers simultaneously reveals correlated trendline patterns.`;
+                      }
+                  }
+
+                  return (
+                    <>
+                      <div className="chart-back-section-label" style={{ fontSize: '12px', letterSpacing: '0.15em' }}>Plot Details</div>
+                      <p className="chart-back-description" style={{ fontSize: '17.5px', lineHeight: '1.6', color: '#f1f5f9' }}>
+                        {plotDetails}
+                      </p>
+
+                      <div className="chart-back-section-label" style={{ fontSize: '12px', letterSpacing: '0.15em', marginTop: '26px' }}>Core Revelation</div>
+                      <div className="chart-back-insight-item" style={{ fontSize: '17px', lineHeight: '1.6', color: '#cbd5e1' }}>
+                        <div className="chart-back-insight-dot" style={{ marginTop: '9px', width: '7px', height: '7px', minWidth: '7px' }} />
+                        <span>{revelationInfo}</span>
+                      </div>
+                    </>
+                  );
+                })()}
 
                 <div style={{ marginTop: 'auto', paddingTop: '20px', display: 'flex', alignItems: 'center', gap: '8px', opacity: 0.5 }}>
                   <div style={{ height: '1px', flex: 1, background: 'var(--border-subtle)' }} />

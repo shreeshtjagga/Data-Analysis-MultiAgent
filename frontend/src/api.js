@@ -222,3 +222,21 @@ export async function apiDeleteAnalysis(analysisId) {
 export async function apiHealth() {
   return apiFetch("/health", { withAuth: false });
 }
+
+// ── Helpers ───────────────────────────────────────────────────────────────────
+
+/**
+ * Normalizes error messages from the backend.
+ * FastAPI/Starlette usually returns { "detail": "message" } or { "detail": [...] }.
+ */
+function normalizeErrorDetail(body, fallback) {
+  if (!body) return fallback;
+  if (typeof body.detail === "string") return body.detail;
+  if (Array.isArray(body.detail)) {
+    // FastAPI validation error array
+    return body.detail.map((e) => e.msg || JSON.stringify(e)).join(", ");
+  }
+  if (body.message) return body.message;
+  if (body.error) return body.error;
+  return fallback;
+}
