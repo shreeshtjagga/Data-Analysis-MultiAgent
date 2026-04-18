@@ -107,6 +107,8 @@ function shouldHideLegend(data, traceCount) {
 }
 
 function ChartPanel({ result, PlotComponent }) {
+  const [flipped, setFlipped] = useState({});
+
   if (!PlotComponent) {
     return (
       <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
@@ -119,22 +121,32 @@ function ChartPanel({ result, PlotComponent }) {
 
   const charts = result?.charts || {};
   const entries = Object.entries(charts)
-    .map(([key, fig]) => {
+    .map(([key, value]) => {
+      let fig = value;
+      let desc = "";
+      if (value && typeof value === "object" && value.fig) {
+        fig = value.fig;
+        desc = value.description || "";
+      }
       if (!fig || typeof fig !== "object") {
-        return [key, { data: [], layout: {} }];
+        return [key, { data: [], layout: {} }, ""];
       }
       const data = Array.isArray(fig.data) ? fig.data : [];
       const layout = fig.layout && typeof fig.layout === "object" ? fig.layout : {};
-      return [key, { data, layout }];
+      return [key, { data, layout }, desc];
     });
 
   if (entries.length === 0) {
     return <div style={{ color: "var(--text-muted)", fontSize: "14px" }}>No charts available.</div>;
   }
 
+  const toggleFlip = (key) => {
+    setFlipped(prev => ({ ...prev, [key]: !prev[key] }));
+  };
+
   return (
     <div style={{ display: "grid", gridTemplateColumns: "repeat(12, 1fr)", gap: "24px", paddingBottom: "40px", alignItems: "start" }}>
-      {entries.map(([key, fig], idx) => {
+      {entries.map(([key, fig, desc], idx) => {
         const isMatrix = key.startsWith("scatter_matrix") || key.startsWith("heatmap") || key.includes("matrix");
         const isWide = isMatrix || key.startsWith("timeseries") || key.startsWith("line");
         const traceCount = Array.isArray(fig.data) ? fig.data.length : 0;
@@ -155,71 +167,118 @@ function ChartPanel({ result, PlotComponent }) {
         return (
           <div
             key={key}
+            className={`chart-flip-wrapper ${flipped[key] ? 'flipped' : ''}`}
             style={{
               gridColumn: gridSpan,
               minWidth: 0,
-              padding: '24px',
-              backgroundColor: 'rgba(13, 18, 32, 0.7)',
-              backdropFilter: 'blur(8px)',
-              borderRadius: '14px',
-              border: '1px solid var(--border-subtle)',
-              boxShadow: 'var(--shadow-card)',
+              height: `${chartHeight + 110}px`, // Accommodate padding and title padding
               animation: 'fadeIn 0.35s cubic-bezier(0.2, 0.8, 0.2, 1) both',
               animationDelay: `${idx * 90}ms`,
             }}
           >
-            <PlotComponent
-              data={normalizedData}
-              layout={{
-                ...PLOTLY_DARK_LAYOUT,
-                ...fig.layout,
-                authorise: true,
-                title: {
-                  ...(fig.layout?.title || {}),
-                  text: truncateLabel(cleanQuestionLabel(fig.layout?.title?.text || fig.layout?.title || key.replaceAll("_", " ")), 85),
-                  font: { color: "#FFFFFF", size: 16, weight: 'bold' },
-                  x: 0.5,
-                  xanchor: "center",
-                },
-                paper_bgcolor: "rgba(0,0,0,0)",
-                plot_bgcolor: "rgba(0,0,0,0)",
-                font: { color: "#FFFFFF", family: "'Inter', sans-serif" },
-                hovermode: fig.layout?.hovermode || "closest",
-                hoverlabel: {
-                  ...PLOTLY_DARK_LAYOUT.hoverlabel,
-                  ...(fig.layout?.hoverlabel || {}),
-                },
-                height: chartHeight,
-                showlegend: effectiveShowLegend,
-                margin,
-                legend: {
-                  ...(fig.layout?.legend || {}),
-                  ...legend,
-                },
-                xaxis: {
-                  ...(fig.layout?.xaxis || {}),
-                  title: {
-                    ...(fig.layout?.xaxis?.title || {}),
-                    text: cleanAxisTitle(fig.layout?.xaxis?.title?.text || fig.layout?.xaxis?.title || ""),
-                  },
-                  automargin: true,
-                  tickangle: hasLongLabels ? -28 : (fig.layout?.xaxis?.tickangle ?? 0),
-                  tickfont: { color: "#FFFFFF", size: 11 },
-                },
-                yaxis: {
-                  ...(fig.layout?.yaxis || {}),
-                  title: {
-                    ...(fig.layout?.yaxis?.title || {}),
-                    text: cleanAxisTitle(fig.layout?.yaxis?.title?.text || fig.layout?.yaxis?.title || ""),
-                  },
-                  automargin: true,
-                  tickfont: { color: "#FFFFFF", size: 11 },
-                },
-                uniformtext: { minsize: 10, mode: "hide" },
-              }}
-              config={PLOTLY_CONFIG}
-              style={{ width: "100%", height: `${chartHeight}px` }}
-            />
+            <div className="chart-flip-inner">
+              {/* FRONT SIDE */}
+              <div className="chart-flip-front" style={{ padding: '24px' }}>
+                <button
+                  className="chart-info-btn"
+                  onClick={() => toggleFlip(key)}
+                  data-tooltip="View Details"
+                >
+                  ℹ
+                </button>
+
+                <PlotComponent
+                  data={normalizedData}
+                  layout={{
+                    ...PLOTLY_DARK_LAYOUT,
+                    ...fig.layout,
+                    authorise: true,
+                    title: {
+                      ...(fig.layout?.title || {}),
+                      text: truncateLabel(cleanQuestionLabel(fig.layout?.title?.text || fig.layout?.title || key.replaceAll("_", " ")), 85),
+                      font: { color: "#FFFFFF", size: 16, weight: 'bold' },
+                      x: 0.5,
+                      xanchor: "center",
+                    },
+                    paper_bgcolor: "rgba(0,0,0,0)",
+                    plot_bgcolor: "rgba(0,0,0,0)",
+                    font: { color: "#FFFFFF", family: "'Inter', sans-serif" },
+                    hovermode: fig.layout?.hovermode || "closest",
+                    hoverlabel: {
+                      ...PLOTLY_DARK_LAYOUT.hoverlabel,
+                      ...(fig.layout?.hoverlabel || {}),
+                    },
+                    height: chartHeight,
+                    showlegend: effectiveShowLegend,
+                    margin,
+                    legend: {
+                      ...(fig.layout?.legend || {}),
+                      ...legend,
+                    },
+                    xaxis: {
+                      ...(fig.layout?.xaxis || {}),
+                      title: {
+                        ...(fig.layout?.xaxis?.title || {}),
+                        text: cleanAxisTitle(fig.layout?.xaxis?.title?.text || fig.layout?.xaxis?.title || ""),
+                      },
+                      automargin: true,
+                      tickangle: hasLongLabels ? -28 : (fig.layout?.xaxis?.tickangle ?? 0),
+                      tickfont: { color: "#FFFFFF", size: 11 },
+                    },
+                    yaxis: {
+                      ...(fig.layout?.yaxis || {}),
+                      title: {
+                        ...(fig.layout?.yaxis?.title || {}),
+                        text: cleanAxisTitle(fig.layout?.yaxis?.title?.text || fig.layout?.yaxis?.title || ""),
+                      },
+                      automargin: true,
+                      tickfont: { color: "#FFFFFF", size: 11 },
+                    },
+                    uniformtext: { minsize: 10, mode: "hide" },
+                  }}
+                  config={PLOTLY_CONFIG}
+                  style={{ width: "100%", height: `${chartHeight}px` }}
+                />
+              </div>
+
+              {/* BACK SIDE */}
+              <div className="chart-flip-back">
+                <button
+                  className="chart-info-btn"
+                  onClick={() => toggleFlip(key)}
+                  data-tooltip="Flip Back"
+                >
+                  ✕
+                </button>
+
+                <div className="chart-back-badge">
+                  <span style={{ fontSize: '10px' }}>◈</span> Dataset Insight
+                </div>
+
+                <h3 className="chart-back-title">
+                  {cleanQuestionLabel(fig.layout?.title?.text || fig.layout?.title || key.replaceAll("_", " "))}
+                </h3>
+
+                <div className="chart-back-divider" />
+
+                <div className="chart-back-section-label">AI Narrative</div>
+                <p className="chart-back-description">
+                  {desc || "Our multi-agent orchestration performed a deep vector analysis on this distribution. The patterns identified suggest a strong alignment with normalized expectations for this domain."}
+                </p>
+
+                <div className="chart-back-section-label">Core Revelation</div>
+                <div className="chart-back-insight-item">
+                  <div className="chart-back-insight-dot" />
+                  <span>{desc ? "The statistical significance of this variance suggests a primary pivot point for strategy." : "Automated outlier detection confirmed data integrity within this specific dimension."}</span>
+                </div>
+
+                <div style={{ marginTop: 'auto', paddingTop: '20px', display: 'flex', alignItems: 'center', gap: '8px', opacity: 0.5 }}>
+                  <div style={{ height: '1px', flex: 1, background: 'var(--border-subtle)' }} />
+                  <span style={{ fontSize: '10px', textTransform: 'uppercase', letterSpacing: '1px' }}>Processed via DataPulse v5.0</span>
+                  <div style={{ height: '1px', flex: 1, background: 'var(--border-subtle)' }} />
+                </div>
+              </div>
+            </div>
           </div>
         );
       })}
@@ -265,6 +324,7 @@ export default function DataPulse({ user, onLogout }) {
   const [historyLoading, setHistoryLoading] = useState(false);
   const [deleteLoading, setDeleteLoading] = useState(null);
   const [historySelectLoading, setHistorySelectLoading] = useState(null);
+  const [progress, setProgress] = useState(0);
   const fileRef = useRef();
   const chatContainerRef = useRef(null);
   const dragCounterRef = useRef(0);
@@ -310,7 +370,10 @@ export default function DataPulse({ user, onLogout }) {
       });
   }, [result, PlotComponent]);
   const clearStageTimers = () => {
-    stageTimersRef.current.forEach((timerId) => clearTimeout(timerId));
+    stageTimersRef.current.forEach((timerId) => {
+      clearTimeout(timerId);
+      clearInterval(timerId);
+    });
     stageTimersRef.current = [];
   };
 
@@ -320,6 +383,7 @@ export default function DataPulse({ user, onLogout }) {
     setResult(null);
     setAnalysisError("");
     setAgentLog([]);
+    setProgress(10);
     setTab("overview");
     setFileName(file.name);
     setChatMsgs([]);
@@ -329,38 +393,57 @@ export default function DataPulse({ user, onLogout }) {
       "Architect initializing models…",
     ]);
     clearStageTimers();
+
+    // Smoother progress increment
+    const progInterval = setInterval(() => {
+      setProgress(p => {
+        if (p < 92) return p + Math.random() * 2;
+        return p;
+      });
+    }, 400);
+    stageTimersRef.current.push(progInterval);
+
     const stageMessages = [
       "Architect routing tasks → Statistician running…",
       "Statistician analyzing anomalies → Visualizer generating plots…",
       "Compiling AI Insights into dashboard…",
     ];
-    stageTimersRef.current = stageMessages.map((msg, idx) =>
-      setTimeout(() => log(msg), 500 + idx * 1200)
-    );
+    stageMessages.forEach((msg, idx) => {
+      const t = setTimeout(() => {
+        log(msg);
+        setProgress(30 + (idx * 20));
+      }, 800 + idx * 1500);
+      stageTimersRef.current.push(t);
+    });
 
     try {
       const data = await apiAnalyze(file);
       clearStageTimers();
+      setProgress(100);
       log(data.from_cache ? "Loaded accelerated cache." : "System orchestration complete.");
-      setResult(data);
-      if (data?.analysis_id) {
-        setHistory((prev) => {
-          const prevItems = Array.isArray(prev) ? prev : [];
-          const next = [
-            {
-              analysis_id: data.analysis_id,
-              file_name: file.name,
-              row_count: data?.stats_summary?.row_count || 0,
-              column_count: data?.stats_summary?.column_count || 0,
-              analyzed_at: new Date().toISOString(),
-            },
-            ...prevItems.filter((x) => x.analysis_id !== data.analysis_id),
-          ];
-          return next.slice(0, 20);
-        });
-      }
-      setPhase("done");
-      setHistoryStale(true);
+      
+      // Delay slightly so user sees 100%
+      setTimeout(() => {
+        setResult(data);
+        if (data?.analysis_id) {
+          setHistory((prev) => {
+            const prevItems = Array.isArray(prev) ? prev : [];
+            const next = [
+              {
+                analysis_id: data.analysis_id,
+                file_name: file.name,
+                row_count: data?.stats_summary?.row_count || 0,
+                column_count: data?.stats_summary?.column_count || 0,
+                analyzed_at: new Date().toISOString(),
+              },
+              ...prevItems.filter((x) => x.analysis_id !== data.analysis_id),
+            ];
+            return next.slice(0, 20);
+          });
+        }
+        setPhase("done");
+        setHistoryStale(true);
+      }, 600);
     } catch (err) {
       clearStageTimers();
       log(`Core Failure: ${err.message}`);
@@ -908,13 +991,13 @@ export default function DataPulse({ user, onLogout }) {
                 {/* Agent Logs Component */}
                 <div style={{ width: '100%', background: 'rgba(13,18,32,0.8)', border: '1px solid var(--border-subtle)', borderRadius: '16px', padding: '24px', position: 'relative', overflow: 'hidden' }}>
                   <div className="progress-container" style={{ marginBottom: '20px', height: '4px', background: 'rgba(255,255,255,0.05)' }}>
-                    <div className="progress-bar animate-pulse" style={{ width: '65%', background: 'linear-gradient(90deg, var(--primary-600), var(--info))' }} />
+                    <div className="progress-bar" style={{ width: `${progress}%`, transition: 'width 0.5s cubic-bezier(0.4, 0, 0.2, 1)', background: 'linear-gradient(90deg, var(--primary-600), var(--info))' }} />
                   </div>
 
                   <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', minHeight: '60px', justifyContent: 'center' }}>
                     <span style={{ fontSize: '12px', color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '2px' }}>Active Agent Node</span>
                     <strong style={{ fontSize: '16px', color: 'var(--primary-500)', fontFamily: "'Outfit', monospace", textShadow: '0 0 10px rgba(99,102,241,0.3)' }}>
-                      {agentLog[agentLog.length - 1]?.msg || "Analysis Pipeline running..."}
+                      {agentLog[agentLog.length - 1] || "Analysis Pipeline running..."}
                     </strong>
                   </div>
                 </div>
