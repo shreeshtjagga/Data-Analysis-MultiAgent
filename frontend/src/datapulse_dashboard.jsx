@@ -334,6 +334,7 @@ export default function DataPulse({ user, onLogout }) {
   const [isDragOver, setIsDragOver] = useState(false);
   const [tab, setTab] = useState("overview");
   const [chatMsgs, setChatMsgs] = useState([]);
+  const [generatedChartKeys, setGeneratedChartKeys] = useState([]);
   const [historyStale, setHistoryStale] = useState(false);
   const [chatInput, setChatInput] = useState("");
   const [chatLoading, setChatLoading] = useState(false);
@@ -407,6 +408,7 @@ export default function DataPulse({ user, onLogout }) {
     setTab("overview");
     setFileName(file.name);
     setChatMsgs([]);
+    setGeneratedChartKeys([]);
 
     setAgentLog([
       "Uploading data to secure server…",
@@ -535,6 +537,7 @@ export default function DataPulse({ user, onLogout }) {
       setPhase("done");
       setShowHistory(false);
       setTab("overview");
+      setGeneratedChartKeys([]);
     } catch (err) {
       setHistoryActionError("Failed to restore session. Please try again.");
     } finally {
@@ -816,8 +819,9 @@ export default function DataPulse({ user, onLogout }) {
       // Include the 100-row clean_df preview so the backend can generate new charts on demand
       clean_df: result?.clean_df || [],
       file_hash: result?.file_hash || null,
+      generated_chart_keys: generatedChartKeys,
     };
-  }, [chatStats, chatInsights, fileName, result?.charts, result?.clean_df, result?.file_hash, datasetTypeLabel]);
+  }, [chatStats, chatInsights, fileName, result?.charts, result?.clean_df, result?.file_hash, datasetTypeLabel, generatedChartKeys]);
 
   const sendChat = useCallback(async () => {
     const q = chatInput.trim();
@@ -834,16 +838,19 @@ export default function DataPulse({ user, onLogout }) {
     setChatLoading(true);
     try {
       const resp = await apiChat(q, chatContext || {}, history);
+      if (resp?.new_chart?.id) {
+        setGeneratedChartKeys((prev) => (prev.includes(resp.new_chart.id) ? prev : [...prev, resp.new_chart.id]));
+      }
       const aiMessage = {
         role: "ai",
         text: (resp.answer || "").trim() || "No response generated.",
-        // Attach any on-demand generated charts so they render inside this bubble
-        generatedCharts: Array.isArray(resp.generated_charts) ? resp.generated_charts : [],
+        // Attach on-demand generated chart from backend response.new_chart
+        newChart: resp?.new_chart?.fig ? resp.new_chart : null,
       };
       setChatMsgs((p) => [...p, aiMessage].slice(-MAX_CHAT_MESSAGES));
     } catch (err) {
       const detail = err?.message || "Unable to reach AI";
-      setChatMsgs((p) => [...p, { role: "ai", text: `Chat error: ${detail}`, generatedCharts: [] }].slice(-MAX_CHAT_MESSAGES));
+      setChatMsgs((p) => [...p, { role: "ai", text: `Chat error: ${detail}`, newChart: null }].slice(-MAX_CHAT_MESSAGES));
     }
     setChatLoading(false);
   }, [chatInput, chatLoading, result, chatContext]);
@@ -1195,78 +1202,61 @@ export default function DataPulse({ user, onLogout }) {
                           })()}
                         </div>
 
-                        {/* On-demand generated charts — rendered BELOW the text bubble */}
-                        {m.role === 'ai' && Array.isArray(m.generatedCharts) && m.generatedCharts.map((gc, gcIdx) => (
-                          <div key={`gc-${gcIdx}`} style={{ width: '100%' }}>
-                            {gc.error ? (
-                              /* Error state */
+                        {/* On-demand generated chart rendered below the text bubble */}
+                        {m.role === 'ai' && m.newChart?.fig && PlotComponent && (
+                          <div style={{ width: '100%' }}>
+                            <div style={{
+                              border: '1px solid rgba(99,102,241,0.25)',
+                              borderRadius: '14px',
+                              overflow: 'hidden',
+                              background: 'rgba(0,0,0,0.35)',
+                            }}>
                               <div style={{
-                                padding: '12px 16px',
-                                background: 'rgba(239,68,68,0.08)',
-                                border: '1px solid rgba(239,68,68,0.25)',
-                                borderRadius: '12px',
-                                fontSize: '12px',
-                                color: 'var(--error)',
-                                lineHeight: 1.5,
+                                padding: '6px 14px',
+                                borderBottom: '1px solid rgba(99,102,241,0.15)',
+                                display: 'flex',
+                                alignItems: 'center',
+                                gap: '6px',
+                                background: 'rgba(99,102,241,0.08)',
                               }}>
-                                <span style={{ fontWeight: 700, marginRight: '6px' }}>⚠ Chart Error:</span>{gc.error}
+                                <span style={{ fontSize: '10px', color: 'var(--primary-500)' }}>✦</span>
+                                <span style={{
+                                  fontSize: '10px',
+                                  color: 'var(--primary-500)',
+                                  textTransform: 'uppercase',
+                                  letterSpacing: '0.1em',
+                                  fontWeight: 700,
+                                }}>Generated Chart</span>
+                                <span style={{ fontSize: '10px', color: 'var(--text-muted)', marginLeft: 'auto' }}>{m.newChart.id}</span>
                               </div>
-                            ) : gc.fig && PlotComponent ? (
-                              /* Successful chart */
-                              <div style={{
-                                border: '1px solid rgba(99,102,241,0.25)',
-                                borderRadius: '14px',
-                                overflow: 'hidden',
-                                background: 'rgba(0,0,0,0.35)',
-                              }}>
-                                {/* Generated chart badge */}
-                                <div style={{
-                                  padding: '6px 14px',
-                                  borderBottom: '1px solid rgba(99,102,241,0.15)',
-                                  display: 'flex',
-                                  alignItems: 'center',
-                                  gap: '6px',
-                                  background: 'rgba(99,102,241,0.08)',
-                                }}>
-                                  <span style={{ fontSize: '10px', color: 'var(--primary-500)' }}>✦</span>
-                                  <span style={{
-                                    fontSize: '10px',
-                                    color: 'var(--primary-500)',
-                                    textTransform: 'uppercase',
-                                    letterSpacing: '0.1em',
-                                    fontWeight: 700,
-                                  }}>Generated Chart</span>
-                                  <span style={{ fontSize: '10px', color: 'var(--text-muted)', marginLeft: 'auto' }}>{gc.id}</span>
-                                </div>
-                                <div style={{ padding: '8px' }}>
-                                  <PlotComponent
-                                    data={(gc.fig.data || []).map(t => ({ ...t, textfont: { color: "#FFFFFF" } }))}
-                                    layout={{
-                                      ...PLOTLY_DARK_LAYOUT,
-                                      ...(gc.fig.layout || {}),
-                                      paper_bgcolor: "rgba(0,0,0,0)",
-                                      plot_bgcolor: "rgba(0,0,0,0)",
-                                      font: { color: "#FFFFFF", family: "'Inter', sans-serif", size: 11 },
-                                      hoverlabel: { bgcolor: "rgba(8,12,24,0.98)", font: { color: "#F8FAFC", size: 12 }, bordercolor: "rgba(99,102,241,0.85)" },
-                                      height: 300,
-                                      margin: { l: 45, r: 16, t: 36, b: 45 },
-                                      title: {
-                                        ...(gc.fig.layout?.title || {}),
-                                        font: { size: 13, color: '#FFFFFF', weight: 'bold' },
-                                        y: 0.97, yanchor: 'top',
-                                      },
-                                      xaxis: { ...(gc.fig.layout?.xaxis || {}), tickfont: { color: "#FFFFFF", size: 10 }, gridcolor: "rgba(99,102,241,0.1)", automargin: true },
-                                      yaxis: { ...(gc.fig.layout?.yaxis || {}), tickfont: { color: "#FFFFFF", size: 10 }, gridcolor: "rgba(99,102,241,0.1)", automargin: true },
-                                      showlegend: false,
-                                    }}
-                                    config={{ ...PLOTLY_CONFIG, modeBarButtons: [['zoomIn2d', 'zoomOut2d', 'resetScale2d', 'toImage']] }}
-                                    style={{ width: "100%", height: "300px" }}
-                                  />
-                                </div>
+                              <div style={{ padding: '8px' }}>
+                                <PlotComponent
+                                  data={(m.newChart.fig.data || []).map(t => ({ ...t, textfont: { color: "#FFFFFF" } }))}
+                                  layout={{
+                                    ...PLOTLY_DARK_LAYOUT,
+                                    ...(m.newChart.fig.layout || {}),
+                                    paper_bgcolor: "rgba(0,0,0,0)",
+                                    plot_bgcolor: "rgba(0,0,0,0)",
+                                    font: { color: "#FFFFFF", family: "'Inter', sans-serif", size: 11 },
+                                    hoverlabel: { bgcolor: "rgba(8,12,24,0.98)", font: { color: "#F8FAFC", size: 12 }, bordercolor: "rgba(99,102,241,0.85)" },
+                                    height: 300,
+                                    margin: { l: 45, r: 16, t: 36, b: 45 },
+                                    title: {
+                                      ...(m.newChart.fig.layout?.title || {}),
+                                      font: { size: 13, color: '#FFFFFF', weight: 'bold' },
+                                      y: 0.97, yanchor: 'top',
+                                    },
+                                    xaxis: { ...(m.newChart.fig.layout?.xaxis || {}), tickfont: { color: "#FFFFFF", size: 10 }, gridcolor: "rgba(99,102,241,0.1)", automargin: true },
+                                    yaxis: { ...(m.newChart.fig.layout?.yaxis || {}), tickfont: { color: "#FFFFFF", size: 10 }, gridcolor: "rgba(99,102,241,0.1)", automargin: true },
+                                    showlegend: false,
+                                  }}
+                                  config={{ ...PLOTLY_CONFIG, modeBarButtons: [['zoomIn2d', 'zoomOut2d', 'resetScale2d', 'toImage']] }}
+                                  style={{ width: "100%", height: "300px" }}
+                                />
                               </div>
-                            ) : null}
+                            </div>
                           </div>
-                        ))}
+                        )}
                       </div>
                     ))}
                     {chatLoading && <div style={{ fontSize: '13px', color: 'var(--primary-500)', fontFamily: "'Outfit', monospace" }}>Gener...</div>}
