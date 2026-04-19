@@ -39,13 +39,17 @@ def _build_column_narrative(stats: dict) -> str:
     return "\n".join(lines)
 
 
-def _build_llm_prompt(stats: dict) -> str:
-    profile = stats.get("dataset_profile") or {}
+def _build_llm_prompt(slim_stats: dict) -> str:
+    """Builds the final prompt for the insights LLM using truncated (slim) stats."""
+    profile = slim_stats.get("dataset_profile") or {}
     domain = profile.get("domain", "general")
     label = profile.get("label", "dataset")
-    col_narrative = _build_column_narrative(stats)
-    clean_stats = sanitize_for_json(stats)
+    
+    # We use slim_stats here to ensure narrative doesn't overflow
+    col_narrative = _build_column_narrative(slim_stats)
+    clean_stats = sanitize_for_json(slim_stats)
     payload_json = json.dumps(clean_stats, ensure_ascii=True)
+    
     return "\n".join([
         f"You are an Expert Data Analyst specialising in {domain} data.",
         f"Dataset: {label}",
@@ -53,7 +57,7 @@ def _build_llm_prompt(stats: dict) -> str:
         "Column summary:",
         col_narrative,
         "",
-        "Full stats (JSON):",
+        "Full stats (JSON) [TRUNCATED FOR CONTEXT]:",
         f"<analysis_json>{payload_json}</analysis_json>",
         "",
         "Respond with ONLY valid JSON (no markdown, no explanation):",

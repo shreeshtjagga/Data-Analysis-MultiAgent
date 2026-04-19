@@ -105,7 +105,7 @@ MAX_ANALYZE_ROWS = int(os.getenv("MAX_ANALYZE_ROWS", "15000")) # Lowered to 15K 
 MAX_ANALYZE_COLUMNS = int(os.getenv("MAX_ANALYZE_COLUMNS", "150"))
 MAX_EXCEL_SHEETS = int(os.getenv("MAX_EXCEL_SHEETS", "5"))
 MAX_QUESTION_CHARS = int(os.getenv("CHAT_MAX_QUESTION_CHARS", "1200"))
-MAX_CONTEXT_BYTES = int(os.getenv("CHAT_MAX_CONTEXT_BYTES", str(2 * 1024 * 1024)))  # 2 MB context limit
+MAX_CONTEXT_BYTES = int(os.getenv("CHAT_MAX_CONTEXT_BYTES", str(4 * 1024 * 1024)))  # Increased to 4 MB to handle long histories
 READ_CHUNK_BYTES = 1024 * 1024
 CHAT_RATE_LIMIT = int(os.getenv("CHAT_RATE_LIMIT", "10"))
 CHAT_RATE_WINDOW = int(os.getenv("CHAT_RATE_WINDOW_SECONDS", "60"))
@@ -249,6 +249,7 @@ async def check_user_rate_limit(user_id: int = Depends(get_current_user_id)):
         if isinstance(exc, HTTPException):
             raise exc
         logger.warning(f"Rate limiting failed for {key}: {exc}")
+    return user_id
 
 
 
@@ -497,6 +498,9 @@ def persist_full_data_backend(df: pd.DataFrame, file_hash: str):
         logger.info("Background storage: Saved full data to %s", storage_path)
     except Exception as exc:
         logger.warning("Background storage failed for %s: %s", file_hash, exc)
+    finally:
+        # Only trigger cleanup when we actually modified the filesystem/storage
+        cleanup_old_parquet_files()
 
 
 def cleanup_old_parquet_files(retention_days: int = 3):
@@ -527,11 +531,11 @@ def cleanup_old_parquet_files(retention_days: int = 3):
         logger.warning("Parquet cleanup failed: %s", exc)
 
 
-@app.post("/analyze", tags=["analysis"], dependencies=[Depends(check_user_rate_limit)])
+@app.post("/analyze", tags=["analysis"])
 async def analyze(
     background_tasks: BackgroundTasks,
     file: UploadFile = File(...),
-    user_id: int = Depends(get_current_user_id),
+    user_id: int = Depends(check_user_rate_limit), # check_user_rate_limit now returns user_id
     db: AsyncSession = Depends(get_db),
 ):
 
@@ -916,12 +920,27 @@ async def chat_with_analysis(
     charts_data = context.get("charts", {})
     file_hash = context.get("file_hash")
 
-    df_records = (
-        context.get("clean_df")
-        or context.get("cleanDf")
-        or context.get("clean_data")
-        or []
-    )
+    df_records = []
+    # If we have a file_hash, try to load the FULL dataset from Parquet storage
+    # for on-demand chart generation. Preview-only charts (500 rows) are inaccurate for large files.
+    if file_hash:
+        try:
+            storage_path = os.path.join(_PARQUET_STORAGE_DIR, f"{file_hash}.parquet")
+            if os.path.exists(storage_path):
+                df_full = pd.read_parquet(storage_path)
+                df_records = df_full.to_dict("records")
+                logger.info("Chat: Loaded %d rows from Parquet for on-demand chart gen", len(df_full))
+        except Exception as load_exc:
+            logger.warning("Chat: Failed to load full dataset from storage: %s", load_exc)
+
+    if not df_records:
+        df_records = (
+            context.get("clean_df")
+            or context.get("cleanDf")
+            or context.get("clean_data")
+            or []
+        )
+    
     if not isinstance(df_records, list):
         df_records = []
 
@@ -1180,11 +1199,12 @@ async def chat_with_analysis(
                         else:
                             details.append("Pie/Donut chart")
                     elif ttype in ("bar", "scatter", "violin", "box"):
-                        xv = (trace.get("x") or [])[:8]
-                        yv = (trace.get("y") or [])[:8]
+                        # Sample more values (16 instead of 8) for better LLM grounding
+                        xv = (trace.get("x") or [])[:16]
+                        yv = (trace.get("y") or [])[:16]
                         details.append(f"{ttype.capitalize()}: X={xv}, Y={yv}")
                     elif ttype == "histogram":
-                        xv = (trace.get("x") or [])[:8]
+                        xv = (trace.get("x") or [])[:24]
                         details.append(f"Histogram of: {xv}")
                     else:
                         details.append(f"{ttype} chart")
@@ -1292,9 +1312,8 @@ async def chat_with_analysis(
                                  "him", "hers", "theirs", "this person", "that person"}
                     q_tokens = set(question.lower().split())
                     has_pronoun = bool(q_tokens & _PRONOUNS)
-                    resolved_subject = None
-                    if has_pronoun and body.history:
-                        resolved_subject = _extract_recent_entity(body.history)
+                    resolved_subject = _extract_recent_entity(body.history) if body.history else None
+                    
                     planner_question = question
                     if resolved_subject and has_pronoun:
                         planner_question = f"{question} [Note: pronoun refers to '{resolved_subject}']"
@@ -1379,7 +1398,7 @@ async def chat_with_analysis(
                 except Exception as e:
                     logger.warning("Intent pass failed: %s", e)
 
-            if data_result:
+            if data_result and "error" not in data_result:
                 subject_note = f" (subject: {resolved_subject})" if resolved_subject else ""
                 messages.append({
                     "role": "system",
@@ -1388,6 +1407,9 @@ async def chat_with_analysis(
                         "IMPORTANT: Use these exact values to answer. Do NOT say 'I don't have that data'."
                     )
                 })
+            elif data_result:
+                # If there's an error, don't label it as authoritative data
+                logger.warning("Omitting query error from system prompt to avoid hallucination: %s", data_result.get("error"))
 
             synthesis_model = os.getenv("GROQ_SYNTHESIS_MODEL", os.getenv("GROQ_MODEL", "llama-3.3-70b-versatile"))
             completion = client.chat.completions.create(

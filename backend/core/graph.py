@@ -41,8 +41,9 @@ def _run_parallel_agents(state: AnalysisState) -> AnalysisState:
     them on separate state copies and merge the results afterwards.
     """
     # Give each agent its own isolated copy of the state so writes don't race.
-    viz_state_in  = state.model_copy(deep=False)
-    ins_state_in  = state.model_copy(deep=False)
+    # We use deep=True to ensure nested lists (like .errors) are not shared.
+    viz_state_in  = state.model_copy(deep=True)
+    ins_state_in  = state.model_copy(deep=True)
 
     viz_state_out: AnalysisState | None = None
     ins_state_out: AnalysisState | None = None
@@ -128,6 +129,17 @@ def run_pipeline(df) -> AnalysisState:
         if len(state.errors) > error_count_before:
             state.partial = True
             logger.warning("Agent '%s' encountered an error but continuing pipeline", name)
+
+        # Usable Data Guard: If architect excludes everything, stop early.
+        if name == "architect":
+            excluded = (state.stats_summary or {}).get("excluded_columns", [])
+            clean_cols = [c for c in state.clean_df.columns if c not in [e["column"] for e in excluded]]
+            if len(clean_cols) == 0:
+                msg = "No usable columns found after initial classification."
+                logger.error(msg)
+                state.errors.append({"code": "NO_USABLE_COLUMNS", "agent": "orchestrator", "message": msg})
+                state.partial = True
+                return state
 
     # ── Parallel agents: visualizer + insights run concurrently ───────────────
     logger.info(

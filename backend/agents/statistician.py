@@ -214,26 +214,26 @@ def statistician_agent(state: AnalysisState) -> AnalysisState:
                         if len(df) > 5000
                         else df[corr_cols]
                     )
-                correlation_matrix = corr_sample.corr()
-                strong_correlations = []
-                for i in range(len(correlation_matrix.columns)):
-                    for j in range(i + 1, len(correlation_matrix.columns)):
-                        corr_val = correlation_matrix.iloc[i, j]
-                        if abs(corr_val) > 0.7 and pd.notna(corr_val):
-                            strong_correlations.append(
-                                {
-                                    "col1": correlation_matrix.columns[i],
-                                    "col2": correlation_matrix.columns[j],
-                                    "correlation": float(corr_val),
-                                }
-                            )
+                    correlation_matrix = corr_sample.corr()
+                    strong_correlations = []
+                    for i in range(len(correlation_matrix.columns)):
+                        for j in range(i + 1, len(correlation_matrix.columns)):
+                            corr_val = correlation_matrix.iloc[i, j]
+                            if abs(corr_val) > 0.7 and pd.notna(corr_val):
+                                strong_correlations.append(
+                                    {
+                                        "col1": correlation_matrix.columns[i],
+                                        "col2": correlation_matrix.columns[j],
+                                        "correlation": float(corr_val),
+                                    }
+                                )
 
-                strong_correlations = sorted(
-                    strong_correlations,
-                    key=lambda item: abs(item["correlation"]),
-                    reverse=True,
-                )[:_MAX_STRONG_CORRELATIONS]
-                stats_summary["strong_correlations"] = strong_correlations
+                    strong_correlations = sorted(
+                        strong_correlations,
+                        key=lambda item: abs(item["correlation"]),
+                        reverse=True,
+                    )[:_MAX_STRONG_CORRELATIONS]
+                    stats_summary["strong_correlations"] = strong_correlations
             except Exception as corr_err:
                 logger.warning("Correlation analysis failed: %s", corr_err)
                 stats_summary["strong_correlations"] = []

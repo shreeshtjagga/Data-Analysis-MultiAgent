@@ -100,11 +100,19 @@ def _profile_dataset(df: pd.DataFrame, column_types: dict) -> dict:
     if not api_key:
         return fallback
 
+    def sanitize_str(s: str) -> str:
+        # Prevent prompt injection and handle null bytes
+        return str(s).replace("\x00", "").replace("ignore previous instructions", "[clean]").strip()[:100]
+
     columns_payload = []
     for col in list(df.columns)[:30]:
         dtype = column_types.get(col, str(df[col].dtype))
-        sample = [str(v) for v in df[col].dropna().head(3).tolist()]
-        col_entry = {"name": col, "dtype": dtype, "sample": sample}
+        sample = [sanitize_str(v) for v in df[col].dropna().head(3).tolist()]
+        col_entry = {
+            "name": sanitize_str(col),
+            "dtype": dtype, 
+            "sample": sample
+        }
         if pd.api.types.is_numeric_dtype(df[col]):
             clean = df[col].dropna()
             if len(clean) > 0:
