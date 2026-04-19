@@ -104,7 +104,13 @@ def _profile_dataset(df: pd.DataFrame, column_types: dict) -> dict:
     for col in list(df.columns)[:30]:
         dtype = column_types.get(col, str(df[col].dtype))
         sample = [str(v) for v in df[col].dropna().head(3).tolist()]
-        columns_payload.append({"name": col, "dtype": dtype, "sample": sample})
+        col_entry = {"name": col, "dtype": dtype, "sample": sample}
+        if pd.api.types.is_numeric_dtype(df[col]):
+            clean = df[col].dropna()
+            if len(clean) > 0:
+                col_entry["min"] = round(float(clean.min()), 3)
+                col_entry["max"] = round(float(clean.max()), 3)
+        columns_payload.append(col_entry)
 
     payload = {
         "row_count": int(len(df)),
@@ -119,9 +125,11 @@ def _profile_dataset(df: pd.DataFrame, column_types: dict) -> dict:
         "Dataset payload (JSON):\n"
         f"<dataset_json>{payload_json}</dataset_json>\n\n"
         "Respond with ONLY valid JSON (no markdown, no explanation):\n"
-        '{"label": "<short label, e.g. Sales Data, Medical Records, Survey Responses>",'
+        '{"label": "<short label, e.g. Sales Data, Medical Records>",'
         ' "description": "<one sentence describing the contents>",'
-        ' "domain": "<domain: finance, healthcare, retail, education, technology, etc.>"}'
+        ' "domain": "<finance|healthcare|retail|education|technology|sports|logistics|other>",'
+        ' "key_entity_columns": ["<column name that identifies the primary entity, e.g. country, product, player, patient>"],'
+        ' "key_metric_columns": ["<top 2-3 numeric column names most worth analysing>"]}'
     )
 
     try:
@@ -129,7 +137,7 @@ def _profile_dataset(df: pd.DataFrame, column_types: dict) -> dict:
 
         client = Groq(api_key=api_key)
         completion = client.chat.completions.create(
-            model=os.getenv("GROQ_MODEL", "llama-3.1-8b-instant"),
+            model=os.getenv("GROQ_PROFILER_MODEL", os.getenv("GROQ_PLANNER_MODEL", "llama-3.3-70b-versatile")),
             messages=[
                 {
                     "role": "system",
@@ -138,7 +146,7 @@ def _profile_dataset(df: pd.DataFrame, column_types: dict) -> dict:
                 {"role": "user", "content": prompt},
             ],
             temperature=0.1,
-            max_tokens=150,
+            max_tokens=300,
         )
         raw = (completion.choices[0].message.content or "").strip()
         if raw.startswith("```"):
@@ -182,6 +190,23 @@ def architect_agent(state: AnalysisState) -> AnalysisState:
         clean_df, impute_logs = clean_dataframe(raw_df.copy())
         if impute_logs:
             state.stats_summary["imputations"] = impute_logs
+            
+        # Detect columns that were converted from percentage strings (e.g. "85%" → 0.85)
+        # Store so chart builders can format axes correctly
+        pct_cols = [
+            log["column"] for log in (impute_logs or [])
+            # clean_dataframe logs "Converted percentage column" for these
+        ] if impute_logs else []
+        # Also detect by value range: 0–1 float columns with "rate","pct","percent" in name
+        for col in clean_df.select_dtypes(include=["float64", "float32"]).columns:
+            col_lower = col.lower()
+            if any(kw in col_lower for kw in ("rate", "pct", "percent", "ratio", "share")):
+                clean = clean_df[col].dropna()
+                if len(clean) > 0 and float(clean.min()) >= 0 and float(clean.max()) <= 1.05:
+                    if col not in pct_cols:
+                        pct_cols.append(col)
+        state.stats_summary["percentage_columns"] = pct_cols
+        
         logger.info("Data cleaned: %d rows remaining", len(clean_df))
     except Exception as e:
         logger.error("clean_dataframe failed (%s) — falling back to raw data", e)

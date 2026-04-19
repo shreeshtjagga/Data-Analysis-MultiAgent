@@ -5,18 +5,55 @@ from typing import Optional
 
 from ..core.state import AnalysisState
 from ..core.errors import add_pipeline_error
-from ..core.utils import truncate_stats_for_llm
+from ..core.utils import truncate_stats_for_llm, sanitize_for_json
 
 logger = logging.getLogger(__name__)
 
 
+def _build_column_narrative(stats: dict) -> str:
+    """Build a flat, readable column summary for the LLM to reason about directly."""
+    import pandas as pd
+    lines = []
+    numeric = stats.get("numeric_columns", {})
+    for col, d in list(numeric.items())[:12]:
+        skew_val = d.get("skewness", 0)
+        if skew_val is None or pd.isna(skew_val):
+            skew_val = 0
+            
+        if skew_val > 1:
+            skew_desc = "right-skewed"
+        elif skew_val < -1:
+            skew_desc = "left-skewed"
+        else:
+            skew_desc = "normal-ish"
+        lines.append(
+            f"  {col}: mean={d.get('mean', 0):.2f}, "
+            f"range=[{d.get('min', 0):.2f}\u2013{d.get('max', 0):.2f}], "
+            f"std={d.get('std', 0):.2f}, distribution={skew_desc}"
+        )
+    categorical = stats.get("categorical_columns", {})
+    for col, d in list(categorical.items())[:8]:
+        lines.append(
+            f"  {col}: {d.get('unique_values', 0)} categories, "
+            f"top='{d.get('most_common', '')}'")
+    return "\n".join(lines)
+
+
 def _build_llm_prompt(stats: dict) -> str:
-    payload_json = json.dumps(stats, ensure_ascii=True)
+    profile = stats.get("dataset_profile") or {}
+    domain = profile.get("domain", "general")
+    label = profile.get("label", "dataset")
+    col_narrative = _build_column_narrative(stats)
+    clean_stats = sanitize_for_json(stats)
+    payload_json = json.dumps(clean_stats, ensure_ascii=True)
     return "\n".join([
-        "You are an Expert Data Analyst. Respond in plain, simple English.",
-        "Treat the payload as the truth about a real-world domain.",
+        f"You are an Expert Data Analyst specialising in {domain} data.",
+        f"Dataset: {label}",
         "",
-        "Dataset payload (JSON):",
+        "Column summary:",
+        col_narrative,
+        "",
+        "Full stats (JSON):",
         f"<analysis_json>{payload_json}</analysis_json>",
         "",
         "Respond with ONLY valid JSON (no markdown, no explanation):",
@@ -37,6 +74,10 @@ def _llm_insights(stats: dict) -> Optional[dict]:
 
     prompt = _build_llm_prompt(stats)
 
+    # Extract domain/label for the system prompt before the API call
+    domain = (stats.get("dataset_profile") or {}).get("domain", "general")
+    label  = (stats.get("dataset_profile") or {}).get("label", "dataset")
+
     try:
         from groq import Groq
 
@@ -47,7 +88,8 @@ def _llm_insights(stats: dict) -> Optional[dict]:
                 {
                     "role": "system",
                     "content": (
-                        "You are a senior data analyst. "
+                        f"You are a senior data analyst specialising in {domain} data. "
+                        f"The dataset is: {label}. "
                         "Always respond with valid JSON only. No markdown fences."
                     ),
                 },
@@ -69,6 +111,7 @@ def _llm_insights(stats: dict) -> Optional[dict]:
     except Exception as exc:
         logger.warning("LLM insights failed, falling back to rules: %s", exc)
         return None
+
 
 
 def _rule_based_insights(stats: dict) -> dict:

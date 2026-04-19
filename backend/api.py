@@ -6,10 +6,11 @@ import logging
 import os
 import json
 from contextlib import asynccontextmanager
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Annotated
 
 import pandas as pd
+import orjson
 from fastapi import Depends, FastAPI, File, HTTPException, UploadFile, status, Request, Response, Query, BackgroundTasks
 from fastapi.responses import JSONResponse
 from fastapi.middleware.gzip import GZipMiddleware
@@ -17,6 +18,30 @@ import traceback
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from sqlalchemy.ext.asyncio import AsyncSession
+
+import re as _re
+
+_INJECTION_PATTERNS = [
+    r"ignore\s+(all\s+)?previous\s+instructions",
+    r"you\s+are\s+now\s+a",
+    r"act\s+as\s+(if\s+you\s+are\s+)?a",
+    r"disregard\s+(all\s+)?prior",
+    r"system\s*:\s*",
+    r"<\s*system\s*>",
+    r"<\s*/?inst\s*>",
+    r"\[INST\]",
+    r"###\s*instruction",
+    r"forget\s+(all\s+)?previous",
+    r"new\s+persona",
+    r"pretend\s+(you\s+are|to\s+be)",
+]
+_INJECTION_RE = _re.compile("|".join(_INJECTION_PATTERNS), _re.IGNORECASE)
+
+def sanitize_chat_input(text: str) -> str:
+    """Strip prompt injection patterns and null bytes from user input."""
+    text = text.replace("\x00", "").replace("\r", " ")
+    text = _INJECTION_RE.sub("[removed]", text)
+    return text.strip()
 
 from .core import cache as redis_cache
 from .analysis_history import (
@@ -46,7 +71,7 @@ from .core.constants import APP_VERSION, PIPELINE_VERSION
 from .core.graph import run_pipeline
 from .core.logging_config import configure_logging
 from .core.upload_parsing import read_csv_with_fallback, validate_upload_magic
-from .core.utils import sanitize_floats, truncate_stats_for_llm
+from .core.utils import sanitize_floats, truncate_stats_for_llm, build_chat_context_pack
 from .core.data_agent import run_data_query
 from .agents.plot_generator import generate_on_demand_chart, suggest_novel_chart
 from .db import get_db, init_db
@@ -175,10 +200,10 @@ async def add_security_headers(request: Request, call_next):
 
 @app.exception_handler(Exception)
 async def catch_all_exception_handler(request: Request, exc: Exception):
-    error_trace = "".join(traceback.format_exception(type(exc), exc, exc.__traceback__))
-    logger.error(f"Unhandled error: {error_trace}")
+    logger.error("Unhandled error on %s %s", request.method, request.url.path, exc_info=exc)
     
     if os.getenv("APP_ENV", "production") == "development":
+        error_trace = "".join(traceback.format_exception(type(exc), exc, exc.__traceback__))
         return JSONResponse(status_code=500, content={"detail": str(exc), "trace": error_trace})
         
     return JSONResponse(status_code=500, content={"detail": "Internal Server Error"})
@@ -207,7 +232,7 @@ async def check_ip_rate_limit(request: Request):
     key = f"ratelimit:ip:{client_ip}"
     try:
         count = await redis_cache.increment_with_ttl(key, 60)
-        if count > 5:
+        if count > 20:
             raise HTTPException(status_code=429, detail="Too many requests from this IP. Please try again in a minute.")
     except Exception as exc:
         if isinstance(exc, HTTPException):
@@ -474,6 +499,34 @@ def persist_full_data_backend(df: pd.DataFrame, file_hash: str):
         logger.warning("Background storage failed for %s: %s", file_hash, exc)
 
 
+def cleanup_old_parquet_files(retention_days: int = 3):
+    """Delete stale parquet files from backend storage to limit disk growth."""
+    try:
+        os.makedirs(_PARQUET_STORAGE_DIR, exist_ok=True)
+        cutoff = datetime.now() - timedelta(days=max(0, retention_days))
+
+        deleted = 0
+        for name in os.listdir(_PARQUET_STORAGE_DIR):
+            if not name.lower().endswith(".parquet"):
+                continue
+
+            path = os.path.join(_PARQUET_STORAGE_DIR, name)
+            try:
+                if not os.path.isfile(path):
+                    continue
+                modified_at = datetime.fromtimestamp(os.path.getmtime(path))
+                if modified_at < cutoff:
+                    os.remove(path)
+                    deleted += 1
+            except Exception as file_exc:
+                logger.warning("Parquet cleanup skipped %s: %s", path, file_exc)
+
+        if deleted:
+            logger.info("Parquet cleanup removed %d stale file(s)", deleted)
+    except Exception as exc:
+        logger.warning("Parquet cleanup failed: %s", exc)
+
+
 @app.post("/analyze", tags=["analysis"], dependencies=[Depends(check_user_rate_limit)])
 async def analyze(
     background_tasks: BackgroundTasks,
@@ -603,17 +656,28 @@ async def analyze(
     state = await asyncio.to_thread(run_pipeline, df)
 
     # ── Full Data Persistence (Background) ───────────────────────────────────
+    SYNC_PARQUET_THRESHOLD_ROWS = 5000
+
     if getattr(state, "clean_df", None) is not None:
-        background_tasks.add_task(persist_full_data_backend, state.clean_df.copy(), file_hash)
+        df_to_save = state.clean_df.copy()
+        if len(df_to_save) <= SYNC_PARQUET_THRESHOLD_ROWS:
+            # Small file — save synchronously so chat works immediately
+            persist_full_data_backend(df_to_save, file_hash)
+        else:
+            # Large file — background is fine, user won't chat instantly
+            background_tasks.add_task(persist_full_data_backend, df_to_save, file_hash)
+        background_tasks.add_task(cleanup_old_parquet_files, 3)
 
     # ── Strip full DataFrames BEFORE model_dump to prevent serialising
     # 30k rows as Python dicts (≈500 MB RAM spike). ───────────────────────────
+    CHART_PREVIEW_ROWS = int(os.getenv("CHART_PREVIEW_ROWS", "500"))
+
     preview_raw = json.loads(
-        state.raw_df.head(100).to_json(orient="records")
+        state.raw_df.head(CHART_PREVIEW_ROWS).to_json(orient="records")
     ) if getattr(state, "raw_df", None) is not None else []
     
     preview_clean = json.loads(
-        state.clean_df.head(100).to_json(orient="records")
+        state.clean_df.head(CHART_PREVIEW_ROWS).to_json(orient="records")
     ) if getattr(state, "clean_df", None) is not None else []
     
     state.raw_df   = None
@@ -664,6 +728,10 @@ async def analyze(
     else:
         result["analysis_id"] = save_result.get("analysis_id")
 
+    result["chat_context_pack"] = build_chat_context_pack(
+        result.get("stats_summary", {}),
+        result.get("insights", {}),
+    )
     result["charts"] = serialized_charts
     result["partial"] = False
     if state.errors:
@@ -671,11 +739,7 @@ async def analyze(
 
     # orjson serialises NaN/Inf → null natively and is ~10x faster than
     # the manual recursive sanitize_floats walk on large result dicts.
-    try:
-        import orjson
-        safe_result = orjson.loads(orjson.dumps(result, option=orjson.OPT_NON_STR_KEYS))
-    except Exception:
-        safe_result = sanitize_floats(result)   # fallback if orjson not available
+    safe_result = orjson.loads(orjson.dumps(result, option=orjson.OPT_NON_STR_KEYS))
 
     return {"from_cache": False, "pipeline_version": PIPELINE_VERSION, **safe_result}
 
@@ -770,37 +834,44 @@ _TYPE_DISPLAY = {
 
 def _classify_chat_intent(question: str) -> str:
     """
-    Returns one of: "generate_chart" | "explain_chart" | "data_question"
+    Returns: "generate_chart" | "explain_chart" | "data_question"
 
-    Logic:
-    - explain_chart: user mentions a chart type AND uses an explain word
-    - generate_chart: user uses any generation keyword OR asks about possible plots
-    - data_question: everything else
+    Negative guards fire first — explain phrases override any chart noun.
+    Generate triggers only fire when the sentence is explicitly asking for new output.
     """
     q = question.lower().strip()
 
-    # Explain intent takes priority when they mention a chart type + explain word
-    has_explain = any(kw in q for kw in _PLOT_EXPLAIN_KEYWORDS)
-    mentions_chart_word = any(w in q for w in [
-        "chart", "plot", "graph", "scatter", "histogram", "bar", "heatmap",
-        "line", "box", "violin", "donut", "pie", "visuali"
-    ])
-
-    if has_explain and mentions_chart_word:
+    _EXPLAIN_OVERRIDES = (
+        "what does", "what do", "what is shown", "tell me about",
+        "explain", "interpret", "what can i", "why is", "why are",
+        "summarise", "summarize", "describe", "what patterns",
+        "what trends", "insight from", "insights from",
+        "what does the", "what does this", "what does that",
+        "analyse", "analyze", "understand", "what am i seeing",
+    )
+    if any(p in q for p in _EXPLAIN_OVERRIDES):
         return "explain_chart"
 
-    # Generate intent: any generation keyword present
-    if any(kw in q for kw in _PLOT_GENERATE_KEYWORDS):
+    _GENERATE_TRIGGERS = (
+        "generate", "create", "make", "build", "draw",
+        "show me a new", "give me a", "another chart", "another plot",
+        "one more", "new chart", "new plot", "different chart",
+        "can you plot", "can you chart", "can you make",
+        "plot a", "chart a", "visualize", "visualise",
+        "show some", "show a ", "give some",
+    )
+    if any(t in q for t in _GENERATE_TRIGGERS):
         return "generate_chart"
 
-    # Also catch "plots" / "charts" as a standalone word with intent verbs
-    # e.g. "give some plots that are possible other than existing"
-    has_plot_noun = "plot" in q.split() or "chart" in q.split() or "plots" in q.split() or "charts" in q.split()
-    has_action = any(w in q for w in ["give", "show", "get", "list", "what", "any", "more", "other", "possible", "available"])
-    if has_plot_noun and has_action:
-        return "generate_chart"
+    # Bare chart-type nouns without a generate verb → explain intent
+    _CHART_NOUNS = (
+        "the scatter", "the histogram", "the bar chart", "the heatmap",
+        "the line chart", "the box plot", "the violin", "the donut",
+        "this chart", "this plot", "this graph", "that chart",
+    )
+    if any(n in q for n in _CHART_NOUNS):
+        return "explain_chart"
 
-    # Pure explain without chart mention → data question
     return "data_question"
 
 
@@ -826,6 +897,7 @@ async def chat_with_analysis(
         logger.warning("Redis rate limiter unavailable for user %s: %s", user_id, exc)
 
     question = body.question.strip()
+    question = sanitize_chat_input(question)
     context = body.context or {}
 
     if not question:
@@ -1162,13 +1234,19 @@ async def chat_with_analysis(
         "9. Use previous messages to maintain continuity. Resolve pronouns from conversation history."
     )
 
+    chat_pack  = context.get("chat_context_pack") or {}
+
     data_context = (
-        f"Context for file '{file_name}':\n"
-        f"- Profile: {profile.get('label', 'unknown')} ({profile.get('domain', 'general')})\n"
-        f"- Quality: {quality}\n"
-        f"- Charts Summary: {charts_summary}\n"
-        f"- Stats: {slim_stats}\n"
-        f"- Insights: {insights}\n"
+        f"Dataset: {file_name} | "
+        f"{chat_pack.get('row_count') or stats.get('row_count')} rows, "
+        f"{chat_pack.get('column_count') or stats.get('column_count')} columns\n"
+        f"Profile: {chat_pack.get('profile') or slim_stats.get('dataset_profile', {})}\n"
+        f"Quality: {chat_pack.get('quality') or slim_stats.get('data_quality', {})}\n"
+        f"Column details:\n"
+        f"{json.dumps(chat_pack.get('columns', {}), default=str)[:3000]}\n"
+        f"Top correlations: {chat_pack.get('correlations') or slim_stats.get('strong_correlations', [])}\n"
+        f"Key findings: {chat_pack.get('key_findings') or insights.get('findings', [])[:3]}\n"
+        f"Charts on dashboard: {list(charts_data.keys()) if isinstance(charts_data, dict) else []}\n"
     )
 
     history_msgs = []
