@@ -400,14 +400,16 @@ p, body { font-size: var(--font-body); font-weight: 400; color: var(--text-muted
 .chart-flip-wrapper {
   perspective: 1400px;
   position: relative;
+  transform: translateZ(0);
 }
 
 .chart-flip-inner {
   position: relative;
   width: 100%;
   height: 100%;
-  transition: transform 0.65s cubic-bezier(0.4, 0.2, 0.2, 1);
+  transition: transform 0.42s cubic-bezier(0.22, 0.61, 0.36, 1);
   transform-style: preserve-3d;
+  will-change: transform;
 }
 
 .chart-flip-wrapper.flipped .chart-flip-inner {
@@ -429,16 +431,17 @@ p, body { font-size: var(--font-body); font-weight: 400; color: var(--text-muted
 
 .chart-flip-front {
   background: rgba(13, 18, 32, 0.7);
-  backdrop-filter: blur(8px);
+  backdrop-filter: blur(4px);
   border: 1px solid var(--border-subtle);
   box-shadow: var(--shadow-card);
+  contain: content;
 }
 
 .chart-flip-back {
   transform: rotateY(180deg);
   background: linear-gradient(135deg, #0d1220 0%, #12192e 55%, #0d1631 100%);
   border: 1px solid rgba(99, 102, 241, 0.35);
-  box-shadow: 0 0 40px rgba(99, 102, 241, 0.15), var(--shadow-card);
+  box-shadow: 0 0 24px rgba(99, 102, 241, 0.12), var(--shadow-card);
   padding: 28px 26px 24px;
   display: flex;
   flex-direction: column;
@@ -464,16 +467,16 @@ p, body { font-size: var(--font-body); font-weight: 400; color: var(--text-muted
   justify-content: center;
   font-size: 15px;
   font-weight: 700;
-  transition: background 0.2s ease, border-color 0.2s ease, transform 0.2s ease, box-shadow 0.2s ease;
+  transition: background 0.16s ease, border-color 0.16s ease, transform 0.16s ease, box-shadow 0.16s ease;
   line-height: 1;
-  backdrop-filter: blur(6px);
+  backdrop-filter: blur(3px);
 }
 
 .chart-info-btn:hover {
   background: rgba(99, 102, 241, 0.35);
   border-color: var(--primary-500);
-  box-shadow: 0 0 14px rgba(99, 102, 241, 0.5);
-  transform: scale(1.15);
+  box-shadow: 0 0 8px rgba(99, 102, 241, 0.4);
+  transform: scale(1.05);
 }
 
 .chart-info-btn::after {
@@ -503,6 +506,68 @@ p, body { font-size: var(--font-body); font-weight: 400; color: var(--text-muted
 .chart-info-btn:hover::after {
   opacity: 1;
   transform: translateY(0) scale(0.87);
+}
+
+.chart-action-group {
+  position: absolute;
+  right: 16px;
+  bottom: 14px;
+  z-index: 10;
+  display: inline-flex;
+  gap: 4px;
+  opacity: 0;
+  transform: translateY(6px);
+  pointer-events: none;
+  transition: opacity 0.16s ease, transform 0.16s ease;
+}
+
+.chart-flip-front:hover .chart-action-group,
+.chart-flip-front:focus-within .chart-action-group {
+  opacity: 1;
+  transform: translateY(0);
+  pointer-events: auto;
+}
+
+.chart-action-btn {
+  z-index: 10;
+  height: 26px;
+  min-width: 26px;
+  border-radius: 999px;
+  border: 1px solid rgba(148, 163, 184, 0.32);
+  background: rgba(8, 12, 24, 0.72);
+  color: #dbe3f4;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0 9px;
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  transition: background 0.16s ease, border-color 0.16s ease, transform 0.16s ease;
+  backdrop-filter: blur(3px);
+}
+
+.chart-action-btn:hover {
+  background: rgba(51, 65, 85, 0.72);
+  border-color: rgba(148, 163, 184, 0.56);
+  transform: translateY(-0.5px);
+}
+
+.chart-pan-btn {
+  min-width: 40px;
+  font-size: 9px;
+}
+
+.chart-pan-btn.active {
+  border-color: rgba(99, 102, 241, 0.6);
+  background: rgba(99, 102, 241, 0.25);
+  color: #e6ebff;
+}
+
+.chart-reset-btn {
+  min-width: 46px;
 }
 
 /* Back face content */
@@ -581,56 +646,14 @@ p, body { font-size: var(--font-body); font-weight: 400; color: var(--text-muted
   to   { opacity: 1; transform: scale(1); }
 }
 
-/* =========================================================================
-   PLOTLY MODEBAR (ZOOM CONTROLS)
-   ========================================================================= */
+@media (prefers-reduced-motion: reduce) {
+  .chart-flip-inner {
+    transition: none;
+  }
 
-.modebar-container {
-  top: 12px !important;
-  right: 12px !important;
-  z-index: 10 !important;
+  .chart-info-btn,
+  .chart-action-btn {
+    transition: none;
+  }
 }
 
-/* Make overall container invisible so empty bars don't show a blue box */
-.modebar {
-  background: transparent !important;
-  border: none !important;
-  box-shadow: none !important;
-  padding: 0 !important;
-}
-
-/* Apply the dark UI styling strictly to the active groups of buttons */
-.modebar-group {
-  background: rgba(13, 18, 32, 0.75) !important;
-  backdrop-filter: blur(8px) !important;
-  border-radius: 6px !important;
-  border: 1px solid rgba(99, 102, 241, 0.45) !important;
-  padding: 2px !important;
-  display: inline-flex !important;
-  margin-left: 6px !important;
-  box-shadow: 0 4px 15px rgba(0,0,0,0.3) !important;
-}
-
-/* Natively hide any injected groups that have no actual buttons (e.g. pie charts) */
-.modebar-group:empty {
-  display: none !important;
-  border: none !important;
-  padding: 0 !important;
-}
-
-.modebar-btn path {
-  fill: rgba(255, 255, 255, 0.7) !important;
-}
-
-.modebar-btn:hover {
-  background: rgba(99, 102, 241, 0.35) !important;
-  border-radius: 4px;
-}
-
-.modebar-btn:hover path {
-  fill: #FFFFFF !important;
-}
-
-.modebar-btn.active path {
-  fill: var(--primary-500) !important;
-}

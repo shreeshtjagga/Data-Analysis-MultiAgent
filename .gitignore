@@ -42,6 +42,7 @@ data/
 uploads/
 *.csv
 !data/.gitkeep
+scratch/
 
 # ─── Node / Frontend ─────────────────────────────────────────────────────────
 node_modules/
