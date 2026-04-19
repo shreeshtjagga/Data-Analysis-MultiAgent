@@ -732,7 +732,8 @@ async def analyze(
 
     # orjson serialises NaN/Inf → null natively and is ~10x faster than
     # the manual recursive sanitize_floats walk on large result dicts.
-    safe_result = orjson.loads(orjson.dumps(result, option=orjson.OPT_NON_STR_KEYS))
+    # Added OPT_SERIALIZE_NUMPY to prevent 'Type is not JSON serializable: numpy.float64' errors.
+    safe_result = orjson.loads(orjson.dumps(result, option=orjson.OPT_NON_STR_KEYS | orjson.OPT_SERIALIZE_NUMPY))
 
     return {"from_cache": False, "pipeline_version": PIPELINE_VERSION, **safe_result}
 

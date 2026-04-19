@@ -77,7 +77,7 @@ def _looks_like_salary_range(series: pd.Series) -> bool:
     if len(sample) == 0:
         return False
     pattern = re.compile(r"^\d+k?\s*[-–+]?\s*\d*k?$", re.IGNORECASE)
-    matched = sample.str.match(r"^\d+k?\s*[\-\–\+]?\s*\d*k?$", na=False)
+    matched = sample.str.match(r"^\d+k?\s*[-–+]?\s*\d*k?$", na=False)
     return matched.sum() >= len(sample) * 0.5
 
 
