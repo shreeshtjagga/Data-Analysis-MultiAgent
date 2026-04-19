@@ -416,17 +416,6 @@ def truncate_stats_for_llm(
     return truncated
 
 
-def sanitize_floats(value):
-    """Recursively replace NaN/Inf float values with JSON-safe None."""
-    if isinstance(value, float):
-        return None if math.isnan(value) or math.isinf(value) else value
-    if isinstance(value, dict):
-        return {k: sanitize_floats(v) for k, v in value.items()}
-    if isinstance(value, list):
-        return [sanitize_floats(v) for v in value]
-    return value
-
-
 def json_default(obj: Any) -> Any:
     if isinstance(obj, np.ndarray):
         return obj.tolist()

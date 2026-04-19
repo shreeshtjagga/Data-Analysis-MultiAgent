@@ -1,8 +1,8 @@
 import { useState, useRef, useCallback, useEffect, useMemo, memo } from "react";
 import jsPDF from "jspdf";
-import { apiAnalyze, apiChat, apiHistory, apiHistoryAnalysis, apiDeleteAnalysis } from "./api.js";
-import ParticleBackground from "./ParticleBackground.jsx";
-import GlobeCanvas from "./GlobeCanvas.jsx";
+import { apiAnalyze, apiChat, apiHistory, apiHistoryAnalysis, apiDeleteAnalysis } from "../api.js";
+import ParticleBackground from "../components/ParticleBackground.jsx";
+import GlobeCanvas from "../components/GlobeCanvas.jsx";
 
 
 const PALETTE = ["#6366f1", "#10b981", "#f59e0b", "#06b6d4", "#ef4444", "#a855f7", "#34d399", "#f472b6"];

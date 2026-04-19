@@ -41,6 +41,8 @@ backend/data/
 data/
 uploads/
 *.csv
+*.parquet
+backend/storage/data/
 !data/.gitkeep
 scratch/
 

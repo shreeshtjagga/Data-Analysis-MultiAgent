@@ -1,9 +1,9 @@
 import { useEffect, useState } from "react";
 import { Navigate, Route, Routes, useNavigate } from "react-router-dom";
 import { getToken, setToken, clearToken, apiMe } from "./api.js";
-import Login from "./login.jsx";
-import DataPulse from "./datapulse_dashboard.jsx";
-import ErrorBoundary from "./ErrorBoundary.jsx";
+import Login from "./pages/Login.jsx";
+import DataPulse from "./pages/DataPulseDashboard.jsx";
+import ErrorBoundary from "./components/ErrorBoundary.jsx";
 
 /**
  * App.jsx

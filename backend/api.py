@@ -7,7 +7,6 @@ import os
 import json
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta
-from typing import Annotated
 
 import pandas as pd
 import orjson
@@ -19,7 +18,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from sqlalchemy.ext.asyncio import AsyncSession
 from pydantic import BaseModel, field_validator
-from typing import Literal, Optional, Any, Annotated
+from typing import Any, Annotated
 
 import re as _re
 
@@ -73,10 +72,9 @@ from .core.constants import APP_VERSION, PIPELINE_VERSION
 from .core.graph import run_pipeline
 from .core.logging_config import configure_logging
 from .core.upload_parsing import read_csv_with_fallback, validate_upload_magic
-from .core.utils import sanitize_floats, truncate_stats_for_llm, build_chat_context_pack
+from .core.utils import truncate_stats_for_llm, build_chat_context_pack
 from .core.data_agent import run_data_query
 from .core.llm_client import get_groq_client
-from .agents.plot_generator import generate_on_demand_chart, suggest_novel_chart
 from .db import get_db, init_db
 from .models.schemas import (
     AnalysisListResponse,
@@ -658,7 +656,6 @@ async def analyze(
         )
 
     # Run the agentic pipeline
-    import asyncio
     state = await asyncio.to_thread(run_pipeline, df)
 
     # ── Full Data Persistence (Background) ───────────────────────────────────

@@ -155,10 +155,16 @@ def _resample_ts(df: pd.DataFrame, date_col: str,
     if len(df) <= max_pts:
         return df
     df2 = df[[date_col] + val_cols].dropna(subset=[date_col]).copy()
-    df2[date_col] = pd.to_datetime(df2[date_col])
+    df2[date_col] = pd.to_datetime(df2[date_col], errors="coerce")
+    df2 = df2.dropna(subset=[date_col])
+    if df2.empty:
+        return df2
     df2 = df2.set_index(date_col).sort_index()
-    for freq in ("S", "T", "H", "D", "W", "ME", "QE", "YE"):
-        r = df2[val_cols].resample(freq).mean().dropna(how="all").reset_index()
+    for freq in ("s", "min", "h", "D", "W", "M", "Q", "A", "ME", "QE", "YE"):
+        try:
+            r = df2[val_cols].resample(freq).mean().dropna(how="all").reset_index()
+        except Exception:
+            continue
         if 10 <= len(r) <= max_pts:   # floor at 10 — never return a flat 3-point line
             return r
     step = max(1, len(df2) // max_pts)

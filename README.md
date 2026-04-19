@@ -67,7 +67,16 @@ DD PROJECT/
 │   └── requirements.txt      # Python dependencies
 ├── frontend/                 # React + Vite frontend
 │   └── src/
-│       └── datapulse_dashboard.jsx
+│       ├── pages/
+│       │   ├── DataPulseDashboard.jsx
+│       │   └── Login.jsx
+│       ├── components/
+│       │   ├── ErrorBoundary.jsx
+│       │   ├── GlobeCanvas.jsx
+│       │   └── ParticleBackground.jsx
+│       ├── api.js
+│       ├── App.jsx
+│       └── main.jsx
 ├── start-backend.bat         # One-click backend start
 ├── start-frontend.bat        # One-click frontend start
 └── .env                      # Secrets (NOT on GitHub — get from project owner)
