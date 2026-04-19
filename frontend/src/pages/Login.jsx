@@ -368,6 +368,9 @@ export default function Login({ onLogin }) {
     if (routeTab !== tab) {
       setTab(routeTab);
     }
+    // deriveTabFromPath is defined in the same render scope and only depends on
+    // resetToken (a stable URLSearchParams value) — safe to omit from deps.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [location.pathname, tab]);
 
   const goToLogin = () => {

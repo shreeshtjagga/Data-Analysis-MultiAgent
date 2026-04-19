@@ -75,6 +75,7 @@ export default function App() {
 
   return (
     <Routes>
+      {/* Public auth route — Login handles register/forgot-password/reset-password flows internally */}
       <Route
         path="/login"
         element={
@@ -83,30 +84,7 @@ export default function App() {
             : <Login onLogin={handleLogin} />
         }
       />
-      <Route
-        path="/register"
-        element={
-          authState.user
-            ? <Navigate to="/" replace />
-            : <Login onLogin={handleLogin} />
-        }
-      />
-      <Route
-        path="/forgot-password"
-        element={
-          authState.user
-            ? <Navigate to="/" replace />
-            : <Login onLogin={handleLogin} />
-        }
-      />
-      <Route
-        path="/reset-password"
-        element={
-          authState.user
-            ? <Navigate to="/" replace />
-            : <Login onLogin={handleLogin} />
-        }
-      />
+      {/* Protected dashboard */}
       <Route
         path="/"
         element={
@@ -119,7 +97,7 @@ export default function App() {
             : <Navigate to="/login" replace />
         }
       />
-      {/* Catch-all */}
+      {/* Catch-all — redirect unknown paths to root */}
       <Route path="*" element={<Navigate to="/" replace />} />
     </Routes>
   );

@@ -1,5 +1,3 @@
-
-
 import io
 import asyncio
 import logging
@@ -166,8 +164,6 @@ async def lifespan(app: FastAPI):
     logger.info("DataPulse API shutdown complete")
 
 
-
-
 app = FastAPI(
     title="DataPulse API",
     description="Multi-agent CSV analysis API",
@@ -244,8 +240,6 @@ async def check_user_rate_limit(user_id: int = Depends(get_current_user_id)):
             raise exc
         logger.warning(f"Rate limiting failed for {key}: {exc}")
     return user_id
-
-
 
 
 
