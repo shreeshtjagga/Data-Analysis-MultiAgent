@@ -1,4 +1,4 @@
-import { useState, useRef, useCallback, useEffect, useMemo } from "react";
+import { useState, useRef, useCallback, useEffect, useMemo, memo } from "react";
 import jsPDF from "jspdf";
 import { apiAnalyze, apiChat, apiHistory, apiHistoryAnalysis, apiDeleteAnalysis } from "./api.js";
 import ParticleBackground from "./ParticleBackground.jsx";
@@ -58,6 +58,13 @@ function cleanQuestionLabel(value) {
 
 function cleanAxisTitle(value) {
   return truncateLabel(cleanQuestionLabel(value), 42);
+}
+
+function stopPageZoomOnCtrlWheel(event) {
+  // Keep wheel events available for Plotly zoom while blocking browser page zoom.
+  if (event.ctrlKey || event.metaKey) {
+    event.preventDefault();
+  }
 }
 
 function normalizeTraceData(data) {
@@ -287,9 +294,9 @@ function cleanPlotSummaryText(value) {
 
   return raw
     .replace(/^#+\s*/gm, "")
-    .replace(/\bAI[_\s-]*NARRATIVE\b\s*[:\-]*/gi, "")
-    .replace(/\bPLOT[_\s-]*SUMMARY\b\s*[:\-]*/gi, "")
-    .replace(/^\s*summary\s*[:\-]\s*/i, "")
+    .replace(/\bAI[_\s-]*NARRATIVE\b\s*[:-]*/gi, "")
+    .replace(/\bPLOT[_\s-]*SUMMARY\b\s*[:-]*/gi, "")
+    .replace(/^\s*summary\s*[:-]\s*/i, "")
     .replace(/\s{2,}/g, " ")
     .trim();
 }
@@ -418,7 +425,139 @@ function isChartZoomable(data) {
   });
 }
 
-function ChartPanel({ result, PlotComponent }) {
+const ChatBubble = memo(({ m, PlotComponent, result, stopPageZoomOnCtrlWheel }) => {
+  return (
+    <div
+      style={{
+        alignSelf: m.role === 'user' ? 'flex-end' : 'flex-start',
+        display: 'flex',
+        flexDirection: 'column',
+        gap: '8px',
+        maxWidth: m.role === 'user' ? '90%' : '100%',
+        marginBottom: '4px',
+      }}
+    >
+      {/* On-demand generated chart rendered ABOVE the text bubble */}
+      {m.role === 'ai' && m.newChart?.fig && PlotComponent && (
+        <div style={{ width: '100%' }}>
+          <div style={{
+            border: '1px solid rgba(99,102,241,0.25)',
+            borderRadius: '14px',
+            overflow: 'hidden',
+            background: 'rgba(0,0,0,0.35)',
+          }}>
+            <div style={{
+              padding: '6px 14px',
+              borderBottom: '1px solid rgba(99,102,241,0.15)',
+              display: 'flex',
+              alignItems: 'center',
+              gap: '6px',
+              background: 'rgba(99,102,241,0.08)',
+            }}>
+              <span style={{ fontSize: '10px', color: 'var(--primary-500)' }}>✦</span>
+              <span style={{
+                fontSize: '10px',
+                color: 'var(--primary-500)',
+                textTransform: 'uppercase',
+                letterSpacing: '0.1em',
+                fontWeight: 700,
+              }}>Generated Chart</span>
+              <span style={{ fontSize: '10px', color: 'var(--text-muted)', marginLeft: 'auto' }}>{m.newChart.id}</span>
+            </div>
+            <div style={{ padding: '8px' }}>
+              <div onWheel={stopPageZoomOnCtrlWheel}>
+                <PlotComponent
+                  data={(m.newChart.fig.data || []).map(t => ({ ...t, textfont: { color: "#FFFFFF" } }))}
+                  layout={{
+                    ...PLOTLY_DARK_LAYOUT,
+                    ...(m.newChart.fig.layout || {}),
+                    paper_bgcolor: "rgba(0,0,0,0)",
+                    plot_bgcolor: "rgba(0,0,0,0)",
+                    font: { color: "#FFFFFF", family: "'Inter', sans-serif", size: 11 },
+                    dragmode: m.newChart.fig.layout?.dragmode || "zoom",
+                    hoverlabel: { bgcolor: "rgba(8,12,24,0.98)", font: { color: "#F8FAFC", size: 12 }, bordercolor: "rgba(99,102,241,0.85)" },
+                    height: 300,
+                    margin: { l: 45, r: 16, t: 36, b: 45 },
+                    title: {
+                      ...(m.newChart.fig.layout?.title || {}),
+                      font: { size: 13, color: '#FFFFFF', weight: 'bold' },
+                      y: 0.97, yanchor: 'top',
+                    },
+                    xaxis: { ...(m.newChart.fig.layout?.xaxis || {}), tickfont: { color: "#FFFFFF", size: 10 }, gridcolor: "rgba(99,102,241,0.1)", automargin: true },
+                    yaxis: { ...(m.newChart.fig.layout?.yaxis || {}), tickfont: { color: "#FFFFFF", size: 10 }, gridcolor: "rgba(99,102,241,0.1)", automargin: true },
+                    showlegend: false,
+                  }}
+                  config={PLOTLY_CONFIG}
+                  style={{ width: "100%", height: "300px" }}
+                />
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Text bubble */}
+      <div
+        style={{
+          background: m.role === 'user'
+            ? 'linear-gradient(135deg, #6366f1 0%, #4f46e5 100%)'
+            : 'rgba(30, 41, 59, 0.5)',
+          color: m.role === 'user' ? '#FFFFFF' : 'var(--text-main)',
+          padding: '12px 18px',
+          borderRadius: m.role === 'user' ? '18px 18px 4px 18px' : '18px 18px 18px 4px',
+          fontSize: '13px',
+          border: m.role === 'user' ? '1px solid rgba(255,255,255,0.1)' : '1px solid rgba(99,102,241,0.2)',
+          boxShadow: m.role === 'user' ? '0 4px 15px rgba(99,102,241,0.3)' : '0 4px 15px rgba(0,0,0,0.2)',
+          lineHeight: 1.5,
+        }}
+      >
+        {(() => {
+          if (m.role !== 'ai' || !m.text.includes('[CHART:')) return m.text;
+          const parts = m.text.split(/(\[CHART:\s*[^\]]+\])/);
+          return parts.map((part, pIdx) => {
+            const match = part.match(/\[CHART:\s*([^\]]+)\]/);
+            if (match && result?.charts?.[match[1]]) {
+              const figStr = result.charts[match[1]];
+              let parsedFig = typeof figStr === "string" ? JSON.parse(figStr) : figStr;
+              const data = Array.isArray(parsedFig?.data) ? parsedFig.data : [];
+              const layout = (parsedFig?.layout && typeof parsedFig.layout === 'object') ? parsedFig.layout : {};
+              return PlotComponent ? (
+                <div key={pIdx} style={{ margin: '16px 0', border: '1px solid rgba(99,102,241,0.2)', borderRadius: '12px', overflow: 'hidden', padding: '12px', background: 'rgba(0,0,0,0.3)', width: '100%' }}>
+                  <div onWheel={stopPageZoomOnCtrlWheel}>
+                    <PlotComponent
+                      data={data.map(t => ({ ...t, textfont: { color: "#FFFFFF" } }))}
+                      layout={{
+                        ...PLOTLY_DARK_LAYOUT,
+                        ...layout,
+                        paper_bgcolor: "rgba(0,0,0,0)",
+                        plot_bgcolor: "rgba(0,0,0,0)",
+                        font: { color: "#FFFFFF", family: "'Inter', sans-serif" },
+                        dragmode: layout?.dragmode || "zoom",
+                        hoverlabel: { bgcolor: "rgba(8,12,24,0.98)", font: { color: "#F8FAFC", size: 12 }, bordercolor: "rgba(99,102,241,0.85)" },
+                        height: 280,
+                        margin: { l: 40, r: 20, t: 40, b: 40 },
+                        title: { ...(layout.title || {}), font: { size: 14, color: '#fff', weight: 'bold' }, y: 0.95, yanchor: 'top' },
+                        legend: { orientation: "h", yanchor: "top", y: -0.2, xanchor: "center", x: 0.5, font: { size: 10, color: "rgba(255,255,255,0.7)" } }
+                      }}
+                      config={PLOTLY_CONFIG}
+                      style={{ width: "100%", height: "280px" }}
+                    />
+                  </div>
+                </div>
+              ) : <div key={pIdx} style={{ color: 'var(--primary-500)' }}>[Rendering Chart...]</div>;
+            }
+            if (match) return null;
+            return <span key={pIdx}>{part}</span>;
+          });
+        })()}
+      </div>
+    </div>
+  );
+});
+
+ChatBubble.displayName = 'ChatBubble';
+
+const ChartPanel = memo(({ result, PlotComponent }) => {
   const [flipped, setFlipped] = useState({});
   const [chartRevisions, setChartRevisions] = useState({});
   const [chartViewports, setChartViewports] = useState({});
@@ -458,15 +597,19 @@ function ChartPanel({ result, PlotComponent }) {
     });
   }, []);
 
-  if (!PlotComponent) {
-    return (
-      <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
-        {[1, 2, 3].map(i => (
-          <div key={i} style={{ height: '300px', borderRadius: '14px', background: 'rgba(99,102,241,0.05)', border: '1px solid var(--border-subtle)', animation: 'pulse 1.5s infinite' }} />
-        ))}
-      </div>
-    );
-  }
+  const resetChartView = useCallback((key) => {
+    setChartViewports((prev) => {
+      if (!prev[key]) return prev;
+      const next = { ...prev };
+      delete next[key];
+      return next;
+    });
+    setChartRevisions((prev) => ({ ...prev, [key]: (prev[key] || 0) + 1 }));
+  }, []);
+
+  const setChartMode = useCallback((key, mode) => {
+    setChartInteractionMode((prev) => ({ ...prev, [key]: mode }));
+  }, []);
 
   const charts = result?.charts || {};
 
@@ -484,44 +627,24 @@ function ChartPanel({ result, PlotComponent }) {
     return 99;
   };
 
-  const entries = Object.entries(charts)
-    .map(([key, value]) => {
-      let fig = value;
-      let desc = "";
-      if (value && typeof value === "object" && value.fig) {
-        fig = value.fig;
-        desc = value.description || "";
-      }
-      if (!fig || typeof fig !== "object") {
-        return [key, { data: [], layout: {} }, ""];
-      }
-      const data = Array.isArray(fig.data) ? fig.data : [];
-      const layout = fig.layout && typeof fig.layout === "object" ? fig.layout : {};
-      return [key, { data, layout }, desc];
-    })
-    .sort((a, b) => getChartPriority(a[0]) - getChartPriority(b[0]));
-
-  if (entries.length === 0) {
-    return <div style={{ color: "var(--text-muted)", fontSize: "14px" }}>No charts available.</div>;
-  }
-
-  const toggleFlip = (key) => {
-    setFlipped(prev => ({ ...prev, [key]: !prev[key] }));
-  };
-
-  const resetChartView = useCallback((key) => {
-    setChartViewports((prev) => {
-      if (!prev[key]) return prev;
-      const next = { ...prev };
-      delete next[key];
-      return next;
-    });
-    setChartRevisions((prev) => ({ ...prev, [key]: (prev[key] || 0) + 1 }));
-  }, []);
-
-  const setChartMode = useCallback((key, mode) => {
-    setChartInteractionMode((prev) => ({ ...prev, [key]: mode }));
-  }, []);
+  const entries = useMemo(() => {
+    return Object.entries(charts)
+      .map(([key, value]) => {
+        let fig = value;
+        let desc = "";
+        if (value && typeof value === "object" && value.fig) {
+          fig = value.fig;
+          desc = value.description || "";
+        }
+        if (!fig || typeof fig !== "object") {
+          return [key, { data: [], layout: {} }, ""];
+        }
+        const data = Array.isArray(fig.data) ? fig.data : [];
+        const layout = fig.layout && typeof fig.layout === "object" ? fig.layout : {};
+        return [key, { data, layout }, desc];
+      })
+      .sort((a, b) => getChartPriority(a[0]) - getChartPriority(b[0]));
+  }, [charts, getChartPriority]);
 
   const renderedEntries = useMemo(() => {
     if (!spotlightChartKey) return entries;
@@ -546,6 +669,27 @@ function ChartPanel({ result, PlotComponent }) {
     next[spotlightIndex] = previous;
     return next;
   }, [entries, spotlightChartKey]);
+
+  if (!PlotComponent) {
+    return (
+      <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+        {[1, 2, 3].map(i => (
+          <div key={i} style={{ height: '300px', borderRadius: '14px', background: 'rgba(99,102,241,0.05)', border: '1px solid var(--border-subtle)', animation: 'pulse 1.5s infinite' }} />
+        ))}
+      </div>
+    );
+  }
+
+
+
+  if (entries.length === 0) {
+    return <div style={{ color: "var(--text-muted)", fontSize: "14px" }}>No charts available.</div>;
+  }
+
+  const toggleFlip = (key) => {
+    setFlipped(prev => ({ ...prev, [key]: !prev[key] }));
+  };
+
 
   return (
     <>
@@ -854,7 +998,9 @@ function ChartPanel({ result, PlotComponent }) {
       </div>
     </>
   );
-}
+});
+
+ChartPanel.displayName = 'ChartPanel';
 
 const PRIMARY_TABS = ["overview", "charts", "insights"];
 const SECONDARY_TABS = ["data"];
@@ -1391,9 +1537,13 @@ export default function DataPulse({ user, onLogout }) {
       if (resp?.new_chart?.id) {
         setGeneratedChartKeys((prev) => (prev.includes(resp.new_chart.id) ? prev : [...prev, resp.new_chart.id]));
       }
+      const rawAnswer = (resp.answer || "").trim() || "No response generated.";
+      // Strip all double stars (**) for a cleaner plain-text look
+      const cleanAnswer = rawAnswer.replace(/\*\*/g, '');
+
       const aiMessage = {
         role: "ai",
-        text: (resp.answer || "").trim() || "No response generated.",
+        text: cleanAnswer,
         // Attach on-demand generated chart from backend response.new_chart
         newChart: resp?.new_chart?.fig ? resp.new_chart : null,
       };
@@ -1403,7 +1553,7 @@ export default function DataPulse({ user, onLogout }) {
       setChatMsgs((p) => [...p, { role: "ai", text: `Chat error: ${detail}`, newChart: null }].slice(-MAX_CHAT_MESSAGES));
     }
     setChatLoading(false);
-  }, [chatInput, chatLoading, result, chatContext]);
+  }, [chatInput, chatLoading, result, chatContext, chatMsgs]);
 
   const stats = result?.stats_summary || {};
   const insights = result?.insights || {};
@@ -1688,132 +1838,13 @@ export default function DataPulse({ user, onLogout }) {
                         <div style={{ fontSize: '11px', color: 'var(--text-muted)', borderTop: '1px solid rgba(99,102,241,0.15)', paddingTop: '8px', opacity: 0.8 }}>⚠ Responses are limited to the active dataset only.</div>
                       </div>
                     ) : chatMsgs.map((m, i) => (
-                      <div
+                      <ChatBubble
                         key={i}
-                        style={{
-                          alignSelf: m.role === 'user' ? 'flex-end' : 'flex-start',
-                          display: 'flex',
-                          flexDirection: 'column',
-                          gap: '8px',
-                          maxWidth: m.role === 'user' ? '90%' : '100%',
-                          marginBottom: '4px',
-                        }}
-                      >
-                        {/* Text bubble */}
-                        <div
-                          style={{
-                            background: m.role === 'user'
-                              ? 'linear-gradient(135deg, #6366f1 0%, #4f46e5 100%)'
-                              : 'rgba(30, 41, 59, 0.5)',
-                            color: m.role === 'user' ? '#FFFFFF' : 'var(--text-main)',
-                            padding: '12px 18px',
-                            borderRadius: m.role === 'user' ? '18px 18px 4px 18px' : '18px 18px 18px 4px',
-                            fontSize: '13px',
-                            border: m.role === 'user' ? '1px solid rgba(255,255,255,0.1)' : '1px solid rgba(99,102,241,0.2)',
-                            boxShadow: m.role === 'user' ? '0 4px 15px rgba(99,102,241,0.3)' : '0 4px 15px rgba(0,0,0,0.2)',
-                            lineHeight: 1.5,
-                          }}
-                        >
-                          {(() => {
-                            if (m.role !== 'ai' || !m.text.includes('[CHART:')) return m.text;
-                            const parts = m.text.split(/(\[CHART:\s*[^\]]+\])/);
-                            return parts.map((part, pIdx) => {
-                              const match = part.match(/\[CHART:\s*([^\]]+)\]/);
-                              if (match && result?.charts?.[match[1]]) {
-                                const figStr = result.charts[match[1]];
-                                let parsedFig = typeof figStr === "string" ? JSON.parse(figStr) : figStr;
-                                const data = Array.isArray(parsedFig?.data) ? parsedFig.data : [];
-                                const layout = (parsedFig?.layout && typeof parsedFig.layout === 'object') ? parsedFig.layout : {};
-                                return PlotComponent ? (
-                                  <div key={pIdx} style={{ margin: '16px 0', border: '1px solid rgba(99,102,241,0.2)', borderRadius: '12px', overflow: 'hidden', padding: '12px', background: 'rgba(0,0,0,0.3)', width: '100%' }}>
-                                    <div onWheel={stopPageZoomOnCtrlWheel}>
-                                      <PlotComponent
-                                        data={data.map(t => ({ ...t, textfont: { color: "#FFFFFF" } }))}
-                                        layout={{
-                                          ...PLOTLY_DARK_LAYOUT,
-                                          ...layout,
-                                          paper_bgcolor: "rgba(0,0,0,0)",
-                                          plot_bgcolor: "rgba(0,0,0,0)",
-                                          font: { color: "#FFFFFF", family: "'Inter', sans-serif" },
-                                          dragmode: layout?.dragmode || "zoom",
-                                          hoverlabel: { bgcolor: "rgba(8,12,24,0.98)", font: { color: "#F8FAFC", size: 12 }, bordercolor: "rgba(99,102,241,0.85)" },
-                                          height: 280,
-                                          margin: { l: 40, r: 20, t: 40, b: 40 },
-                                          title: { ...(layout.title || {}), font: { size: 14, color: '#fff', weight: 'bold' }, y: 0.95, yanchor: 'top' },
-                                          legend: { orientation: "h", yanchor: "top", y: -0.2, xanchor: "center", x: 0.5, font: { size: 10, color: "rgba(255,255,255,0.7)" } }
-                                        }}
-                                        config={PLOTLY_CONFIG}
-                                        style={{ width: "100%", height: "280px" }}
-                                      />
-                                    </div>
-                                  </div>
-                                ) : <div key={pIdx} style={{ color: 'var(--primary-500)' }}>[Rendering Chart...]</div>;
-                              }
-                              if (match) return null;
-                              return <span key={pIdx}>{part}</span>;
-                            });
-                          })()}
-                        </div>
-
-                        {/* On-demand generated chart rendered below the text bubble */}
-                        {m.role === 'ai' && m.newChart?.fig && PlotComponent && (
-                          <div style={{ width: '100%' }}>
-                            <div style={{
-                              border: '1px solid rgba(99,102,241,0.25)',
-                              borderRadius: '14px',
-                              overflow: 'hidden',
-                              background: 'rgba(0,0,0,0.35)',
-                            }}>
-                              <div style={{
-                                padding: '6px 14px',
-                                borderBottom: '1px solid rgba(99,102,241,0.15)',
-                                display: 'flex',
-                                alignItems: 'center',
-                                gap: '6px',
-                                background: 'rgba(99,102,241,0.08)',
-                              }}>
-                                <span style={{ fontSize: '10px', color: 'var(--primary-500)' }}>✦</span>
-                                <span style={{
-                                  fontSize: '10px',
-                                  color: 'var(--primary-500)',
-                                  textTransform: 'uppercase',
-                                  letterSpacing: '0.1em',
-                                  fontWeight: 700,
-                                }}>Generated Chart</span>
-                                <span style={{ fontSize: '10px', color: 'var(--text-muted)', marginLeft: 'auto' }}>{m.newChart.id}</span>
-                              </div>
-                              <div style={{ padding: '8px' }}>
-                                <div onWheel={stopPageZoomOnCtrlWheel}>
-                                  <PlotComponent
-                                    data={(m.newChart.fig.data || []).map(t => ({ ...t, textfont: { color: "#FFFFFF" } }))}
-                                    layout={{
-                                      ...PLOTLY_DARK_LAYOUT,
-                                      ...(m.newChart.fig.layout || {}),
-                                      paper_bgcolor: "rgba(0,0,0,0)",
-                                      plot_bgcolor: "rgba(0,0,0,0)",
-                                      font: { color: "#FFFFFF", family: "'Inter', sans-serif", size: 11 },
-                                      dragmode: m.newChart.fig.layout?.dragmode || "zoom",
-                                      hoverlabel: { bgcolor: "rgba(8,12,24,0.98)", font: { color: "#F8FAFC", size: 12 }, bordercolor: "rgba(99,102,241,0.85)" },
-                                      height: 300,
-                                      margin: { l: 45, r: 16, t: 36, b: 45 },
-                                      title: {
-                                        ...(m.newChart.fig.layout?.title || {}),
-                                        font: { size: 13, color: '#FFFFFF', weight: 'bold' },
-                                        y: 0.97, yanchor: 'top',
-                                      },
-                                      xaxis: { ...(m.newChart.fig.layout?.xaxis || {}), tickfont: { color: "#FFFFFF", size: 10 }, gridcolor: "rgba(99,102,241,0.1)", automargin: true },
-                                      yaxis: { ...(m.newChart.fig.layout?.yaxis || {}), tickfont: { color: "#FFFFFF", size: 10 }, gridcolor: "rgba(99,102,241,0.1)", automargin: true },
-                                      showlegend: false,
-                                    }}
-                                    config={PLOTLY_CONFIG}
-                                    style={{ width: "100%", height: "300px" }}
-                                  />
-                                </div>
-                              </div>
-                            </div>
-                          </div>
-                        )}
-                      </div>
+                        m={m}
+                        PlotComponent={PlotComponent}
+                        result={result}
+                        stopPageZoomOnCtrlWheel={stopPageZoomOnCtrlWheel}
+                      />
                     ))}
                     {chatLoading && <div style={{ fontSize: '13px', color: 'var(--primary-500)', fontFamily: "'Outfit', monospace" }}>Generating response...</div>}
                     {chatMsgs.length >= MAX_CHAT_MESSAGES && (

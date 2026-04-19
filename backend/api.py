@@ -955,7 +955,7 @@ async def chat_with_analysis(
             reason = novel.get("reason", "All useful column combinations are already visualized.")
             return {
                 "answer": (
-                    f"I've reviewed all possible chart combinations for **{file_name}**. "
+                    f"I've reviewed all possible chart combinations for {file_name}. "
                     f"{reason}"
                 ),
                 "data_queried": False,
@@ -993,9 +993,9 @@ async def chat_with_analysis(
         y_col = spec.get("y") or ""
 
         if x_col and y_col:
-            col_desc = f" of **{x_col}** vs **{y_col}**"
+            col_desc = f" of {x_col} vs {y_col}"
         elif x_col:
-            col_desc = f" of **{x_col}**"
+            col_desc = f" of {x_col}"
         else:
             col_desc = ""
 
@@ -1130,7 +1130,7 @@ async def chat_with_analysis(
         if matched_key:
             return {
                 "answer": (
-                    f"The **{matched_key}** chart shows the relationship between the "
+                    f"The {matched_key} chart shows the relationship between the "
                     f"dataset columns it visualizes. Look for patterns, clusters, or "
                     f"outliers in the data points to draw insights."
                 ),
@@ -1231,7 +1231,7 @@ async def chat_with_analysis(
         "6. If truly no data available, say: 'I couldn't find that in the dataset.'\n"
         "7. If the user is chatty (hi, thanks), be polite but don't spontaneously analyze data.\n"
         f"8. Reference charts using exactly `[CHART: key]` with only these keys: {exact_chart_keys}.\n"
-        "9. Use previous messages to maintain continuity. Resolve pronouns from conversation history."
+        "9. Use previous messages to maintain continuity. Resolve pronouns from conversation history. Do NOT use markdown bolding like **text** in your response."
     )
 
     chat_pack  = context.get("chat_context_pack") or {}
