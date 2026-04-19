@@ -559,6 +559,7 @@ async def analyze(
     validate_upload_magic(parsed_ext, file_bytes)
 
     file_hash = compute_file_hash(file_bytes, filename)
+    file_size = len(file_bytes)
 
 
     cached = await get_analysis_by_hash(db, user_id, file_hash)
@@ -632,6 +633,8 @@ async def analyze(
                     sheet_name=0,
                     nrows=MAX_ANALYZE_ROWS + 1,
                 )
+        del file_bytes
+        chunks = None
     except Exception as exc:
         if isinstance(exc, HTTPException):
             raise exc
@@ -712,7 +715,7 @@ async def analyze(
         user_id=user_id,
         file_name=filename,
         file_hash=file_hash,
-        file_size=len(file_bytes),
+        file_size=file_size,
         analysis_result=result,
         serialized_charts=serialized_charts,
     )

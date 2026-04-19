@@ -2,6 +2,7 @@
 import hashlib
 import json
 import logging
+import os
 from datetime import datetime, timezone, timedelta
 from typing import Optional
 
@@ -333,6 +334,14 @@ async def delete_analysis(
 
     cache_key = redis_cache.analysis_key(user_id, file_hash)
     await redis_cache.delete(cache_key)
+    
+    _PARQUET_DIR = os.path.join(os.path.dirname(__file__), "storage", "data")
+    parquet_path = os.path.join(_PARQUET_DIR, f"{file_hash}.parquet")
+    try:
+        if os.path.exists(parquet_path):
+            os.remove(parquet_path)
+    except Exception as exc:
+        logger.warning("Could not delete parquet %s: %s", parquet_path, exc)
 
     logger.info("Deleted analysis id=%d for user %d", analysis_id, user_id)
     return {"success": True, "message": "Analysis deleted successfully"}

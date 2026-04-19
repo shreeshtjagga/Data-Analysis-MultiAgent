@@ -42,8 +42,8 @@ def _run_parallel_agents(state: AnalysisState) -> AnalysisState:
     """
     # Give each agent its own isolated copy of the state so writes don't race.
     # We use deep=True to ensure nested lists (like .errors) are not shared.
-    viz_state_in  = state.model_copy(deep=True)
-    ins_state_in  = state.model_copy(deep=True)
+    viz_state_in  = state.model_copy(deep=False)
+    ins_state_in  = state.model_copy(deep=False)
 
     viz_state_out: AnalysisState | None = None
     ins_state_out: AnalysisState | None = None
@@ -128,7 +128,7 @@ def run_pipeline(df) -> AnalysisState:
     logger.info("Running Statistician and Dataset Profiler concurrently...")
     with concurrent.futures.ThreadPoolExecutor(max_workers=2) as pool:
         # Give statistician its own state copy (standard pattern here)
-        stat_state_in = state.model_copy(deep=True)
+        stat_state_in = state.model_copy(deep=False)
         
         stat_future = pool.submit(_run_agent_with_timeout, statistician_agent, stat_state_in, "statistician")
         prof_future = pool.submit(profile_dataset, state.clean_df, state.column_types)
