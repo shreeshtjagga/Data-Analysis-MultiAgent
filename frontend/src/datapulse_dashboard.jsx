@@ -425,143 +425,6 @@ function isChartZoomable(data) {
   });
 }
 
-function cleanPlotSummaryText(value) {
-  const raw = String(value ?? "").trim();
-  if (!raw) return "";
-
-  return raw
-    .replace(/^#+\s*/gm, "")
-    .replace(/\bAI[_\s-]*NARRATIVE\b\s*[:-]*/gi, "")
-    .replace(/\bPLOT[_\s-]*SUMMARY\b\s*[:-]*/gi, "")
-    .replace(/^\s*summary\s*[:-]\s*/i, "")
-    .replace(/\s{2,}/g, " ")
-    .trim();
-}
-
-function getPlotSummary(desc, fig, key) {
-  const cleaned = cleanPlotSummaryText(desc);
-  if (cleaned) return cleaned;
-
-  const traceType = String(fig?.data?.[0]?.type || "chart").toLowerCase();
-  const xTitle = cleanAxisTitle(fig?.layout?.xaxis?.title?.text || fig?.layout?.xaxis?.title || "");
-  const yTitle = cleanAxisTitle(fig?.layout?.yaxis?.title?.text || fig?.layout?.yaxis?.title || "");
-  const chartTitle = cleanQuestionLabel(fig?.layout?.title?.text || fig?.layout?.title || key.replaceAll("_", " "));
-
-  if (traceType === "pie") return `${chartTitle} highlights category share distribution across the selected groups.`;
-  if (traceType === "histogram") return `${chartTitle} shows frequency spread${xTitle ? ` for ${xTitle}` : ""}, helping identify skew and concentration.`;
-  if (traceType === "box") return `${chartTitle} summarizes median, spread, and outliers${xTitle ? ` across ${xTitle}` : ""}.`;
-  if (traceType === "heatmap") return `${chartTitle} maps intensity patterns to expose high and low concentration zones.`;
-
-  if (xTitle && yTitle) {
-    return `${chartTitle} compares ${yTitle} across ${xTitle} to surface key differences and trends.`;
-  }
-  return `${chartTitle} provides a focused visual summary of the most relevant variation in this dataset segment.`;
-}
-
-function getNumericExtent(trace) {
-  const candidates = [];
-  const yVals = Array.isArray(trace?.y) ? trace.y : [];
-  const xVals = Array.isArray(trace?.x) ? trace.x : [];
-
-  yVals.forEach((v) => {
-    if (typeof v === "number" && Number.isFinite(v)) candidates.push(v);
-  });
-  xVals.forEach((v) => {
-    if (typeof v === "number" && Number.isFinite(v)) candidates.push(v);
-  });
-
-  if (candidates.length < 2) return null;
-  return { min: Math.min(...candidates), max: Math.max(...candidates), count: candidates.length };
-}
-
-function getCoreRevelations(desc, fig, key) {
-  const traces = Array.isArray(fig?.data) ? fig.data : [];
-  const traceType = String(traces[0]?.type || "chart").toLowerCase();
-  const xTitle = cleanAxisTitle(fig?.layout?.xaxis?.title?.text || fig?.layout?.xaxis?.title || "x-axis");
-  const yTitle = cleanAxisTitle(fig?.layout?.yaxis?.title?.text || fig?.layout?.yaxis?.title || "y-axis");
-  const chartTitle = cleanQuestionLabel(fig?.layout?.title?.text || fig?.layout?.title || key.replaceAll("_", " "));
-  const cleanedSummary = cleanPlotSummaryText(desc);
-  const summarySentences = cleanedSummary
-    ? cleanedSummary.split(/(?<=[.!?])\s+/).map((s) => s.trim()).filter(Boolean)
-    : [];
-
-  const firstTrace = traces[0] || {};
-  const dataPointCount = Math.max(
-    Array.isArray(firstTrace?.x) ? firstTrace.x.length : 0,
-    Array.isArray(firstTrace?.y) ? firstTrace.y.length : 0,
-  );
-  const extent = getNumericExtent(firstTrace);
-
-  const insights = [];
-  if (summarySentences.length > 0) insights.push(summarySentences[0]);
-  if (summarySentences.length > 1) insights.push(summarySentences[1]);
-
-  if (traceType === "histogram") {
-    insights.push(`The distribution across ${xTitle} highlights where observations are most concentrated.`);
-  } else if (traceType === "box" || traceType === "violin") {
-    insights.push(`Spread and quartile structure indicate how variable ${yTitle} is across groups.`);
-  } else if (traceType === "pie" || traceType === "donut") {
-    insights.push(`Category proportions reveal which segments dominate the overall composition.`);
-  } else if (traceType === "heatmap") {
-    insights.push(`Color intensity shows where pairings of ${xTitle} and ${yTitle} are strongest or weakest.`);
-  } else {
-    insights.push(`${chartTitle} compares ${yTitle} across ${xTitle}, exposing meaningful differences between categories.`);
-  }
-
-  if (traces.length > 1) {
-    insights.push(`This view overlays ${traces.length} series, making cross-series comparison easier at a glance.`);
-  }
-
-  if (dataPointCount > 0) {
-    insights.push(`The chart summarizes ${dataPointCount.toLocaleString()} plotted observations in the primary series.`);
-  }
-
-  if (extent) {
-    insights.push(`Observed numeric range spans from ${extent.min.toFixed(2)} to ${extent.max.toFixed(2)}, indicating notable spread.`);
-  }
-
-  insights.push("Use this chart as a decision anchor to validate trends before acting on downstream analysis outputs.");
-
-  return Array.from(new Set(insights)).slice(0, 5);
-}
-
-function isChartZoomable(data) {
-  const traces = Array.isArray(data) ? data : [];
-  if (traces.length === 0) return false;
-
-  const nonZoomableTypes = new Set([
-    "pie",
-    "sunburst",
-    "treemap",
-    "funnelarea",
-    "parcats",
-    "parcoords",
-    "sankey",
-    "table",
-    "indicator",
-  ]);
-
-  return traces.some((trace) => {
-    const traceType = String(trace?.type || "scatter").toLowerCase();
-    if (nonZoomableTypes.has(traceType)) return false;
-    if (Array.isArray(trace?.x) || Array.isArray(trace?.y)) return true;
-    if (trace?.xaxis || trace?.yaxis) return true;
-    return [
-      "scatter",
-      "bar",
-      "histogram",
-      "box",
-      "violin",
-      "heatmap",
-      "contour",
-      "candlestick",
-      "ohlc",
-      "waterfall",
-      "funnel",
-    ].includes(traceType);
-  });
-}
-
 const ChatBubble = memo(({ m, PlotComponent, result, stopPageZoomOnCtrlWheel }) => {
   return (
     <div
@@ -697,7 +560,7 @@ ChatBubble.displayName = 'ChatBubble';
 const ChartPanel = memo(({ result, PlotComponent }) => {
   const [flipped, setFlipped] = useState({});
   const [chartRevisions, setChartRevisions] = useState({});
-  const [chartViewports, setChartViewports] = useState({});
+  const [spotlightViewports, setSpotlightViewports] = useState({});
   const [chartInitialBounds, setChartInitialBounds] = useState({});
   const [chartInteractionMode, setChartInteractionMode] = useState({});
   const [spotlightChartKey, setSpotlightChartKey] = useState(null);
@@ -735,7 +598,7 @@ const ChartPanel = memo(({ result, PlotComponent }) => {
   }, []);
 
   const resetChartView = useCallback((key) => {
-    setChartViewports((prev) => {
+    setSpotlightViewports((prev) => {
       if (!prev[key]) return prev;
       const next = { ...prev };
       delete next[key];
@@ -888,12 +751,12 @@ const ChartPanel = memo(({ result, PlotComponent }) => {
         const yBaseAxis = initialBounds.y ? { range: initialBounds.y } : fig.layout?.yaxis;
         const xConstraint = buildAxisConstraint(xBaseAxis, collectAxisValues(fig.data, "x"));
         const yConstraint = buildAxisConstraint(yBaseAxis, collectAxisValues(fig.data, "y"));
-        const viewport = chartViewports[key] || {};
+        const viewport = isSpotlighted ? (spotlightViewports[key] || {}) : {};
         const chartMode = chartInteractionMode[key] || (isSpotlighted ? "pan" : "zoom");
         const currentXRange = viewport.x || initialBounds.x || fig.layout?.xaxis?.range || null;
         const currentYRange = viewport.y || initialBounds.y || fig.layout?.yaxis?.range || null;
         const zoomChart = (factor) => {
-          setChartViewports((prev) => {
+          setSpotlightViewports((prev) => {
             const current = prev[key] || {};
             const sourceX = current.x || currentXRange;
             const sourceY = current.y || currentYRange;
@@ -936,9 +799,10 @@ const ChartPanel = memo(({ result, PlotComponent }) => {
         };
         const onChartRelayout = (eventData) => {
           if (!eventData) return;
+          if (!isSpotlighted) return;
 
           if (eventData["xaxis.autorange"] || eventData["yaxis.autorange"]) {
-            setChartViewports((prev) => {
+            setSpotlightViewports((prev) => {
               if (!prev[key]) return prev;
               const next = { ...prev };
               delete next[key];
@@ -953,7 +817,7 @@ const ChartPanel = memo(({ result, PlotComponent }) => {
           const clampedY = yConstraint ? clampRangeToConstraint(rawY, yConstraint) : null;
           if (!clampedX && !clampedY) return;
 
-          setChartViewports((prev) => {
+          setSpotlightViewports((prev) => {
             const current = prev[key] || {};
             const nextViewport = {
               ...current,
@@ -1093,7 +957,6 @@ const ChartPanel = memo(({ result, PlotComponent }) => {
                         automargin: true,
                         tickfont: { color: "#FFFFFF", size: 11 },
                       },
-                      uniformtext: { minsize: 10, mode: "hide" },
                     }}
                     config={{
                       ...PLOTLY_CONFIG,
