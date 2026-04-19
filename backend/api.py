@@ -18,6 +18,8 @@ import traceback
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from sqlalchemy.ext.asyncio import AsyncSession
+from pydantic import BaseModel, field_validator
+from typing import Literal, Optional, Any, Annotated
 
 import re as _re
 
@@ -73,6 +75,7 @@ from .core.logging_config import configure_logging
 from .core.upload_parsing import read_csv_with_fallback, validate_upload_magic
 from .core.utils import sanitize_floats, truncate_stats_for_llm, build_chat_context_pack
 from .core.data_agent import run_data_query
+from .core.llm_client import get_groq_client
 from .agents.plot_generator import generate_on_demand_chart, suggest_novel_chart
 from .db import get_db, init_db
 from .models.schemas import (
@@ -110,17 +113,10 @@ READ_CHUNK_BYTES = 1024 * 1024
 CHAT_RATE_LIMIT = int(os.getenv("CHAT_RATE_LIMIT", "10"))
 CHAT_RATE_WINDOW = int(os.getenv("CHAT_RATE_WINDOW_SECONDS", "60"))
 
-# Groq client is stateless — create once at startup, reuse across requests
-_groq_client = None
+INTENT_MODEL    = os.getenv("GROQ_INTENT_MODEL", "llama-3.1-8b-instant")   # fast, structured
+SYNTHESIS_MODEL = os.getenv("GROQ_SYNTHESIS_MODEL", "llama-3.3-70b-versatile")  # smart, grounded
 
-def _get_groq_client():
-    global _groq_client
-    if _groq_client is None:
-        api_key = os.getenv("GROQ_API_KEY")
-        if api_key:
-            from groq import Groq
-            _groq_client = Groq(api_key=api_key)
-    return _groq_client
+# Groq client is now a shared singleton in core.llm_client
 
 
 _raw_origins = os.getenv("CORS_ORIGINS", "http://localhost:5173,http://localhost:3000")
@@ -498,9 +494,6 @@ def persist_full_data_backend(df: pd.DataFrame, file_hash: str):
         logger.info("Background storage: Saved full data to %s", storage_path)
     except Exception as exc:
         logger.warning("Background storage failed for %s: %s", file_hash, exc)
-    finally:
-        # Only trigger cleanup when we actually modified the filesystem/storage
-        cleanup_old_parquet_files()
 
 
 def cleanup_old_parquet_files(retention_days: int = 3):
@@ -529,6 +522,15 @@ def cleanup_old_parquet_files(retention_days: int = 3):
             logger.info("Parquet cleanup removed %d stale file(s)", deleted)
     except Exception as exc:
         logger.warning("Parquet cleanup failed: %s", exc)
+
+
+def _stratified_preview(df: pd.DataFrame, n: int) -> list:
+    if len(df) <= n:
+        return json.loads(df.to_json(orient="records"))
+    # Sample uniformly across the index so edge values are represented
+    step = max(1, len(df) // n)
+    sampled = df.iloc[::step].head(n)
+    return json.loads(sampled.to_json(orient="records"))
 
 
 @app.post("/analyze", tags=["analysis"])
@@ -676,13 +678,9 @@ async def analyze(
     # 30k rows as Python dicts (≈500 MB RAM spike). ───────────────────────────
     CHART_PREVIEW_ROWS = int(os.getenv("CHART_PREVIEW_ROWS", "500"))
 
-    preview_raw = json.loads(
-        state.raw_df.head(CHART_PREVIEW_ROWS).to_json(orient="records")
-    ) if getattr(state, "raw_df", None) is not None else []
+    preview_raw = _stratified_preview(state.raw_df, CHART_PREVIEW_ROWS) if getattr(state, "raw_df", None) is not None else []
     
-    preview_clean = json.loads(
-        state.clean_df.head(CHART_PREVIEW_ROWS).to_json(orient="records")
-    ) if getattr(state, "clean_df", None) is not None else []
+    preview_clean = _stratified_preview(state.clean_df, CHART_PREVIEW_ROWS) if getattr(state, "clean_df", None) is not None else []
     
     state.raw_df   = None
     state.clean_df = None
@@ -835,6 +833,59 @@ _TYPE_DISPLAY = {
     "stacked_bar": "Stacked bar chart",
 }
 
+VALID_QUERY_TYPES = {
+    "filter_lookup", "value_counts", "filter_group", "filter_aggregate",
+    "group_aggregate", "aggregate", "top_n", "bottom_n", "lookup",
+    "row_count", "distinct", "search", "correlation", "percentile"
+}
+
+class QueryPlan(BaseModel):
+    type: str
+    params: dict[str, Any] = {}
+
+    @field_validator("type")
+    @classmethod
+    def validate_type(cls, v):
+        if v not in VALID_QUERY_TYPES:
+            raise ValueError(f"Unknown query type: {v}")
+        return v
+
+
+def _is_result_plausible(data_result: dict, stats: dict) -> tuple[bool, str]:
+    """
+    Cross-check data agent result against known stats to catch impossible values.
+    Returns (is_plausible, reason_if_not).
+    """
+    if not data_result or "error" in data_result:
+        return False, data_result.get("error", "query failed")
+    
+    result = data_result.get("result")
+    if result == "No rows found." or result is None:
+        return False, "empty result"
+    
+    # Check numeric results against known column ranges
+    numeric_cols = stats.get("numeric_columns", {})
+    
+    # For top_n / aggregate results that return a single number,
+    # verify it's within known min/max
+    if isinstance(result, (int, float)):
+        # Find which column was queried
+        sort_col = data_result.get("sort_column") or data_result.get("query", "")
+        for col, col_stats in numeric_cols.items():
+            if col.lower() in sort_col.lower():
+                col_min = col_stats.get("min", float("-inf"))
+                col_max = col_stats.get("max", float("inf"))
+                if not (col_min <= result <= col_max * 1.01):  # 1% tolerance
+                    return False, f"value {result} outside known range [{col_min}, {col_max}]"
+    
+    # Check row_count results don't exceed known row_count
+    if data_result.get("query", "").startswith("Row count"):
+        known_rows = stats.get("row_count", float("inf"))
+        if isinstance(result, int) and result > known_rows:
+            return False, f"row count {result} exceeds dataset size {known_rows}"
+    
+    return True, ""
+
 
 def _classify_chat_intent(question: str) -> str:
     """
@@ -921,8 +972,7 @@ async def chat_with_analysis(
     file_hash = context.get("file_hash")
 
     df_records = []
-    # If we have a file_hash, try to load the FULL dataset from Parquet storage
-    # for on-demand chart generation. Preview-only charts (500 rows) are inaccurate for large files.
+    using_preview_only = False
     if file_hash:
         try:
             storage_path = os.path.join(_PARQUET_STORAGE_DIR, f"{file_hash}.parquet")
@@ -930,8 +980,11 @@ async def chat_with_analysis(
                 df_full = pd.read_parquet(storage_path)
                 df_records = df_full.to_dict("records")
                 logger.info("Chat: Loaded %d rows from Parquet for on-demand chart gen", len(df_full))
+            else:
+                using_preview_only = True
         except Exception as load_exc:
             logger.warning("Chat: Failed to load full dataset from storage: %s", load_exc)
+            using_preview_only = True
 
     if not df_records:
         df_records = (
@@ -1098,7 +1151,7 @@ async def chat_with_analysis(
                 logger.warning("Could not parse chart data for key %s: %s", matched_key, e)
 
         # Build explanation via LLM
-        client = _get_groq_client()
+        client = get_groq_client()
         if client:
             try:
                 chart_context_str = ""
@@ -1132,9 +1185,8 @@ async def chat_with_analysis(
                     {"role": "user", "content": question}
                 ]
 
-                synthesis_model = os.getenv("GROQ_SYNTHESIS_MODEL", os.getenv("GROQ_MODEL", "llama-3.3-70b-versatile"))
                 completion = client.chat.completions.create(
-                    model=synthesis_model,
+                    model=SYNTHESIS_MODEL,
                     messages=explain_messages,
                     temperature=0.2,
                     max_tokens=300,
@@ -1237,6 +1289,13 @@ async def chat_with_analysis(
                     return tok
         return None
 
+    data_coverage_note = (
+        "\nNOTE: Only a 500-row preview is available for data queries. "
+        "For questions about exact counts, totals, or specific rows beyond the preview, "
+        "say 'I can only see a preview of this dataset.'"
+        if using_preview_only else ""
+    )
+
     system_prompt = (
         "You are an elite Senior Data Analyst. Answer questions strictly grounded in the dataset context.\n"
         "Tone: Professional, authoritative, yet accessible. "
@@ -1251,7 +1310,10 @@ async def chat_with_analysis(
         "6. If truly no data available, say: 'I couldn't find that in the dataset.'\n"
         "7. If the user is chatty (hi, thanks), be polite but don't spontaneously analyze data.\n"
         f"8. Reference charts using exactly `[CHART: key]` with only these keys: {exact_chart_keys}.\n"
-        "9. Use previous messages to maintain continuity. Resolve pronouns from conversation history. Do NOT use markdown bolding like **text** in your response."
+        "9. Use previous messages to maintain continuity. Resolve pronouns from conversation history. Do NOT use markdown bolding like **text** in your response.\n"
+        "10. CRITICAL: Never invent values. If a fact is not in the data context or ADDITIONAL DATA block, "
+        "    say exactly: 'That information isn't in the dataset.' Never estimate or assume.\n"
+        f"{data_coverage_note}"
     )
 
     chat_pack  = context.get("chat_context_pack") or {}
@@ -1269,20 +1331,23 @@ async def chat_with_analysis(
         f"Charts on dashboard: {list(charts_data.keys()) if isinstance(charts_data, dict) else []}\n"
     )
 
+    MAX_HISTORY_TURNS = 6  # last 6 turns = 12 messages, enough for continuity
+
     history_msgs = []
     if body.history:
-        for m in body.history:
+        recent = body.history[-MAX_HISTORY_TURNS:]  # sliding window
+        for m in recent:
             role = "assistant" if m.get("role") in ["assistant", "ai"] else "user"
             history_msgs.append({"role": role, "content": m.get("content", "")})
 
     messages = [
-        {"role": "system", "content": system_prompt},
-        {"role": "system", "content": f"DATA CONTEXT:\n{data_context}"},
+        {"role": "system", "content": system_prompt},          # instructions only
+        {"role": "system", "content": f"DATASET CONTEXT:\n{data_context}"},  # data only
     ]
     messages.extend(history_msgs)
     messages.append({"role": "user", "content": question})
 
-    client = _get_groq_client()
+    client = get_groq_client()
     if client:
         try:
             col_types = {}
@@ -1357,9 +1422,8 @@ async def chat_with_analysis(
                         "Return ONLY JSON or 'NONE'."
                     )
 
-                    intent_model = os.getenv("GROQ_INTENT_MODEL", "llama-3.3-70b-versatile")
                     intent_resp = client.chat.completions.create(
-                        model=intent_model,
+                        model=INTENT_MODEL,
                         messages=[{"role": "user", "content": intent_prompt}],
                         max_tokens=350,
                         temperature=0,
@@ -1367,12 +1431,35 @@ async def chat_with_analysis(
                     intent_text = (intent_resp.choices[0].message.content or "").strip()
                     logger.info("Intent LLM response: %s", intent_text)
 
-                    if "{" in intent_text and "}" in intent_text:
-                        raw_json = intent_text[intent_text.find("{"):intent_text.rfind("}")+1]
-                        query_plan = json.loads(raw_json)
-                        data_result = run_data_query(file_hash, query_plan.get("type"), query_plan.get("params", {}))
-                        logger.info("Data Agent result: %s", str(data_result)[:500])
+                    try:
+                        if "{" in intent_text and "}" in intent_text:
+                            raw_json = intent_text[intent_text.find("{"):intent_text.rfind("}")+1]
+                            raw_plan = json.loads(raw_json)
+                            query_plan = QueryPlan(**raw_plan)  # validate before running
+                            
+                            # Pre-check: verify columns exist before running
+                            requested_cols = [
+                                query_plan.params.get("column"),
+                                query_plan.params.get("group_by"),
+                                query_plan.params.get("filter_col"),
+                                query_plan.params.get("result_col"),
+                            ]
+                            if df_records:
+                                available_cols = set(df_records[0].keys()) if df_records else set()
+                                for c in requested_cols:
+                                    if c and c not in available_cols:
+                                        logger.info("Intent plan col '%s' will need fuzzy resolve", c)
+                            
+                            data_result = await asyncio.to_thread(
+                                run_data_query, file_hash, query_plan.type, query_plan.params
+                            )
+                            logger.info("Data Agent result: %s", str(data_result)[:500])
+                    except (json.JSONDecodeError, ValueError) as e:
+                        logger.warning("Intent plan invalid (%s), skipping data query", e)
+                        data_result = None
 
+                    if "{" in intent_text and "}" in intent_text:
+                        # (The above try/except handles the loading, this is for the fallback check)
                         result_is_empty = (
                             not data_result
                             or "error" in data_result
@@ -1380,7 +1467,7 @@ async def chat_with_analysis(
                             or data_result.get("result") == "No rows found."
                         )
                         if result_is_empty and resolved_subject:
-                            data_result = run_data_query(file_hash, "search", {"value": resolved_subject, "n": 3})
+                            data_result = await asyncio.to_thread(run_data_query, file_hash, "search", {"value": resolved_subject, "n": 3})
                     else:
                         _LOOKUP_SIGNALS = {
                             "birthday", "born", "dob", "date of birth", "age", "address",
@@ -1389,33 +1476,37 @@ async def chat_with_analysis(
                         q_lower_check = question.lower()
                         is_lookup = any(sig in q_lower_check for sig in _LOOKUP_SIGNALS)
                         if (is_lookup or has_pronoun) and resolved_subject:
-                            data_result = run_data_query(file_hash, "search", {"value": resolved_subject, "n": 3})
+                            data_result = await asyncio.to_thread(run_data_query, file_hash, "search", {"value": resolved_subject, "n": 3})
                         elif is_lookup:
                             fallback_entity = _extract_recent_entity([{"content": question, "role": "user"}])
                             if fallback_entity:
-                                data_result = run_data_query(file_hash, "search", {"value": fallback_entity, "n": 3})
+                                data_result = await asyncio.to_thread(run_data_query, file_hash, "search", {"value": fallback_entity, "n": 3})
 
                 except Exception as e:
                     logger.warning("Intent pass failed: %s", e)
 
             if data_result and "error" not in data_result:
-                subject_note = f" (subject: {resolved_subject})" if resolved_subject else ""
-                messages.append({
-                    "role": "system",
-                    "content": (
-                        f"ADDITIONAL DATA FROM FULL DATASET QUERY{subject_note}:\n{data_result}\n"
-                        "IMPORTANT: Use these exact values to answer. Do NOT say 'I don't have that data'."
-                    )
-                })
+                plausible, reason = _is_result_plausible(data_result, stats)
+                if plausible:
+                    subject_note = f" (subject: {resolved_subject})" if resolved_subject else ""
+                    messages.append({
+                        "role": "system",
+                        "content": (
+                            f"ADDITIONAL DATA FROM FULL DATASET QUERY{subject_note}:\n{data_result}\n"
+                            "IMPORTANT: Use these exact values. Do NOT say 'I don't have that data'."
+                        )
+                    })
+                else:
+                    logger.warning("Rejecting implausible query result (%s): %s", reason, data_result)
             elif data_result:
                 # If there's an error, don't label it as authoritative data
                 logger.warning("Omitting query error from system prompt to avoid hallucination: %s", data_result.get("error"))
 
-            synthesis_model = os.getenv("GROQ_SYNTHESIS_MODEL", os.getenv("GROQ_MODEL", "llama-3.3-70b-versatile"))
+            synthesis_temp = 0.05 if (data_result and "error" not in data_result) else 0.15
             completion = client.chat.completions.create(
-                model=synthesis_model,
+                model=SYNTHESIS_MODEL,
                 messages=messages,
-                temperature=0.15,
+                temperature=synthesis_temp,
                 max_tokens=450,
             )
             answer = (completion.choices[0].message.content or "").strip()

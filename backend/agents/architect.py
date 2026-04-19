@@ -9,6 +9,7 @@ import pandas as pd
 from ..core.state import AnalysisState
 from ..core.errors import add_pipeline_error
 from ..core.utils import clean_dataframe, detect_column_types
+from ..core.llm_client import get_groq_client
 
 logger = logging.getLogger(__name__)
 
@@ -90,7 +91,7 @@ def _classify_columns(df: pd.DataFrame) -> dict:
     return {"excluded": excluded, "kept": kept}
 
 
-def _profile_dataset(df: pd.DataFrame, column_types: dict) -> dict:
+def profile_dataset(df: pd.DataFrame, column_types: dict) -> dict:
     fallback = {
         "label": "unknown",
         "description": "Profiling unavailable",
@@ -107,17 +108,20 @@ def _profile_dataset(df: pd.DataFrame, column_types: dict) -> dict:
     columns_payload = []
     for col in list(df.columns)[:30]:
         dtype = column_types.get(col, str(df[col].dtype))
-        sample = [sanitize_str(v) for v in df[col].dropna().head(3).tolist()]
+        sample_vals = [sanitize_str(v) for v in df[col].dropna().head(5).tolist()]
         col_entry = {
             "name": sanitize_str(col),
             "dtype": dtype, 
-            "sample": sample
+            "sample": sample_vals,
+            "null_pct": round(df[col].isna().mean() * 100, 1),
         }
         if pd.api.types.is_numeric_dtype(df[col]):
             clean = df[col].dropna()
             if len(clean) > 0:
-                col_entry["min"] = round(float(clean.min()), 3)
-                col_entry["max"] = round(float(clean.max()), 3)
+                col_entry["min"]    = round(float(clean.min()), 3)
+                col_entry["max"]    = round(float(clean.max()), 3)
+                col_entry["median"] = round(float(clean.median()), 3)
+                col_entry["std"]    = round(float(clean.std()), 3)
         columns_payload.append(col_entry)
 
     payload = {
@@ -141,9 +145,10 @@ def _profile_dataset(df: pd.DataFrame, column_types: dict) -> dict:
     )
 
     try:
-        from groq import Groq
+        client = get_groq_client()
+        if not client:
+            return fallback
 
-        client = Groq(api_key=api_key)
         completion = client.chat.completions.create(
             model=os.getenv("GROQ_PROFILER_MODEL", os.getenv("GROQ_PLANNER_MODEL", "llama-3.3-70b-versatile")),
             messages=[
@@ -251,18 +256,9 @@ def architect_agent(state: AnalysisState) -> AnalysisState:
         logger.error("Column type detection failed: %s", e)
         state.column_types = {}
 
-    # ── Step 4: Profile dataset via LLM ────────────────────────────────────
-    try:
-        profile = _profile_dataset(clean_df, state.column_types)
-        state.stats_summary["dataset_profile"] = profile
-    except Exception as e:
-        logger.error("Dataset profiling failed: %s", e)
-        state.stats_summary["dataset_profile"] = {
-            "label": "unknown",
-            "description": "Profiling unavailable",
-            "domain": "general",
-        }
-
+    # ── Step 4: Profile dataset (MOVED TO GRAPH.PY PARALLEL PATH) ──────────
+    # Profiling is now called concurrently with the statistician in core/graph.py
+    
     state.completed_agents.append("architect")
     logger.info(
         "Architect complete. clean_df has %d rows, %d cols",

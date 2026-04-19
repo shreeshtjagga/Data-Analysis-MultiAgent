@@ -497,7 +497,8 @@ def build_chat_context_pack(stats: dict, insights: dict) -> dict:
                 data.get("most_common_count", 0)
                 / max(stats.get("row_count", 1), 1) * 100, 1
             ),
-            "top_5": data.get("top_5_values", {}),
+            "top_5":        data.get("top_5_values", {}),
+            "least_common": data.get("least_common"),
         }
 
     return {

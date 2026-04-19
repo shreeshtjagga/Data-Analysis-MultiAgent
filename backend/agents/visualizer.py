@@ -62,6 +62,7 @@ import plotly.graph_objects as go
 from ..core.state import AnalysisState
 from ..core.errors import add_pipeline_error
 from ..core.utils import truncate_stats_for_llm
+from ..core.llm_client import get_groq_client
 
 logger = logging.getLogger(__name__)
 
@@ -348,8 +349,9 @@ Respond ONLY with valid JSON — a list of up to {MAX_OUTPUT_CHARTS} objects:
 ]"""
 
     try:
-        from groq import Groq
-        client = Groq(api_key=api_key)
+        client = get_groq_client()
+        if not client:
+            return None
         # Use a smarter model for chart planning (set GROQ_PLANNER_MODEL in .env)
         planner_model = os.getenv("GROQ_PLANNER_MODEL",
                                    os.getenv("GROQ_MODEL", "llama-3.3-70b-versatile"))
@@ -1316,8 +1318,10 @@ Respond ONLY with valid JSON:
 "replacement" is ONLY required when decision is REPLACE. Omit it otherwise."""
 
     try:
-        from groq import Groq
-        client = Groq(api_key=api_key)
+        client = get_groq_client()
+        if not client:
+            return charts
+
         completion = client.chat.completions.create(
             model=planner_model,
             messages=[
