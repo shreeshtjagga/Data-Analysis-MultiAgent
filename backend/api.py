@@ -6,10 +6,11 @@ import logging
 import os
 import json
 from contextlib import asynccontextmanager
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Annotated
 
 import pandas as pd
+import orjson
 from fastapi import Depends, FastAPI, File, HTTPException, UploadFile, status, Request, Response, Query, BackgroundTasks
 from fastapi.responses import JSONResponse
 from fastapi.middleware.gzip import GZipMiddleware
@@ -17,6 +18,30 @@ import traceback
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from sqlalchemy.ext.asyncio import AsyncSession
+
+import re as _re
+
+_INJECTION_PATTERNS = [
+    r"ignore\s+(all\s+)?previous\s+instructions",
+    r"you\s+are\s+now\s+a",
+    r"act\s+as\s+(if\s+you\s+are\s+)?a",
+    r"disregard\s+(all\s+)?prior",
+    r"system\s*:\s*",
+    r"<\s*system\s*>",
+    r"<\s*/?inst\s*>",
+    r"\[INST\]",
+    r"###\s*instruction",
+    r"forget\s+(all\s+)?previous",
+    r"new\s+persona",
+    r"pretend\s+(you\s+are|to\s+be)",
+]
+_INJECTION_RE = _re.compile("|".join(_INJECTION_PATTERNS), _re.IGNORECASE)
+
+def sanitize_chat_input(text: str) -> str:
+    """Strip prompt injection patterns and null bytes from user input."""
+    text = text.replace("\x00", "").replace("\r", " ")
+    text = _INJECTION_RE.sub("[removed]", text)
+    return text.strip()
 
 from .core import cache as redis_cache
 from .analysis_history import (
@@ -46,7 +71,7 @@ from .core.constants import APP_VERSION, PIPELINE_VERSION
 from .core.graph import run_pipeline
 from .core.logging_config import configure_logging
 from .core.upload_parsing import read_csv_with_fallback, validate_upload_magic
-from .core.utils import sanitize_floats, truncate_stats_for_llm
+from .core.utils import sanitize_floats, truncate_stats_for_llm, build_chat_context_pack
 from .core.data_agent import run_data_query
 from .agents.plot_generator import generate_on_demand_chart, suggest_novel_chart
 from .db import get_db, init_db
@@ -80,7 +105,7 @@ MAX_ANALYZE_ROWS = int(os.getenv("MAX_ANALYZE_ROWS", "15000")) # Lowered to 15K 
 MAX_ANALYZE_COLUMNS = int(os.getenv("MAX_ANALYZE_COLUMNS", "150"))
 MAX_EXCEL_SHEETS = int(os.getenv("MAX_EXCEL_SHEETS", "5"))
 MAX_QUESTION_CHARS = int(os.getenv("CHAT_MAX_QUESTION_CHARS", "1200"))
-MAX_CONTEXT_BYTES = int(os.getenv("CHAT_MAX_CONTEXT_BYTES", str(2 * 1024 * 1024)))  # 2 MB context limit
+MAX_CONTEXT_BYTES = int(os.getenv("CHAT_MAX_CONTEXT_BYTES", str(4 * 1024 * 1024)))  # Increased to 4 MB to handle long histories
 READ_CHUNK_BYTES = 1024 * 1024
 CHAT_RATE_LIMIT = int(os.getenv("CHAT_RATE_LIMIT", "10"))
 CHAT_RATE_WINDOW = int(os.getenv("CHAT_RATE_WINDOW_SECONDS", "60"))
@@ -175,10 +200,10 @@ async def add_security_headers(request: Request, call_next):
 
 @app.exception_handler(Exception)
 async def catch_all_exception_handler(request: Request, exc: Exception):
-    error_trace = "".join(traceback.format_exception(type(exc), exc, exc.__traceback__))
-    logger.error(f"Unhandled error: {error_trace}")
+    logger.error("Unhandled error on %s %s", request.method, request.url.path, exc_info=exc)
     
     if os.getenv("APP_ENV", "production") == "development":
+        error_trace = "".join(traceback.format_exception(type(exc), exc, exc.__traceback__))
         return JSONResponse(status_code=500, content={"detail": str(exc), "trace": error_trace})
         
     return JSONResponse(status_code=500, content={"detail": "Internal Server Error"})
@@ -207,7 +232,7 @@ async def check_ip_rate_limit(request: Request):
     key = f"ratelimit:ip:{client_ip}"
     try:
         count = await redis_cache.increment_with_ttl(key, 60)
-        if count > 5:
+        if count > 20:
             raise HTTPException(status_code=429, detail="Too many requests from this IP. Please try again in a minute.")
     except Exception as exc:
         if isinstance(exc, HTTPException):
@@ -224,6 +249,7 @@ async def check_user_rate_limit(user_id: int = Depends(get_current_user_id)):
         if isinstance(exc, HTTPException):
             raise exc
         logger.warning(f"Rate limiting failed for {key}: {exc}")
+    return user_id
 
 
 
@@ -472,13 +498,44 @@ def persist_full_data_backend(df: pd.DataFrame, file_hash: str):
         logger.info("Background storage: Saved full data to %s", storage_path)
     except Exception as exc:
         logger.warning("Background storage failed for %s: %s", file_hash, exc)
+    finally:
+        # Only trigger cleanup when we actually modified the filesystem/storage
+        cleanup_old_parquet_files()
 
 
-@app.post("/analyze", tags=["analysis"], dependencies=[Depends(check_user_rate_limit)])
+def cleanup_old_parquet_files(retention_days: int = 3):
+    """Delete stale parquet files from backend storage to limit disk growth."""
+    try:
+        os.makedirs(_PARQUET_STORAGE_DIR, exist_ok=True)
+        cutoff = datetime.now() - timedelta(days=max(0, retention_days))
+
+        deleted = 0
+        for name in os.listdir(_PARQUET_STORAGE_DIR):
+            if not name.lower().endswith(".parquet"):
+                continue
+
+            path = os.path.join(_PARQUET_STORAGE_DIR, name)
+            try:
+                if not os.path.isfile(path):
+                    continue
+                modified_at = datetime.fromtimestamp(os.path.getmtime(path))
+                if modified_at < cutoff:
+                    os.remove(path)
+                    deleted += 1
+            except Exception as file_exc:
+                logger.warning("Parquet cleanup skipped %s: %s", path, file_exc)
+
+        if deleted:
+            logger.info("Parquet cleanup removed %d stale file(s)", deleted)
+    except Exception as exc:
+        logger.warning("Parquet cleanup failed: %s", exc)
+
+
+@app.post("/analyze", tags=["analysis"])
 async def analyze(
     background_tasks: BackgroundTasks,
     file: UploadFile = File(...),
-    user_id: int = Depends(get_current_user_id),
+    user_id: int = Depends(check_user_rate_limit), # check_user_rate_limit now returns user_id
     db: AsyncSession = Depends(get_db),
 ):
 
@@ -603,17 +660,28 @@ async def analyze(
     state = await asyncio.to_thread(run_pipeline, df)
 
     # ── Full Data Persistence (Background) ───────────────────────────────────
+    SYNC_PARQUET_THRESHOLD_ROWS = 5000
+
     if getattr(state, "clean_df", None) is not None:
-        background_tasks.add_task(persist_full_data_backend, state.clean_df.copy(), file_hash)
+        df_to_save = state.clean_df.copy()
+        if len(df_to_save) <= SYNC_PARQUET_THRESHOLD_ROWS:
+            # Small file — save synchronously so chat works immediately
+            persist_full_data_backend(df_to_save, file_hash)
+        else:
+            # Large file — background is fine, user won't chat instantly
+            background_tasks.add_task(persist_full_data_backend, df_to_save, file_hash)
+        background_tasks.add_task(cleanup_old_parquet_files, 3)
 
     # ── Strip full DataFrames BEFORE model_dump to prevent serialising
     # 30k rows as Python dicts (≈500 MB RAM spike). ───────────────────────────
+    CHART_PREVIEW_ROWS = int(os.getenv("CHART_PREVIEW_ROWS", "500"))
+
     preview_raw = json.loads(
-        state.raw_df.head(100).to_json(orient="records")
+        state.raw_df.head(CHART_PREVIEW_ROWS).to_json(orient="records")
     ) if getattr(state, "raw_df", None) is not None else []
     
     preview_clean = json.loads(
-        state.clean_df.head(100).to_json(orient="records")
+        state.clean_df.head(CHART_PREVIEW_ROWS).to_json(orient="records")
     ) if getattr(state, "clean_df", None) is not None else []
     
     state.raw_df   = None
@@ -664,6 +732,10 @@ async def analyze(
     else:
         result["analysis_id"] = save_result.get("analysis_id")
 
+    result["chat_context_pack"] = build_chat_context_pack(
+        result.get("stats_summary", {}),
+        result.get("insights", {}),
+    )
     result["charts"] = serialized_charts
     result["partial"] = False
     if state.errors:
@@ -671,11 +743,7 @@ async def analyze(
 
     # orjson serialises NaN/Inf → null natively and is ~10x faster than
     # the manual recursive sanitize_floats walk on large result dicts.
-    try:
-        import orjson
-        safe_result = orjson.loads(orjson.dumps(result, option=orjson.OPT_NON_STR_KEYS))
-    except Exception:
-        safe_result = sanitize_floats(result)   # fallback if orjson not available
+    safe_result = orjson.loads(orjson.dumps(result, option=orjson.OPT_NON_STR_KEYS))
 
     return {"from_cache": False, "pipeline_version": PIPELINE_VERSION, **safe_result}
 
@@ -770,37 +838,44 @@ _TYPE_DISPLAY = {
 
 def _classify_chat_intent(question: str) -> str:
     """
-    Returns one of: "generate_chart" | "explain_chart" | "data_question"
+    Returns: "generate_chart" | "explain_chart" | "data_question"
 
-    Logic:
-    - explain_chart: user mentions a chart type AND uses an explain word
-    - generate_chart: user uses any generation keyword OR asks about possible plots
-    - data_question: everything else
+    Negative guards fire first — explain phrases override any chart noun.
+    Generate triggers only fire when the sentence is explicitly asking for new output.
     """
     q = question.lower().strip()
 
-    # Explain intent takes priority when they mention a chart type + explain word
-    has_explain = any(kw in q for kw in _PLOT_EXPLAIN_KEYWORDS)
-    mentions_chart_word = any(w in q for w in [
-        "chart", "plot", "graph", "scatter", "histogram", "bar", "heatmap",
-        "line", "box", "violin", "donut", "pie", "visuali"
-    ])
-
-    if has_explain and mentions_chart_word:
+    _EXPLAIN_OVERRIDES = (
+        "what does", "what do", "what is shown", "tell me about",
+        "explain", "interpret", "what can i", "why is", "why are",
+        "summarise", "summarize", "describe", "what patterns",
+        "what trends", "insight from", "insights from",
+        "what does the", "what does this", "what does that",
+        "analyse", "analyze", "understand", "what am i seeing",
+    )
+    if any(p in q for p in _EXPLAIN_OVERRIDES):
         return "explain_chart"
 
-    # Generate intent: any generation keyword present
-    if any(kw in q for kw in _PLOT_GENERATE_KEYWORDS):
+    _GENERATE_TRIGGERS = (
+        "generate", "create", "make", "build", "draw",
+        "show me a new", "give me a", "another chart", "another plot",
+        "one more", "new chart", "new plot", "different chart",
+        "can you plot", "can you chart", "can you make",
+        "plot a", "chart a", "visualize", "visualise",
+        "show some", "show a ", "give some",
+    )
+    if any(t in q for t in _GENERATE_TRIGGERS):
         return "generate_chart"
 
-    # Also catch "plots" / "charts" as a standalone word with intent verbs
-    # e.g. "give some plots that are possible other than existing"
-    has_plot_noun = "plot" in q.split() or "chart" in q.split() or "plots" in q.split() or "charts" in q.split()
-    has_action = any(w in q for w in ["give", "show", "get", "list", "what", "any", "more", "other", "possible", "available"])
-    if has_plot_noun and has_action:
-        return "generate_chart"
+    # Bare chart-type nouns without a generate verb → explain intent
+    _CHART_NOUNS = (
+        "the scatter", "the histogram", "the bar chart", "the heatmap",
+        "the line chart", "the box plot", "the violin", "the donut",
+        "this chart", "this plot", "this graph", "that chart",
+    )
+    if any(n in q for n in _CHART_NOUNS):
+        return "explain_chart"
 
-    # Pure explain without chart mention → data question
     return "data_question"
 
 
@@ -826,6 +901,7 @@ async def chat_with_analysis(
         logger.warning("Redis rate limiter unavailable for user %s: %s", user_id, exc)
 
     question = body.question.strip()
+    question = sanitize_chat_input(question)
     context = body.context or {}
 
     if not question:
@@ -844,12 +920,27 @@ async def chat_with_analysis(
     charts_data = context.get("charts", {})
     file_hash = context.get("file_hash")
 
-    df_records = (
-        context.get("clean_df")
-        or context.get("cleanDf")
-        or context.get("clean_data")
-        or []
-    )
+    df_records = []
+    # If we have a file_hash, try to load the FULL dataset from Parquet storage
+    # for on-demand chart generation. Preview-only charts (500 rows) are inaccurate for large files.
+    if file_hash:
+        try:
+            storage_path = os.path.join(_PARQUET_STORAGE_DIR, f"{file_hash}.parquet")
+            if os.path.exists(storage_path):
+                df_full = pd.read_parquet(storage_path)
+                df_records = df_full.to_dict("records")
+                logger.info("Chat: Loaded %d rows from Parquet for on-demand chart gen", len(df_full))
+        except Exception as load_exc:
+            logger.warning("Chat: Failed to load full dataset from storage: %s", load_exc)
+
+    if not df_records:
+        df_records = (
+            context.get("clean_df")
+            or context.get("cleanDf")
+            or context.get("clean_data")
+            or []
+        )
+    
     if not isinstance(df_records, list):
         df_records = []
 
@@ -883,7 +974,7 @@ async def chat_with_analysis(
             reason = novel.get("reason", "All useful column combinations are already visualized.")
             return {
                 "answer": (
-                    f"I've reviewed all possible chart combinations for **{file_name}**. "
+                    f"I've reviewed all possible chart combinations for {file_name}. "
                     f"{reason}"
                 ),
                 "data_queried": False,
@@ -921,9 +1012,9 @@ async def chat_with_analysis(
         y_col = spec.get("y") or ""
 
         if x_col and y_col:
-            col_desc = f" of **{x_col}** vs **{y_col}**"
+            col_desc = f" of {x_col} vs {y_col}"
         elif x_col:
-            col_desc = f" of **{x_col}**"
+            col_desc = f" of {x_col}"
         else:
             col_desc = ""
 
@@ -1058,7 +1149,7 @@ async def chat_with_analysis(
         if matched_key:
             return {
                 "answer": (
-                    f"The **{matched_key}** chart shows the relationship between the "
+                    f"The {matched_key} chart shows the relationship between the "
                     f"dataset columns it visualizes. Look for patterns, clusters, or "
                     f"outliers in the data points to draw insights."
                 ),
@@ -1108,11 +1199,12 @@ async def chat_with_analysis(
                         else:
                             details.append("Pie/Donut chart")
                     elif ttype in ("bar", "scatter", "violin", "box"):
-                        xv = (trace.get("x") or [])[:8]
-                        yv = (trace.get("y") or [])[:8]
+                        # Sample more values (16 instead of 8) for better LLM grounding
+                        xv = (trace.get("x") or [])[:16]
+                        yv = (trace.get("y") or [])[:16]
                         details.append(f"{ttype.capitalize()}: X={xv}, Y={yv}")
                     elif ttype == "histogram":
-                        xv = (trace.get("x") or [])[:8]
+                        xv = (trace.get("x") or [])[:24]
                         details.append(f"Histogram of: {xv}")
                     else:
                         details.append(f"{ttype} chart")
@@ -1159,16 +1251,22 @@ async def chat_with_analysis(
         "6. If truly no data available, say: 'I couldn't find that in the dataset.'\n"
         "7. If the user is chatty (hi, thanks), be polite but don't spontaneously analyze data.\n"
         f"8. Reference charts using exactly `[CHART: key]` with only these keys: {exact_chart_keys}.\n"
-        "9. Use previous messages to maintain continuity. Resolve pronouns from conversation history."
+        "9. Use previous messages to maintain continuity. Resolve pronouns from conversation history. Do NOT use markdown bolding like **text** in your response."
     )
 
+    chat_pack  = context.get("chat_context_pack") or {}
+
     data_context = (
-        f"Context for file '{file_name}':\n"
-        f"- Profile: {profile.get('label', 'unknown')} ({profile.get('domain', 'general')})\n"
-        f"- Quality: {quality}\n"
-        f"- Charts Summary: {charts_summary}\n"
-        f"- Stats: {slim_stats}\n"
-        f"- Insights: {insights}\n"
+        f"Dataset: {file_name} | "
+        f"{chat_pack.get('row_count') or stats.get('row_count')} rows, "
+        f"{chat_pack.get('column_count') or stats.get('column_count')} columns\n"
+        f"Profile: {chat_pack.get('profile') or slim_stats.get('dataset_profile', {})}\n"
+        f"Quality: {chat_pack.get('quality') or slim_stats.get('data_quality', {})}\n"
+        f"Column details:\n"
+        f"{json.dumps(chat_pack.get('columns', {}), default=str)[:3000]}\n"
+        f"Top correlations: {chat_pack.get('correlations') or slim_stats.get('strong_correlations', [])}\n"
+        f"Key findings: {chat_pack.get('key_findings') or insights.get('findings', [])[:3]}\n"
+        f"Charts on dashboard: {list(charts_data.keys()) if isinstance(charts_data, dict) else []}\n"
     )
 
     history_msgs = []
@@ -1214,9 +1312,8 @@ async def chat_with_analysis(
                                  "him", "hers", "theirs", "this person", "that person"}
                     q_tokens = set(question.lower().split())
                     has_pronoun = bool(q_tokens & _PRONOUNS)
-                    resolved_subject = None
-                    if has_pronoun and body.history:
-                        resolved_subject = _extract_recent_entity(body.history)
+                    resolved_subject = _extract_recent_entity(body.history) if body.history else None
+                    
                     planner_question = question
                     if resolved_subject and has_pronoun:
                         planner_question = f"{question} [Note: pronoun refers to '{resolved_subject}']"
@@ -1301,7 +1398,7 @@ async def chat_with_analysis(
                 except Exception as e:
                     logger.warning("Intent pass failed: %s", e)
 
-            if data_result:
+            if data_result and "error" not in data_result:
                 subject_note = f" (subject: {resolved_subject})" if resolved_subject else ""
                 messages.append({
                     "role": "system",
@@ -1310,6 +1407,9 @@ async def chat_with_analysis(
                         "IMPORTANT: Use these exact values to answer. Do NOT say 'I don't have that data'."
                     )
                 })
+            elif data_result:
+                # If there's an error, don't label it as authoritative data
+                logger.warning("Omitting query error from system prompt to avoid hallucination: %s", data_result.get("error"))
 
             synthesis_model = os.getenv("GROQ_SYNTHESIS_MODEL", os.getenv("GROQ_MODEL", "llama-3.3-70b-versatile"))
             completion = client.chat.completions.create(
