@@ -9,6 +9,7 @@ import pandas as pd
 from ..core.state import AnalysisState
 from ..core.errors import add_pipeline_error
 from ..core.utils import clean_dataframe, detect_column_types
+from ..core.llm_client import get_groq_client
 
 logger = logging.getLogger(__name__)
 
@@ -90,7 +91,7 @@ def _classify_columns(df: pd.DataFrame) -> dict:
     return {"excluded": excluded, "kept": kept}
 
 
-def _profile_dataset(df: pd.DataFrame, column_types: dict) -> dict:
+def profile_dataset(df: pd.DataFrame, column_types: dict) -> dict:
     fallback = {
         "label": "unknown",
         "description": "Profiling unavailable",
@@ -100,11 +101,28 @@ def _profile_dataset(df: pd.DataFrame, column_types: dict) -> dict:
     if not api_key:
         return fallback
 
+    def sanitize_str(s: str) -> str:
+        # Prevent prompt injection and handle null bytes
+        return str(s).replace("\x00", "").replace("ignore previous instructions", "[clean]").strip()[:100]
+
     columns_payload = []
     for col in list(df.columns)[:30]:
         dtype = column_types.get(col, str(df[col].dtype))
-        sample = [str(v) for v in df[col].dropna().head(3).tolist()]
-        columns_payload.append({"name": col, "dtype": dtype, "sample": sample})
+        sample_vals = [sanitize_str(v) for v in df[col].dropna().head(5).tolist()]
+        col_entry = {
+            "name": sanitize_str(col),
+            "dtype": dtype, 
+            "sample": sample_vals,
+            "null_pct": round(df[col].isna().mean() * 100, 1),
+        }
+        if pd.api.types.is_numeric_dtype(df[col]):
+            clean = df[col].dropna()
+            if len(clean) > 0:
+                col_entry["min"]    = round(float(clean.min()), 3)
+                col_entry["max"]    = round(float(clean.max()), 3)
+                col_entry["median"] = round(float(clean.median()), 3)
+                col_entry["std"]    = round(float(clean.std()), 3)
+        columns_payload.append(col_entry)
 
     payload = {
         "row_count": int(len(df)),
@@ -119,17 +137,20 @@ def _profile_dataset(df: pd.DataFrame, column_types: dict) -> dict:
         "Dataset payload (JSON):\n"
         f"<dataset_json>{payload_json}</dataset_json>\n\n"
         "Respond with ONLY valid JSON (no markdown, no explanation):\n"
-        '{"label": "<short label, e.g. Sales Data, Medical Records, Survey Responses>",'
+        '{"label": "<short label, e.g. Sales Data, Medical Records>",'
         ' "description": "<one sentence describing the contents>",'
-        ' "domain": "<domain: finance, healthcare, retail, education, technology, etc.>"}'
+        ' "domain": "<finance|healthcare|retail|education|technology|sports|logistics|other>",'
+        ' "key_entity_columns": ["<column name that identifies the primary entity, e.g. country, product, player, patient>"],'
+        ' "key_metric_columns": ["<top 2-3 numeric column names most worth analysing>"]}'
     )
 
     try:
-        from groq import Groq
+        client = get_groq_client()
+        if not client:
+            return fallback
 
-        client = Groq(api_key=api_key)
         completion = client.chat.completions.create(
-            model=os.getenv("GROQ_MODEL", "llama-3.1-8b-instant"),
+            model=os.getenv("GROQ_PROFILER_MODEL", os.getenv("GROQ_PLANNER_MODEL", "llama-3.3-70b-versatile")),
             messages=[
                 {
                     "role": "system",
@@ -138,7 +159,7 @@ def _profile_dataset(df: pd.DataFrame, column_types: dict) -> dict:
                 {"role": "user", "content": prompt},
             ],
             temperature=0.1,
-            max_tokens=150,
+            max_tokens=300,
         )
         raw = (completion.choices[0].message.content or "").strip()
         if raw.startswith("```"):
@@ -182,6 +203,23 @@ def architect_agent(state: AnalysisState) -> AnalysisState:
         clean_df, impute_logs = clean_dataframe(raw_df.copy())
         if impute_logs:
             state.stats_summary["imputations"] = impute_logs
+            
+        # Detect columns that were converted from percentage strings (e.g. "85%" → 0.85)
+        # Store so chart builders can format axes correctly
+        pct_cols = [
+            log["column"] for log in (impute_logs or [])
+            # clean_dataframe logs "Converted percentage column" for these
+        ] if impute_logs else []
+        # Also detect by value range: 0–1 float columns with "rate","pct","percent" in name
+        for col in clean_df.select_dtypes(include=["float64", "float32"]).columns:
+            col_lower = col.lower()
+            if any(kw in col_lower for kw in ("rate", "pct", "percent", "ratio", "share")):
+                clean = clean_df[col].dropna()
+                if len(clean) > 0 and float(clean.min()) >= 0 and float(clean.max()) <= 1.05:
+                    if col not in pct_cols:
+                        pct_cols.append(col)
+        state.stats_summary["percentage_columns"] = pct_cols
+        
         logger.info("Data cleaned: %d rows remaining", len(clean_df))
     except Exception as e:
         logger.error("clean_dataframe failed (%s) — falling back to raw data", e)
@@ -218,18 +256,9 @@ def architect_agent(state: AnalysisState) -> AnalysisState:
         logger.error("Column type detection failed: %s", e)
         state.column_types = {}
 
-    # ── Step 4: Profile dataset via LLM ────────────────────────────────────
-    try:
-        profile = _profile_dataset(clean_df, state.column_types)
-        state.stats_summary["dataset_profile"] = profile
-    except Exception as e:
-        logger.error("Dataset profiling failed: %s", e)
-        state.stats_summary["dataset_profile"] = {
-            "label": "unknown",
-            "description": "Profiling unavailable",
-            "domain": "general",
-        }
-
+    # ── Step 4: Profile dataset (MOVED TO GRAPH.PY PARALLEL PATH) ──────────
+    # Profiling is now called concurrently with the statistician in core/graph.py
+    
     state.completed_agents.append("architect")
     logger.info(
         "Architect complete. clean_df has %d rows, %d cols",

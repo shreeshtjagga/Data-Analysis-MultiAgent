@@ -1,8 +1,8 @@
 import { useEffect, useState } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 import { GoogleLogin } from '@react-oauth/google';
-import { apiLogin, apiRegister, apiGoogleLogin, apiForgotPassword, apiResetPassword } from "./api.js";
-import ParticleBackground from "./ParticleBackground.jsx";
+import { apiLogin, apiRegister, apiGoogleLogin, apiForgotPassword, apiResetPassword } from "../api.js";
+import ParticleBackground from "../components/ParticleBackground.jsx";
 
 const GOOGLE_CLIENT_ID = import.meta.env.VITE_GOOGLE_CLIENT_ID;
 
@@ -368,6 +368,9 @@ export default function Login({ onLogin }) {
     if (routeTab !== tab) {
       setTab(routeTab);
     }
+    // deriveTabFromPath is defined in the same render scope and only depends on
+    // resetToken (a stable URLSearchParams value) — safe to omit from deps.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [location.pathname, tab]);
 
   const goToLogin = () => {

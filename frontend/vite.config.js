@@ -45,16 +45,7 @@ export default defineConfig({
           if (id.includes("node_modules/plotly")) {
             return "plotly";
           }
-          if (
-            id.includes("node_modules/three") ||
-            id.includes("node_modules/@react-three")
-          ) {
-            return "three";
-          }
-          if (
-            id.includes("node_modules/@react-oauth") ||
-            id.includes("node_modules/jwt-decode")
-          ) {
+          if (id.includes("node_modules/@react-oauth")) {
             return "auth";
           }
           if (id.includes("node_modules/")) {

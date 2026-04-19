@@ -5,25 +5,67 @@ from typing import Optional
 
 from ..core.state import AnalysisState
 from ..core.errors import add_pipeline_error
-from ..core.utils import truncate_stats_for_llm
+from ..core.utils import truncate_stats_for_llm, sanitize_for_json
+from ..core.llm_client import get_groq_client
 
 logger = logging.getLogger(__name__)
 
 
-def _build_llm_prompt(stats: dict) -> str:
-    payload_json = json.dumps(stats, ensure_ascii=True)
+def _build_column_narrative(stats: dict) -> str:
+    """Build a flat, readable column summary for the LLM to reason about directly."""
+    import pandas as pd
+    lines = []
+    numeric = stats.get("numeric_columns", {})
+    for col, d in list(numeric.items())[:12]:
+        skew_val = d.get("skewness", 0)
+        if skew_val is None or pd.isna(skew_val):
+            skew_val = 0
+            
+        if skew_val > 1:
+            skew_desc = "right-skewed"
+        elif skew_val < -1:
+            skew_desc = "left-skewed"
+        else:
+            skew_desc = "normal-ish"
+        lines.append(
+            f"  {col}: mean={d.get('mean', 0):.2f}, "
+            f"range=[{d.get('min', 0):.2f}\u2013{d.get('max', 0):.2f}], "
+            f"std={d.get('std', 0):.2f}, distribution={skew_desc}"
+        )
+    categorical = stats.get("categorical_columns", {})
+    for col, d in list(categorical.items())[:8]:
+        lines.append(
+            f"  {col}: {d.get('unique_values', 0)} categories, "
+            f"top='{d.get('most_common', '')}'")
+    return "\n".join(lines)
+
+
+def _build_llm_prompt(slim_stats: dict) -> str:
+    """Builds the final prompt for the insights LLM using truncated (slim) stats."""
+    profile = slim_stats.get("dataset_profile") or {}
+    domain = profile.get("domain", "general")
+    label = profile.get("label", "dataset")
+    
+    # We use slim_stats here to ensure narrative doesn't overflow
+    col_narrative = _build_column_narrative(slim_stats)
+    clean_stats = sanitize_for_json(slim_stats)
+    payload_json = json.dumps(clean_stats, ensure_ascii=True)
+    
     return "\n".join([
-        "You are an Expert Data Analyst. Respond in plain, simple English.",
-        "Treat the payload as the truth about a real-world domain.",
+        f"You are an Expert Data Analyst specialising in {domain} data.",
+        f"Dataset: {label}",
         "",
-        "Dataset payload (JSON):",
+        "Column summary:",
+        col_narrative,
+        "",
+        "Full stats (JSON) [TRUNCATED FOR CONTEXT]:",
         f"<analysis_json>{payload_json}</analysis_json>",
         "",
         "Respond with ONLY valid JSON (no markdown, no explanation):",
         "{",
         '  "headline": "One powerful conclusion drawn from the data in one sentence.",',
         '  "data_info": ["3-5 factual statements about WHAT this dataset is: its structure, columns, types, size, completeness, and what domain/subject it covers. Plain language, no analysis."],',
-        '  "findings": ["5-8 conclusions and patterns DRAWN from the data: correlations, distributions, dominant categories, outlier patterns, trends. Each must be a specific, number-backed observation in plain language."]',
+        '  "findings": ["5-8 conclusions. EACH finding MUST cite at least one specific numeric value, percentage, or count from the data. No vague statements like \"values vary widely\" — every finding must have a number."]',
         "}",
     ])
 
@@ -37,38 +79,57 @@ def _llm_insights(stats: dict) -> Optional[dict]:
 
     prompt = _build_llm_prompt(stats)
 
-    try:
-        from groq import Groq
+    # Extract domain/label for the system prompt before the API call
+    domain = (stats.get("dataset_profile") or {}).get("domain", "general")
+    label  = (stats.get("dataset_profile") or {}).get("label", "dataset")
 
-        client = Groq(api_key=api_key)
+    try:
+        client = get_groq_client()
+        if not client:
+            return None
+
         completion = client.chat.completions.create(
             model=os.getenv("GROQ_MODEL", "llama-3.1-8b-instant"),
             messages=[
                 {
                     "role": "system",
                     "content": (
-                        "You are a senior data analyst. "
+                        f"You are a senior data analyst specialising in {domain} data. "
+                        f"The dataset is: {label}. "
                         "Always respond with valid JSON only. No markdown fences."
                     ),
                 },
                 {"role": "user", "content": prompt},
             ],
-            temperature=0.3,
-            max_tokens=800,
+            temperature=0.1,
+            max_tokens=1200,
         )
         raw = (completion.choices[0].message.content or "").strip()
         if raw.startswith("```"):
             raw = raw.split("\n", 1)[-1].rsplit("```", 1)[0].strip()
+        
         result = json.loads(raw)
+
+        # Schema validation — if keys are wrong, fall back to rule-based
+        required = {"headline", "findings", "data_info"}
+        if not isinstance(result, dict) or not required.issubset(result.keys()):
+            logger.warning("LLM insights returned unexpected schema: %s", list(result.keys()) if isinstance(result, dict) else type(result))
+            return None  # triggers rule-based fallback
+
+        if not isinstance(result.get("findings"), list) or len(result["findings"]) == 0:
+            logger.warning("LLM insights returned empty findings list")
+            return None
+
         logger.info(
-            "LLM insights generated: %d findings, %d recommendations",
+            "LLM insights generated: %d findings, %d data_info",
             len(result.get("findings", [])),
-            len(result.get("recommendations", [])),
+            len(result.get("data_info", [])),
         )
         return result
     except Exception as exc:
         logger.warning("LLM insights failed, falling back to rules: %s", exc)
         return None
+
 
 
 def _rule_based_insights(stats: dict) -> dict:

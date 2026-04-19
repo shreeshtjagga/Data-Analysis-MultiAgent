@@ -3,7 +3,7 @@ import signal
 import concurrent.futures
 from .state import AnalysisState
 from .constants import PIPELINE_VERSION
-from ..agents.architect import architect_agent
+from ..agents.architect import architect_agent, profile_dataset
 from ..agents.statistician import statistician_agent
 from ..agents.visualizer import visualizer_agent
 from ..agents.insights import insights_agent
@@ -41,8 +41,9 @@ def _run_parallel_agents(state: AnalysisState) -> AnalysisState:
     them on separate state copies and merge the results afterwards.
     """
     # Give each agent its own isolated copy of the state so writes don't race.
-    viz_state_in  = state.model_copy(deep=False)
-    ins_state_in  = state.model_copy(deep=False)
+    # We use deep=True to ensure nested lists (like .errors) are not shared.
+    viz_state_in  = state.model_copy(deep=True)
+    ins_state_in  = state.model_copy(deep=True)
 
     viz_state_out: AnalysisState | None = None
     ins_state_out: AnalysisState | None = None
@@ -101,33 +102,66 @@ def run_pipeline(df) -> AnalysisState:
     state = AnalysisState(raw_df=df)
     logger.info("Starting analysis pipeline (version=%s)", PIPELINE_VERSION)
 
-    # ── Sequential agents: each depends on the previous ───────────────────────
-    sequential_agents = [
-        ("architect",    architect_agent),
-        ("statistician", statistician_agent),
-    ]
+    # ── PHASE 1: Architect ──────────────────────────────────────────────────
+    logger.info("Running agent: architect")
+    state.current_agent = "architect"
+    try:
+        state = _run_agent_with_timeout(architect_agent, state, "architect")
+    except Exception as exc:
+        logger.exception("Architect failed: %s", exc)
+        state.errors.append(f"Architect failed: {exc}")
+        state.partial = True
+        return state
 
-    for name, agent_fn in sequential_agents:
-        logger.info("Running agent: %s", name)
-        state.current_agent = name
-        error_count_before = len(state.errors)
+    # Usable Data Guard: If architect excludes everything, stop early.
+    excluded = (state.stats_summary or {}).get("excluded_columns", [])
+    clean_cols = [c for c in (state.clean_df.columns if state.clean_df is not None else [])
+                  if c not in [e["column"] for e in excluded]]
+    if len(clean_cols) == 0:
+        msg = "No usable columns found after initial classification."
+        logger.error(msg)
+        state.errors.append({"code": "NO_USABLE_COLUMNS", "agent": "orchestrator", "message": msg})
+        state.partial = True
+        return state
+
+    # ── PHASE 1.5: Run Statistician and Profiler in Parallel ────────
+    logger.info("Running Statistician and Dataset Profiler concurrently...")
+    with concurrent.futures.ThreadPoolExecutor(max_workers=2) as pool:
+        # Give statistician its own state copy (standard pattern here)
+        stat_state_in = state.model_copy(deep=True)
+        
+        stat_future = pool.submit(_run_agent_with_timeout, statistician_agent, stat_state_in, "statistician")
+        prof_future = pool.submit(profile_dataset, state.clean_df, state.column_types)
+        
+        try:
+            stat_state_out = stat_future.result(timeout=_AGENT_TIMEOUT_SECONDS + 5)
+            # Merge statistician results
+            state.stats_summary = stat_state_out.stats_summary
+            state.errors.extend(stat_state_out.errors)
+            state.completed_agents.extend(
+                a for a in stat_state_out.completed_agents if a not in state.completed_agents
+            )
+            if stat_state_out.partial:
+                state.partial = True
+        except Exception as exc:
+            logger.exception("Statistician failed in parallel block: %s", exc)
+            state.errors.append(f"Statistician failed: {exc}")
+            state.partial = True
 
         try:
-            state = _run_agent_with_timeout(agent_fn, state, name)
-        except TimeoutError as exc:
-            msg = str(exc)
-            logger.error(msg)
-            state.errors.append(msg)
-            state.partial = True
+            profile_res = prof_future.result(timeout=_AGENT_TIMEOUT_SECONDS + 5)
+            if state.stats_summary is None:
+                state.stats_summary = {}
+            state.stats_summary["dataset_profile"] = profile_res
         except Exception as exc:
-            msg = f"Agent '{name}' raised an unexpected error: {exc}"
-            logger.exception(msg)
-            state.errors.append(msg)
-            state.partial = True
-
-        if len(state.errors) > error_count_before:
-            state.partial = True
-            logger.warning("Agent '%s' encountered an error but continuing pipeline", name)
+            logger.exception("Dataset profiling failed in parallel block: %s", exc)
+            if state.stats_summary is None:
+                state.stats_summary = {}
+            state.stats_summary["dataset_profile"] = {
+                "label": "unknown",
+                "description": "Profiling unavailable",
+                "domain": "general",
+            }
 
     # ── Parallel agents: visualizer + insights run concurrently ───────────────
     logger.info(

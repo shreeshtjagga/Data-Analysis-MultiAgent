@@ -328,7 +328,7 @@ export default function GlobeCanvas({ size = 390 }) {
       state.rafId = requestAnimationFrame(animate);
     }
 
-    const onPointerDown = (e) => {
+    const _onPointerDown = (e) => {
       state.dragging = true;
       state.moved = false;
       state.pointerId = e.pointerId;
@@ -341,7 +341,7 @@ export default function GlobeCanvas({ size = 390 }) {
       canvas.style.cursor = "grabbing";
     };
 
-    const onPointerMove = (e) => {
+    const _onPointerMove = (e) => {
       if (!state.dragging || state.pointerId !== e.pointerId) return;
       const dx = e.clientX - state.lastX;
       const dy = e.clientY - state.lastY;
@@ -357,7 +357,7 @@ export default function GlobeCanvas({ size = 390 }) {
       state.lastY = e.clientY;
     };
 
-    const onPointerUp = (e) => {
+    const _onPointerUp = (e) => {
       if (state.pointerId !== e.pointerId) return;
 
       if (!state.moved) {
@@ -377,7 +377,7 @@ export default function GlobeCanvas({ size = 390 }) {
       canvas.releasePointerCapture(e.pointerId);
     };
 
-    const onPointerCancel = (e) => {
+    const _onPointerCancel = (e) => {
       if (state.pointerId !== e.pointerId) return;
       state.dragging = false;
       state.pointerId = null;
@@ -385,7 +385,7 @@ export default function GlobeCanvas({ size = 390 }) {
       canvas.releasePointerCapture(e.pointerId);
     };
 
-    const onWheel = (e) => {
+    const _onWheel = (e) => {
       e.preventDefault();
       e.stopPropagation();
     };

@@ -77,7 +77,7 @@ def _looks_like_salary_range(series: pd.Series) -> bool:
     if len(sample) == 0:
         return False
     pattern = re.compile(r"^\d+k?\s*[-–+]?\s*\d*k?$", re.IGNORECASE)
-    matched = sample.str.match(r"^\d+k?\s*[\-\–\+]?\s*\d*k?$", na=False)
+    matched = sample.str.match(r"^\d+k?\s*[-–+]?\s*\d*k?$", na=False)
     return matched.sum() >= len(sample) * 0.5
 
 
@@ -371,9 +371,17 @@ def truncate_stats_for_llm(
 
     # Numeric — top N by variance (most informative columns first)
     numeric = stats.get("numeric_columns", {})
+    
+    def _safe(v):
+        try:
+            val = float(v)
+            return val if pd.notna(val) else 0.0
+        except (TypeError, ValueError):
+            return 0.0
+
     items = sorted(
         numeric.items(),
-        key=lambda kv: abs(kv[1].get("variance", 0)),
+        key=lambda kv: abs(_safe(kv[1].get("variance"))) * (1 + min(abs(_safe(kv[1].get("skewness"))), 3.0)),
         reverse=True,
     )
     selected = items[:max_numeric_cols]
@@ -408,17 +416,6 @@ def truncate_stats_for_llm(
     return truncated
 
 
-def sanitize_floats(value):
-    """Recursively replace NaN/Inf float values with JSON-safe None."""
-    if isinstance(value, float):
-        return None if math.isnan(value) or math.isinf(value) else value
-    if isinstance(value, dict):
-        return {k: sanitize_floats(v) for k, v in value.items()}
-    if isinstance(value, list):
-        return [sanitize_floats(v) for v in value]
-    return value
-
-
 def json_default(obj: Any) -> Any:
     if isinstance(obj, np.ndarray):
         return obj.tolist()
@@ -451,3 +448,55 @@ def sanitize_for_json(value: Any) -> Any:
     if isinstance(value, np.ndarray):
         return sanitize_for_json(value.tolist())
     return value
+
+def build_chat_context_pack(stats: dict, insights: dict) -> dict:
+    """
+    Rich but compact context object built once at /analyze time,
+    stored in the result, and consumed by the /chat endpoint.
+    Gives the chatbot LLM direct access to per-column numbers
+    without needing a Parquet query for basic questions.
+    """
+    numeric     = stats.get("numeric_columns", {})
+    categorical = stats.get("categorical_columns", {})
+    profile     = stats.get("dataset_profile", {})
+    quality     = stats.get("data_quality", {})
+    outliers    = stats.get("outliers", {})
+    correlations = stats.get("strong_correlations", [])[:8]
+
+    col_narratives: dict = {}
+
+    for col, data in list(numeric.items())[:20]:
+        col_narratives[col] = {
+            "type":          "numeric",
+            "mean":          round(data.get("mean", 0), 3),
+            "median":        round(data.get("median", 0), 3),
+            "min":           round(data.get("min", 0), 3),
+            "max":           round(data.get("max", 0), 3),
+            "std":           round(data.get("std", 0), 3),
+            "skew":          round(data.get("skewness", 0), 2),
+            "outlier_count": outliers.get(col, {}).get("count", 0),
+        }
+
+    for col, data in list(categorical.items())[:15]:
+        col_narratives[col] = {
+            "type":         "categorical",
+            "unique_count": data.get("unique_values", 0),
+            "top_value":    data.get("most_common"),
+            "top_value_pct": round(
+                data.get("most_common_count", 0)
+                / max(stats.get("row_count", 1), 1) * 100, 1
+            ),
+            "top_5":        data.get("top_5_values", {}),
+            "least_common": data.get("least_common"),
+        }
+
+    return {
+        "profile":       profile,
+        "quality":       quality,
+        "row_count":     stats.get("row_count"),
+        "column_count":  stats.get("column_count"),
+        "columns":       col_narratives,
+        "correlations":  correlations,
+        "key_findings":  insights.get("findings", [])[:5],
+        "headline":      insights.get("headline", ""),
+    }

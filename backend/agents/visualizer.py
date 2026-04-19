@@ -62,6 +62,7 @@ import plotly.graph_objects as go
 from ..core.state import AnalysisState
 from ..core.errors import add_pipeline_error
 from ..core.utils import truncate_stats_for_llm
+from ..core.llm_client import get_groq_client
 
 logger = logging.getLogger(__name__)
 
@@ -154,11 +155,17 @@ def _resample_ts(df: pd.DataFrame, date_col: str,
     if len(df) <= max_pts:
         return df
     df2 = df[[date_col] + val_cols].dropna(subset=[date_col]).copy()
-    df2[date_col] = pd.to_datetime(df2[date_col])
+    df2[date_col] = pd.to_datetime(df2[date_col], errors="coerce")
+    df2 = df2.dropna(subset=[date_col])
+    if df2.empty:
+        return df2
     df2 = df2.set_index(date_col).sort_index()
-    for freq in ("D", "W", "ME", "QE", "YE"):
-        r = df2[val_cols].resample(freq).mean().dropna(how="all").reset_index()
-        if len(r) <= max_pts:
+    for freq in ("s", "min", "h", "D", "W", "M", "Q", "A", "ME", "QE", "YE"):
+        try:
+            r = df2[val_cols].resample(freq).mean().dropna(how="all").reset_index()
+        except Exception:
+            continue
+        if 10 <= len(r) <= max_pts:   # floor at 10 — never return a flat 3-point line
             return r
     step = max(1, len(df2) // max_pts)
     return df2.iloc[::step].reset_index()
@@ -348,8 +355,9 @@ Respond ONLY with valid JSON — a list of up to {MAX_OUTPUT_CHARTS} objects:
 ]"""
 
     try:
-        from groq import Groq
-        client = Groq(api_key=api_key)
+        client = get_groq_client()
+        if not client:
+            return None
         # Use a smarter model for chart planning (set GROQ_PLANNER_MODEL in .env)
         planner_model = os.getenv("GROQ_PLANNER_MODEL",
                                    os.getenv("GROQ_MODEL", "llama-3.3-70b-versatile"))
@@ -388,7 +396,8 @@ Respond ONLY with valid JSON — a list of up to {MAX_OUTPUT_CHARTS} objects:
 def _build_ranked_bar(df: pd.DataFrame, x_col: str, y_col: str,
                       title: str, agg: str = "auto",
                       top_n: int = _RANKED_BAR_TOP_N,
-                      color_col: Optional[str] = None) -> Optional[Chart]:
+                      color_col: Optional[str] = None,
+                      stats: dict = None) -> Optional[Chart]:
     """Horizontal sorted bar — perfect for entity × metric (country, product, etc.)."""
     if x_col not in df.columns or y_col not in df.columns:
         return None
@@ -428,6 +437,9 @@ def _build_ranked_bar(df: pd.DataFrame, x_col: str, y_col: str,
         text=y_col,
     )
     fig.update_traces(texttemplate="%{text:.2s}", textposition="outside")
+    pct_cols = (stats or {}).get("percentage_columns", []) if isinstance(stats, dict) else []
+    if y_col in pct_cols:
+        fig.update_layout(xaxis_tickformat=".1%")
     fig.update_layout(
         showlegend=False,
         coloraxis_showscale=False,
@@ -601,6 +613,8 @@ def _build_heatmap(df: pd.DataFrame, num_cols: list[str],
     corr = sample.corr().round(2)
     # Drop all-NaN rows/cols (constant columns produce NaN correlation)
     corr = corr.dropna(axis=0, how="all").dropna(axis=1, how="all")
+    mask = (corr.abs() < 0.9999).any(axis=1)
+    corr = corr.loc[mask, mask]
     if corr.empty or corr.shape[0] < 2:
         return None
     chart_title = title or "Correlation Heatmap"
@@ -876,11 +890,13 @@ def _execute_plan(df: pd.DataFrame, plan: list[dict], cols: dict, stats: dict) -
             y_num = y in df.columns and pd.api.types.is_numeric_dtype(df[y])
             if x_num and y_num:
                 chart = _build_scatter(df, x, y, color_col=col, title=ttl)
-            elif not x_num and y_num:
-                # x is categorical — find best numeric fallback for x OR use y as x if y is numeric
-                chart = _build_scatter(df, y, x, color_col=col, title=None) if pd.api.types.is_numeric_dtype(df[y]) else None
+            elif y_num and not x_num:
+                # x is categorical — swap axes
+                chart = _build_scatter(df, y, x, color_col=col, title=None)
             elif x_num and not y_num:
-                chart = _build_scatter(df, x, y, color_col=col, title=None) # fallback will handle
+                # y is categorical — swap axes
+                chart = _build_scatter(df, x, y, color_col=col, title=None)
+            # if neither is numeric, chart stays None — correct
         
         elif ct == "box" and x and y:
             chart = _build_box(df, x, y, title=ttl)
@@ -894,10 +910,6 @@ def _execute_plan(df: pd.DataFrame, plan: list[dict], cols: dict, stats: dict) -
                 x_fallback = next((c for c in cols["num"] if c != y), None)
                 if x_fallback:
                     chart = _build_scatter(df, x_fallback, y, color_col=x if x in df.columns else col, title=ttl)
-            elif x_num and not y_num:
-                y_fallback = next((c for c in cols["num"] if c != x), None)
-                if y_fallback:
-                    chart = _build_scatter(df, x, y_fallback, color_col=y if y in df.columns else col, title=ttl)
 
         elif ct == "line" and x:
             val_cols = [y] if y else cols["num"]
@@ -906,19 +918,7 @@ def _execute_plan(df: pd.DataFrame, plan: list[dict], cols: dict, stats: dict) -
         elif ct == "heatmap":
             chart = _build_heatmap(df, cols["num"], title=ttl)
 
-        elif ct in ("box", "violin") and x and y:
-            # Determine which is cat vs num
-            x_is_num = pd.api.types.is_numeric_dtype(df[x]) if x in df.columns else False
-            y_is_num = pd.api.types.is_numeric_dtype(df[y]) if y in df.columns else False
-            if x_is_num and not y_is_num:
-                cc, nc = y, x
-            else:
-                cc, nc = x, y
-            n_cats = df[cc].nunique(dropna=True) if cc in df.columns else 0
-            if ct == "violin" or (n_cats <= 6):
-                chart = _build_violin(df, cc, nc, title=ttl)
-            if chart is None:
-                chart = _build_box(df, cc, nc, title=ttl)
+
 
         elif ct in ("donut", "pie") and x:
             # Validate that x is an actual column — LLM sometimes passes a
@@ -1001,6 +1001,11 @@ def _heuristic_plan(df: pd.DataFrame, cols: dict, stats: dict) -> list[Chart]:
     used_pairs: set[frozenset] = set()
     used_singles: set[str] = set()
 
+    domain = (stats.get("dataset_profile") or {}).get("domain", "general")
+    prefer_timeseries   = domain in ("finance", "economics", "sales", "logistics", "technology")
+    prefer_distribution = domain in ("healthcare", "research", "survey", "education")
+    prefer_ranking      = domain in ("sports", "retail", "marketing")
+
     def _add(c: Optional[Chart]) -> bool:
         if c is None or not _chart_has_signal(c):
             return False
@@ -1036,17 +1041,25 @@ def _heuristic_plan(df: pd.DataFrame, cols: dict, stats: dict) -> list[Chart]:
         if not any(kw in d.lower().replace("_", "") for kw in _PERSONAL_DATE_KEYWORDS)
     ]
 
-    # 1. Time-series (highest priority when a real date column exists)
+    # 1. Time-series — always first when dates exist, boosted for finance/logistics
     if plottable_dates and num:
         _add(_build_line(df, plottable_dates[0], num))
 
-    # 2. Correlation heatmap (when 3+ numeric cols)
-    if len(num) >= 3:
+    # 2. Correlation heatmap — boosted for research/healthcare domains
+    if len(num) >= 3 and (not prefer_ranking):
         _add(_build_heatmap(df, num))
 
     # 3. Likert ratings bar
     if len(likert) >= 2:
         _add(_build_likert_bar(df, likert))
+
+    # Domain-priority: ranking first for sports/retail
+    if prefer_ranking and cat and num:
+        best_num = max(num, key=lambda c: _completeness(df[c])) if num else None
+        if best_num:
+            for cat_col in cat[:3]:
+                if _add(_build_ranked_bar(df, cat_col, best_num, "", stats=stats)):
+                    break
 
     # 4. Scatter for best correlated pair
     if len(num) >= 2:
@@ -1068,7 +1081,7 @@ def _heuristic_plan(df: pd.DataFrame, cols: dict, stats: dict) -> list[Chart]:
         if best_num is None:
             continue
         if n_cats > 15:
-            c = _build_ranked_bar(df, cat_col, best_num, "")
+            c = _build_ranked_bar(df, cat_col, best_num, "", stats=stats)
         else:
             c = _build_grouped_bar(df, cat_col, best_num, "")
         if _add(c):
@@ -1133,6 +1146,21 @@ def _heuristic_plan(df: pd.DataFrame, cols: dict, stats: dict) -> list[Chart]:
 # ═══════════════════════════════════════════════════════════════════════════
 # DEDUP & FINAL SELECTION
 # ═══════════════════════════════════════════════════════════════════════════
+
+def _apply_analytical_bonus(charts: list[Chart]) -> list[Chart]:
+    """
+    Post-hoc score adjustment based on analytical value of chart type.
+    Relationship charts beat structural/compositional charts.
+    """
+    HIGH_VALUE  = ("scatter_", "heatmap_", "line_", "box_", "violin_")
+    MED_VALUE   = ("ranked_bar_", "grouped_bar_", "histogram_", "stacked_")
+    for c in charts:
+        if any(c.key.startswith(h) for h in HIGH_VALUE):
+            c.score += 15
+        elif any(c.key.startswith(m) for m in MED_VALUE):
+            c.score += 5
+        # donut_, freq_bar_, likert_ get no bonus
+    return charts
 
 def _deduplicate_and_select(charts: list[Chart]) -> dict[str, go.Figure]:
     """
@@ -1256,10 +1284,7 @@ def _llm_evaluate_charts(
     if not api_key or len(charts) == 0:
         return charts
 
-    planner_model = os.getenv(
-        "GROQ_PLANNER_MODEL",
-        os.getenv("GROQ_MODEL", "llama-3.1-8b-instant"),  # fast model for planning
-    )
+    planner_model = os.getenv("GROQ_PLANNER_MODEL", "llama-3.3-70b-versatile")
 
     chart_summaries = [_chart_summary_for_llm(c, df) for c in charts]
 
@@ -1299,8 +1324,10 @@ Respond ONLY with valid JSON:
 "replacement" is ONLY required when decision is REPLACE. Omit it otherwise."""
 
     try:
-        from groq import Groq
-        client = Groq(api_key=api_key)
+        client = get_groq_client()
+        if not client:
+            return charts
+
         completion = client.chat.completions.create(
             model=planner_model,
             messages=[
@@ -1375,10 +1402,39 @@ Respond ONLY with valid JSON:
 # MAIN ORCHESTRATOR — AGENTIC LOOP
 # ═══════════════════════════════════════════════════════════════════════════
 
-def _select_charts(df: pd.DataFrame, stats: dict) -> dict[str, go.Figure]:
+def _cols_from_architect(df: pd.DataFrame, col_types: dict, stats: dict) -> dict:
+    """Build the cols dict from architect's pre-computed column_types instead of re-classifying."""
     excluded = {e["column"] for e in stats.get("excluded_columns", [])}
+    num, cat, date_cols, likert, ids = [], [], [], [], []
+    for col, ctype in col_types.items():
+        if col not in df.columns or col in excluded:
+            continue
+            
+        # PRO FIX: Always check for high-cardinality IDs first, overriding base types.
+        # Otherwise UUID strings are dumped into categorical lists and wreck the visualizer.
+        if _is_high_cardinality_id(df, col):
+            ids.append(col)
+            continue
+            
+        if ctype == "datetime":
+            date_cols.append(col)
+        elif ctype == "numeric":
+            if _is_likert(df[col]):
+                likert.append(col)
+            else:
+                num.append(col)
+        elif ctype in ("categorical", "boolean"):
+            cat.append(col)
+    return {"num": num, "cat": cat, "date": date_cols, "likert": likert, "ids": ids}
+
+
+def _select_charts(df: pd.DataFrame, stats: dict, column_types: dict = None) -> dict[str, go.Figure]:
     df = _coerce_dates(df)
-    cols = _classify(df, excluded)
+    if column_types:
+        cols = _cols_from_architect(df, column_types, stats)
+    else:
+        excluded = {e["column"] for e in stats.get("excluded_columns", [])}
+        cols = _classify(df, excluded)
 
     logger.info(
         "[VIZ] Column inventory — numeric: %d | cat: %d | date: %d | likert: %d",
@@ -1425,7 +1481,7 @@ def _select_charts(df: pd.DataFrame, stats: dict) -> dict[str, go.Figure]:
     # ── PHASE 4: Agentic Evaluate & Refine (LLM, re-enabled v5.0) ─────────
     # Only runs when we have more charts than we will output — worth filtering.
     # Capped at 500 tokens → minimal marginal latency (recovered by parallelism).
-    if len(all_charts) > MAX_OUTPUT_CHARTS:
+    if len(all_charts) > MAX_OUTPUT_CHARTS + 2:
         logger.info(
             "[VIZ] Phase 4: Agentic evaluate & refine — reviewing %d charts...",
             len(all_charts),
@@ -1438,6 +1494,7 @@ def _select_charts(df: pd.DataFrame, stats: dict) -> dict[str, go.Figure]:
         )
 
     # ── PHASE 5: Final dedup + score-ranked selection ──────────────────────
+    all_charts = _apply_analytical_bonus(all_charts)
     result = _deduplicate_and_select(all_charts)
 
     # Last resort: if dedup somehow returned empty, use heuristic charts as-is
@@ -1467,7 +1524,11 @@ def run(state: AnalysisState) -> AnalysisState:
         return state
 
     try:
-        state.charts = _select_charts(state.clean_df, state.stats_summary or {})
+        state.charts = _select_charts(
+            state.clean_df,
+            state.stats_summary or {},
+            column_types=state.column_types or {},
+        )
         logger.info("[AGENTIC] Visualizer done — %d final charts", len(state.charts))
         state.completed_agents.append("visualizer")
     except Exception as exc:

@@ -1,4 +1,4 @@
-﻿# ─── Python ───────────────────────────────────────────────────────────────────
+# ─── Python ───────────────────────────────────────────────────────────────────
 __pycache__/
 *.py[cod]
 *.pyo
@@ -41,7 +41,10 @@ backend/data/
 data/
 uploads/
 *.csv
+*.parquet
+backend/storage/data/
 !data/.gitkeep
+scratch/
 
 # ─── Node / Frontend ─────────────────────────────────────────────────────────
 node_modules/
@@ -125,3 +128,7 @@ temp/
 
 # ─── Duplicate Local Copies ──────────────────────────────────────────────────
 Data-Analysis-MultiAgent/
+
+# ─── Internal tool artifacts ─────────────────────────────────────────────────
+.antigravityignore
+.gemini/
