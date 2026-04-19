@@ -33,8 +33,8 @@ const PLOTLY_CONFIG = {
   doubleClick: "reset+autosize"
 };
 
-const MIN_ZOOM_SPAN_RATIO = 0.08;
-const MAX_ZOOM_OUT_MULTIPLIER = 1.1;
+const MIN_ZOOM_SPAN_RATIO = 0.12;
+const MAX_ZOOM_OUT_MULTIPLIER = 1.0;
 const ZOOM_BOUNDARY_PADDING_RATIO = 0.05;
 
 function truncateLabel(value, max = 26) {
@@ -753,9 +753,13 @@ const ChartPanel = memo(({ result, PlotComponent }) => {
         const yConstraint = buildAxisConstraint(yBaseAxis, collectAxisValues(fig.data, "y"));
         const viewport = isSpotlighted ? (spotlightViewports[key] || {}) : {};
         const chartMode = chartInteractionMode[key] || (isSpotlighted ? "pan" : "zoom");
+        const canBoundedZoom = Boolean(xConstraint || yConstraint);
+        const canUseSpotlightZoom = isSpotlighted && showViewportControls && canBoundedZoom;
         const currentXRange = viewport.x || initialBounds.x || fig.layout?.xaxis?.range || null;
         const currentYRange = viewport.y || initialBounds.y || fig.layout?.yaxis?.range || null;
         const zoomChart = (factor) => {
+          if (!canUseSpotlightZoom) return;
+
           setSpotlightViewports((prev) => {
             const current = prev[key] || {};
             const sourceX = current.x || currentXRange;
@@ -780,7 +784,7 @@ const ChartPanel = memo(({ result, PlotComponent }) => {
         const onChartWheel = (event) => {
           // If not in focus mode, we don't want to intercept any wheel events for zooming.
           // This allows natural page scrolling even if mouse is over a chart.
-          if (!isSpotlighted) return;
+          if (!canUseSpotlightZoom) return;
 
           if (event.ctrlKey || event.metaKey) {
             event.preventDefault();
@@ -799,7 +803,7 @@ const ChartPanel = memo(({ result, PlotComponent }) => {
         };
         const onChartRelayout = (eventData) => {
           if (!eventData) return;
-          if (!isSpotlighted) return;
+          if (!canUseSpotlightZoom) return;
 
           if (eventData["xaxis.autorange"] || eventData["yaxis.autorange"]) {
             setSpotlightViewports((prev) => {
@@ -865,7 +869,7 @@ const ChartPanel = memo(({ result, PlotComponent }) => {
                   {isSpotlighted ? "⤡" : "⤢"}
                 </button>
 
-                {isSpotlighted && showViewportControls && (
+                {canUseSpotlightZoom && (
                   <div className="chart-action-group">
                     <button
                       className="chart-action-btn"
@@ -915,7 +919,7 @@ const ChartPanel = memo(({ result, PlotComponent }) => {
                       plot_bgcolor: "rgba(0,0,0,0)",
                       font: { color: "#FFFFFF", family: "'Inter', sans-serif" },
                       uniformtext: { mode: 'hide', minsize: 10 },
-                      dragmode: isSpotlighted && showViewportControls ? chartMode : false, 
+                      dragmode: canUseSpotlightZoom ? chartMode : false, 
                       hovermode: fig.layout?.hovermode || "closest",
                       hoverlabel: {
                         ...PLOTLY_DARK_LAYOUT.hoverlabel,
@@ -960,7 +964,7 @@ const ChartPanel = memo(({ result, PlotComponent }) => {
                     }}
                     config={{
                       ...PLOTLY_CONFIG,
-                      scrollZoom: isSpotlighted && showViewportControls,
+                      scrollZoom: canUseSpotlightZoom,
                     }}
                     style={{ width: "100%", height: `${chartHeight}px` }}
                   />
