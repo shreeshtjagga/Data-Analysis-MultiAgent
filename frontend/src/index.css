@@ -401,6 +401,32 @@ p, body { font-size: var(--font-body); font-weight: 400; color: var(--text-muted
   perspective: 1400px;
   position: relative;
   transform: translateZ(0);
+  transition: filter 0.22s ease, opacity 0.22s ease;
+}
+
+.chart-grid-spotlight-active {
+  position: relative;
+  isolation: isolate;
+}
+
+.chart-spotlight-backdrop {
+  position: absolute;
+  inset: 0;
+  z-index: 900;
+  background: rgba(6, 10, 20, 0.3);
+  backdrop-filter: blur(6px) saturate(0.9);
+  border-radius: 12px;
+}
+
+.chart-flip-wrapper.chart-dimmed {
+  filter: blur(3px) saturate(0.75);
+  opacity: 0.25;
+  pointer-events: none;
+}
+
+.chart-flip-wrapper.chart-spotlighted {
+  position: relative;
+  z-index: 1200;
 }
 
 .chart-flip-inner {
@@ -506,6 +532,64 @@ p, body { font-size: var(--font-body); font-weight: 400; color: var(--text-muted
 .chart-info-btn:hover::after {
   opacity: 1;
   transform: translateY(0) scale(0.87);
+}
+
+.chart-focus-btn {
+  position: absolute;
+  top: 12px;
+  right: 52px;
+  z-index: 10;
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  border: 1px solid rgba(56, 189, 248, 0.38);
+  background: rgba(56, 189, 248, 0.12);
+  color: #7dd3fc;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 14px;
+  font-weight: 700;
+  transition: background 0.16s ease, border-color 0.16s ease, transform 0.16s ease, box-shadow 0.16s ease;
+  line-height: 1;
+  backdrop-filter: blur(3px);
+}
+
+.chart-focus-btn:hover {
+  background: rgba(56, 189, 248, 0.28);
+  border-color: rgba(56, 189, 248, 0.65);
+  box-shadow: 0 0 8px rgba(56, 189, 248, 0.42);
+  transform: scale(1.05);
+}
+
+.chart-focus-btn::after {
+  content: attr(data-tooltip);
+  position: absolute;
+  top: 100%;
+  right: 0;
+  margin-top: 8px;
+  background: rgba(13, 18, 32, 0.95);
+  color: var(--text-main);
+  padding: 6px 12px;
+  border-radius: 6px;
+  font-size: 11px;
+  font-family: 'Inter', sans-serif;
+  letter-spacing: 0.05em;
+  white-space: nowrap;
+  opacity: 0;
+  pointer-events: none;
+  font-weight: 500;
+  border: 1px solid var(--border-active);
+  transform: translateY(-5px);
+  transition: opacity 0.2s ease, transform 0.2s ease;
+  box-shadow: var(--shadow-card);
+  z-index: 100;
+}
+
+.chart-focus-btn:hover::after {
+  opacity: 1;
+  transform: translateY(0) scale(0.93);
 }
 
 .chart-action-group {
@@ -652,6 +736,7 @@ p, body { font-size: var(--font-body); font-weight: 400; color: var(--text-muted
   }
 
   .chart-info-btn,
+  .chart-focus-btn,
   .chart-action-btn {
     transition: none;
   }

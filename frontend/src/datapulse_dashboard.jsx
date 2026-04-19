@@ -281,6 +281,106 @@ function shouldHideLegend(data, traceCount) {
   return false;
 }
 
+function cleanPlotSummaryText(value) {
+  const raw = String(value ?? "").trim();
+  if (!raw) return "";
+
+  return raw
+    .replace(/^#+\s*/gm, "")
+    .replace(/\bAI[_\s-]*NARRATIVE\b\s*[:\-]*/gi, "")
+    .replace(/\bPLOT[_\s-]*SUMMARY\b\s*[:\-]*/gi, "")
+    .replace(/^\s*summary\s*[:\-]\s*/i, "")
+    .replace(/\s{2,}/g, " ")
+    .trim();
+}
+
+function getPlotSummary(desc, fig, key) {
+  const cleaned = cleanPlotSummaryText(desc);
+  if (cleaned) return cleaned;
+
+  const traceType = String(fig?.data?.[0]?.type || "chart").toLowerCase();
+  const xTitle = cleanAxisTitle(fig?.layout?.xaxis?.title?.text || fig?.layout?.xaxis?.title || "");
+  const yTitle = cleanAxisTitle(fig?.layout?.yaxis?.title?.text || fig?.layout?.yaxis?.title || "");
+  const chartTitle = cleanQuestionLabel(fig?.layout?.title?.text || fig?.layout?.title || key.replaceAll("_", " "));
+
+  if (traceType === "pie") return `${chartTitle} highlights category share distribution across the selected groups.`;
+  if (traceType === "histogram") return `${chartTitle} shows frequency spread${xTitle ? ` for ${xTitle}` : ""}, helping identify skew and concentration.`;
+  if (traceType === "box") return `${chartTitle} summarizes median, spread, and outliers${xTitle ? ` across ${xTitle}` : ""}.`;
+  if (traceType === "heatmap") return `${chartTitle} maps intensity patterns to expose high and low concentration zones.`;
+
+  if (xTitle && yTitle) {
+    return `${chartTitle} compares ${yTitle} across ${xTitle} to surface key differences and trends.`;
+  }
+  return `${chartTitle} provides a focused visual summary of the most relevant variation in this dataset segment.`;
+}
+
+function getNumericExtent(trace) {
+  const candidates = [];
+  const yVals = Array.isArray(trace?.y) ? trace.y : [];
+  const xVals = Array.isArray(trace?.x) ? trace.x : [];
+
+  yVals.forEach((v) => {
+    if (typeof v === "number" && Number.isFinite(v)) candidates.push(v);
+  });
+  xVals.forEach((v) => {
+    if (typeof v === "number" && Number.isFinite(v)) candidates.push(v);
+  });
+
+  if (candidates.length < 2) return null;
+  return { min: Math.min(...candidates), max: Math.max(...candidates), count: candidates.length };
+}
+
+function getCoreRevelations(desc, fig, key) {
+  const traces = Array.isArray(fig?.data) ? fig.data : [];
+  const traceType = String(traces[0]?.type || "chart").toLowerCase();
+  const xTitle = cleanAxisTitle(fig?.layout?.xaxis?.title?.text || fig?.layout?.xaxis?.title || "x-axis");
+  const yTitle = cleanAxisTitle(fig?.layout?.yaxis?.title?.text || fig?.layout?.yaxis?.title || "y-axis");
+  const chartTitle = cleanQuestionLabel(fig?.layout?.title?.text || fig?.layout?.title || key.replaceAll("_", " "));
+  const cleanedSummary = cleanPlotSummaryText(desc);
+  const summarySentences = cleanedSummary
+    ? cleanedSummary.split(/(?<=[.!?])\s+/).map((s) => s.trim()).filter(Boolean)
+    : [];
+
+  const firstTrace = traces[0] || {};
+  const dataPointCount = Math.max(
+    Array.isArray(firstTrace?.x) ? firstTrace.x.length : 0,
+    Array.isArray(firstTrace?.y) ? firstTrace.y.length : 0,
+  );
+  const extent = getNumericExtent(firstTrace);
+
+  const insights = [];
+  if (summarySentences.length > 0) insights.push(summarySentences[0]);
+  if (summarySentences.length > 1) insights.push(summarySentences[1]);
+
+  if (traceType === "histogram") {
+    insights.push(`The distribution across ${xTitle} highlights where observations are most concentrated.`);
+  } else if (traceType === "box" || traceType === "violin") {
+    insights.push(`Spread and quartile structure indicate how variable ${yTitle} is across groups.`);
+  } else if (traceType === "pie" || traceType === "donut") {
+    insights.push(`Category proportions reveal which segments dominate the overall composition.`);
+  } else if (traceType === "heatmap") {
+    insights.push(`Color intensity shows where pairings of ${xTitle} and ${yTitle} are strongest or weakest.`);
+  } else {
+    insights.push(`${chartTitle} compares ${yTitle} across ${xTitle}, exposing meaningful differences between categories.`);
+  }
+
+  if (traces.length > 1) {
+    insights.push(`This view overlays ${traces.length} series, making cross-series comparison easier at a glance.`);
+  }
+
+  if (dataPointCount > 0) {
+    insights.push(`The chart summarizes ${dataPointCount.toLocaleString()} plotted observations in the primary series.`);
+  }
+
+  if (extent) {
+    insights.push(`Observed numeric range spans from ${extent.min.toFixed(2)} to ${extent.max.toFixed(2)}, indicating notable spread.`);
+  }
+
+  insights.push("Use this chart as a decision anchor to validate trends before acting on downstream analysis outputs.");
+
+  return Array.from(new Set(insights)).slice(0, 5);
+}
+
 function isChartZoomable(data) {
   const traces = Array.isArray(data) ? data : [];
   if (traces.length === 0) return false;
@@ -324,6 +424,22 @@ function ChartPanel({ result, PlotComponent }) {
   const [chartViewports, setChartViewports] = useState({});
   const [chartInitialBounds, setChartInitialBounds] = useState({});
   const [chartInteractionMode, setChartInteractionMode] = useState({});
+  const [spotlightChartKey, setSpotlightChartKey] = useState(null);
+
+  useEffect(() => {
+    if (!spotlightChartKey) return undefined;
+
+    const handleEscape = (event) => {
+      if (event.key === "Escape") {
+        setSpotlightChartKey(null);
+      }
+    };
+
+    window.addEventListener("keydown", handleEscape);
+    return () => {
+      window.removeEventListener("keydown", handleEscape);
+    };
+  }, [spotlightChartKey]);
 
   const captureInitialBounds = useCallback((key, figure) => {
     const xRange = normalizeRangePair(figure?.layout?.xaxis?.range);
@@ -407,9 +523,44 @@ function ChartPanel({ result, PlotComponent }) {
     setChartInteractionMode((prev) => ({ ...prev, [key]: mode }));
   }, []);
 
+  const renderedEntries = useMemo(() => {
+    if (!spotlightChartKey) return entries;
+
+    const spotlightIndex = entries.findIndex(([key]) => key === spotlightChartKey);
+    if (spotlightIndex <= 0) return entries;
+
+    const current = entries[spotlightIndex];
+    const previous = entries[spotlightIndex - 1];
+    if (!current || !previous) return entries;
+
+    const currentKey = current[0];
+    const previousKey = previous[0];
+    const currentIsWide = currentKey.startsWith("scatter_matrix") || currentKey.startsWith("heatmap") || currentKey.includes("matrix") || currentKey.startsWith("timeseries") || currentKey.startsWith("line");
+    const previousIsWide = previousKey.startsWith("scatter_matrix") || previousKey.startsWith("heatmap") || previousKey.includes("matrix") || previousKey.startsWith("timeseries") || previousKey.startsWith("line");
+
+    // For a right-column chart in a two-column row, swap with left sibling so expansion starts at the same row position.
+    if (currentIsWide || previousIsWide) return entries;
+
+    const next = [...entries];
+    next[spotlightIndex - 1] = current;
+    next[spotlightIndex] = previous;
+    return next;
+  }, [entries, spotlightChartKey]);
+
   return (
-    <div style={{ display: "grid", gridTemplateColumns: "repeat(12, 1fr)", gap: "24px", paddingBottom: "40px", alignItems: "start" }}>
-      {entries.map(([key, fig, desc], idx) => {
+    <>
+      <div
+        className={`chart-grid ${spotlightChartKey ? "chart-grid-spotlight-active" : ""}`}
+        style={{ display: "grid", gridTemplateColumns: "repeat(12, 1fr)", gap: "24px", paddingBottom: "40px", alignItems: "start" }}
+      >
+      {spotlightChartKey && (
+        <div
+          className="chart-spotlight-backdrop"
+          onClick={() => setSpotlightChartKey(null)}
+          aria-label="Exit chart focus"
+        />
+      )}
+      {renderedEntries.map(([key, fig, desc], idx) => {
         const isMatrix = key.startsWith("scatter_matrix") || key.startsWith("heatmap") || key.includes("matrix");
         const isWide = isMatrix || key.startsWith("timeseries") || key.startsWith("line");
         const traceCount = Array.isArray(fig.data) ? fig.data.length : 0;
@@ -418,9 +569,13 @@ function ChartPanel({ result, PlotComponent }) {
         const hideLegend = shouldHideLegend(fig.data, traceCount);
         const effectiveShowLegend = hideLegend ? false : showlegend;
         const showViewportControls = isChartZoomable(fig.data);
+        const isSpotlighted = spotlightChartKey === key;
+        const isDimmed = Boolean(spotlightChartKey) && !isSpotlighted;
         const gridSpan = isWide ? "span 12" : "span 6";
-        const chartHeight = isMatrix ? 560 : isWide ? 455 : 405;
-        const cardExtraHeight = effectiveShowLegend ? 72 : 58;
+        const baseChartHeight = isMatrix ? 560 : isWide ? 455 : 405;
+        const spotlightChartHeight = isMatrix ? 720 : isWide ? 640 : 560;
+        const chartHeight = isSpotlighted ? spotlightChartHeight : baseChartHeight;
+        const cardExtraHeight = effectiveShowLegend ? (isSpotlighted ? 90 : 72) : (isSpotlighted ? 72 : 58);
         const normalizedData = normalizeTraceData(fig.data);
         const margin = {
           l: 60,
@@ -512,13 +667,15 @@ function ChartPanel({ result, PlotComponent }) {
         return (
           <div
             key={key}
-            className={`chart-flip-wrapper ${flipped[key] ? 'flipped' : ''}`}
+            className={`chart-flip-wrapper ${flipped[key] ? 'flipped' : ''} ${isSpotlighted ? 'chart-spotlighted' : ''} ${isDimmed ? 'chart-dimmed' : ''}`}
             style={{
-              gridColumn: gridSpan,
+              gridColumn: isSpotlighted ? "1 / -1" : gridSpan,
               minWidth: 0,
               height: `${chartHeight + cardExtraHeight}px`,
-              animation: 'fadeIn 0.24s ease-out both',
-              animationDelay: `${Math.min(idx * 28, 260)}ms`,
+              width: isSpotlighted ? "min(100%, 1160px)" : undefined,
+              justifySelf: isSpotlighted ? "center" : undefined,
+              animation: isSpotlighted ? "none" : 'fadeIn 0.24s ease-out both',
+              animationDelay: isSpotlighted ? undefined : `${Math.min(idx * 28, 260)}ms`,
             }}
           >
             <div className="chart-flip-inner">
@@ -530,6 +687,14 @@ function ChartPanel({ result, PlotComponent }) {
                   data-tooltip="View Details"
                 >
                   ℹ
+                </button>
+
+                <button
+                  className="chart-focus-btn"
+                  onClick={() => setSpotlightChartKey(isSpotlighted ? null : key)}
+                  data-tooltip={isSpotlighted ? "Exit Focus" : "Focus Chart"}
+                >
+                  {isSpotlighted ? "⤡" : "⤢"}
                 </button>
 
                 {showViewportControls && (
@@ -641,6 +806,14 @@ function ChartPanel({ result, PlotComponent }) {
                   ✕
                 </button>
 
+                <button
+                  className="chart-focus-btn"
+                  onClick={() => setSpotlightChartKey(isSpotlighted ? null : key)}
+                  data-tooltip={isSpotlighted ? "Exit Focus" : "Focus Chart"}
+                >
+                  {isSpotlighted ? "⤡" : "⤢"}
+                </button>
+
                 <div className="chart-back-badge">
                   <span style={{ fontSize: '10px' }}>◈</span> {
                     fig.data?.[0]?.type
@@ -655,16 +828,18 @@ function ChartPanel({ result, PlotComponent }) {
 
                 <div className="chart-back-divider" />
 
-                <div className="chart-back-section-label">AI Narrative</div>
+                <div className="chart-back-section-label">Plot Summary</div>
                 <p className="chart-back-description">
-                  {desc || "Our multi-agent orchestration performed a deep vector analysis on this distribution. The patterns identified suggest a strong alignment with normalized expectations for this domain."}
+                  {getPlotSummary(desc, fig, key)}
                 </p>
 
                 <div className="chart-back-section-label">Core Revelation</div>
-                <div className="chart-back-insight-item">
-                  <div className="chart-back-insight-dot" />
-                  <span>{desc ? "The statistical significance of this variance suggests a primary pivot point for strategy." : "Automated outlier detection confirmed data integrity within this specific dimension."}</span>
-                </div>
+                {getCoreRevelations(desc, fig, key).map((insight, insightIdx) => (
+                  <div className="chart-back-insight-item" key={`${key}-insight-${insightIdx}`}>
+                    <div className="chart-back-insight-dot" />
+                    <span>{insight}</span>
+                  </div>
+                ))}
 
                 <div style={{ marginTop: 'auto', paddingTop: '20px', display: 'flex', alignItems: 'center', gap: '8px', opacity: 0.5 }}>
                   <div style={{ height: '1px', flex: 1, background: 'var(--border-subtle)' }} />
@@ -676,7 +851,8 @@ function ChartPanel({ result, PlotComponent }) {
           </div>
         );
       })}
-    </div>
+      </div>
+    </>
   );
 }
 
@@ -1836,7 +2012,23 @@ export default function DataPulse({ user, onLogout }) {
 
                       <div style={{ padding: '20px', background: 'var(--bg-input)', borderRadius: '12px', border: '1px solid var(--border-subtle)' }}>
                         <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '16px' }}>
-                          <span style={{ fontSize: '18px' }}>🔍</span>
+                          <div style={{
+                            width: '32px',
+                            height: '32px',
+                            borderRadius: '10px',
+                            border: '1px solid rgba(6,182,212,0.35)',
+                            background: 'rgba(6,182,212,0.08)',
+                            color: '#7dd3fc',
+                            display: 'flex',
+                            alignItems: 'center',
+                            justifyContent: 'center',
+                            flexShrink: 0,
+                          }}>
+                            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                              <circle cx="11" cy="11" r="7" />
+                              <line x1="16.65" y1="16.65" x2="21" y2="21" />
+                            </svg>
+                          </div>
                           <strong style={{ fontSize: '15px', color: 'var(--text-main)', fontFamily: "'Inter', sans-serif" }}>Analyst Findings</strong>
                           <span style={{ marginLeft: 'auto', fontSize: '11px', padding: '3px 10px', borderRadius: '100px', background: 'rgba(6,182,212,0.1)', border: '1px solid rgba(6,182,212,0.25)', color: '#7dd3fc', textTransform: 'uppercase', letterSpacing: '0.08em' }}>AI Generated</span>
                         </div>
@@ -1850,7 +2042,23 @@ export default function DataPulse({ user, onLogout }) {
 
                       <div style={{ padding: '20px', background: 'var(--bg-input)', borderRadius: '12px', border: '1px solid var(--border-subtle)' }}>
                         <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '16px' }}>
-                          <span style={{ fontSize: '18px' }}>🚀</span>
+                          <div style={{
+                            width: '32px',
+                            height: '32px',
+                            borderRadius: '10px',
+                            border: '1px solid rgba(99,102,241,0.35)',
+                            background: 'rgba(99,102,241,0.10)',
+                            color: 'var(--primary-500)',
+                            display: 'flex',
+                            alignItems: 'center',
+                            justifyContent: 'center',
+                            flexShrink: 0,
+                          }}>
+                            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                              <path d="M4.5 19.5l6.2-2.1 8.8-8.8a2.1 2.1 0 0 0-3-3l-8.8 8.8-2.1 6.2z" />
+                              <path d="M12.5 11.5l2 2" />
+                            </svg>
+                          </div>
                           <strong style={{ fontSize: '15px', color: 'var(--text-main)', fontFamily: "'Inter', sans-serif" }}>Strategic Recommendations</strong>
                           <span style={{ marginLeft: 'auto', fontSize: '11px', padding: '3px 10px', borderRadius: '100px', background: 'rgba(99,102,241,0.1)', border: '1px solid rgba(99,102,241,0.25)', color: 'var(--primary-500)', textTransform: 'uppercase', letterSpacing: '0.08em' }}>Actionable</span>
                         </div>
