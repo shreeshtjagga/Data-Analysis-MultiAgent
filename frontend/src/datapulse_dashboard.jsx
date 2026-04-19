@@ -26,10 +26,16 @@ const PLOTLY_DARK_LAYOUT = {
 
 const PLOTLY_CONFIG = {
   responsive: true,
-  displayModeBar: "hover",
+  // Keep interactions gesture-driven with custom in-card reset controls.
+  displayModeBar: false,
+  scrollZoom: true,
   displaylogo: false,
-  modeBarButtons: [["zoomIn2d", "zoomOut2d", "resetScale2d"]]
+  doubleClick: "reset+autosize"
 };
+
+const MIN_ZOOM_SPAN_RATIO = 0.02;
+const MAX_ZOOM_OUT_MULTIPLIER = 6;
+const ZOOM_BOUNDARY_PADDING_RATIO = 1.5;
 
 function truncateLabel(value, max = 26) {
   const text = String(value ?? "").trim();
@@ -75,13 +81,180 @@ function hasLongCategoryLabels(data) {
   return samples.some((v) => String(v ?? "").length > 14);
 }
 
+function parseAxisValue(value) {
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return { value, kind: "number" };
+  }
+
+  const parsedDate = Date.parse(value);
+  if (Number.isFinite(parsedDate)) {
+    return { value: parsedDate, kind: "date" };
+  }
+
+  return null;
+}
+
+function normalizeRangePair(range) {
+  if (!Array.isArray(range) || range.length !== 2) return null;
+  const first = parseAxisValue(range[0]);
+  const second = parseAxisValue(range[1]);
+  if (!first || !second || first.kind !== second.kind) return null;
+
+  const low = Math.min(first.value, second.value);
+  const high = Math.max(first.value, second.value);
+  if (!Number.isFinite(low) || !Number.isFinite(high) || low === high) return null;
+
+  return { low, high, kind: first.kind };
+}
+
+function collectAxisValues(data, axisKey) {
+  const sourceKey = axisKey === "x" ? "x" : "y";
+  const traces = Array.isArray(data) ? data : [];
+  const parsed = [];
+  let categoricalExtent = 0;
+
+  traces.forEach((trace) => {
+    const raw = trace?.[sourceKey];
+    if (!Array.isArray(raw)) return;
+    if (raw.length > categoricalExtent) categoricalExtent = raw.length;
+    raw.forEach((item) => {
+      const next = parseAxisValue(item);
+      if (next) parsed.push(next);
+    });
+  });
+
+  if (parsed.length < 2) return null;
+
+  const kind = parsed[0].kind;
+  const filtered = parsed.filter((p) => p.kind === kind).map((p) => p.value);
+  if (filtered.length < 2) {
+    if (categoricalExtent > 1) {
+      return { min: -0.5, max: categoricalExtent - 0.5, kind: "number" };
+    }
+    return null;
+  }
+
+  return { min: Math.min(...filtered), max: Math.max(...filtered), kind };
+}
+
+function buildAxisConstraint(layoutAxis, dataAxisValues) {
+  const layoutRange = normalizeRangePair(layoutAxis?.range);
+  const base = layoutRange || dataAxisValues;
+  if (!base) return null;
+
+  let baseMin = base.low ?? base.min;
+  let baseMax = base.high ?? base.max;
+  if (!Number.isFinite(baseMin) || !Number.isFinite(baseMax)) return null;
+  if (baseMax === baseMin) {
+    baseMax = baseMin + 1;
+  }
+
+  const span = Math.max(1e-9, baseMax - baseMin);
+  return {
+    kind: base.kind,
+    minSpan: span * MIN_ZOOM_SPAN_RATIO,
+    maxSpan: span * MAX_ZOOM_OUT_MULTIPLIER,
+    hardMin: baseMin - span * ZOOM_BOUNDARY_PADDING_RATIO,
+    hardMax: baseMax + span * ZOOM_BOUNDARY_PADDING_RATIO,
+  };
+}
+
+function formatAxisValue(value, kind) {
+  if (kind === "date") return new Date(value).toISOString();
+  return value;
+}
+
+function clampRangeToConstraint(range, constraint) {
+  const normalized = normalizeRangePair(range);
+  if (!normalized || !constraint || normalized.kind !== constraint.kind) return null;
+
+  let low = normalized.low;
+  let high = normalized.high;
+  let span = high - low;
+  const center = (low + high) / 2;
+
+  if (span < constraint.minSpan) {
+    span = constraint.minSpan;
+    low = center - span / 2;
+    high = center + span / 2;
+  } else if (span > constraint.maxSpan) {
+    span = constraint.maxSpan;
+    low = center - span / 2;
+    high = center + span / 2;
+  }
+
+  if (low < constraint.hardMin) {
+    const delta = constraint.hardMin - low;
+    low += delta;
+    high += delta;
+  }
+  if (high > constraint.hardMax) {
+    const delta = high - constraint.hardMax;
+    low -= delta;
+    high -= delta;
+  }
+
+  if (low < constraint.hardMin) low = constraint.hardMin;
+  if (high > constraint.hardMax) high = constraint.hardMax;
+
+  return [formatAxisValue(low, constraint.kind), formatAxisValue(high, constraint.kind)];
+}
+
+function getRelayoutRange(eventData, axisName) {
+  const direct = eventData?.[`${axisName}.range`];
+  if (Array.isArray(direct) && direct.length === 2) return direct;
+
+  const start = eventData?.[`${axisName}.range[0]`];
+  const end = eventData?.[`${axisName}.range[1]`];
+  if (start !== undefined && end !== undefined) return [start, end];
+
+  return null;
+}
+
+function rangesEqual(a, b) {
+  if (!Array.isArray(a) || !Array.isArray(b) || a.length !== 2 || b.length !== 2) return false;
+  const left = normalizeRangePair(a);
+  const right = normalizeRangePair(b);
+  if (!left || !right || left.kind !== right.kind) return false;
+
+  return Math.abs(left.low - right.low) < 1e-9 && Math.abs(left.high - right.high) < 1e-9;
+}
+
+function isRangeAtZoomBoundary(range, constraint, direction) {
+  const normalized = normalizeRangePair(range);
+  if (!normalized || !constraint || normalized.kind !== constraint.kind) return false;
+
+  const span = normalized.high - normalized.low;
+  if (direction === "in") {
+    return span <= (constraint.minSpan * 1.02);
+  }
+  if (direction === "out") {
+    return span >= (constraint.maxSpan * 0.98);
+  }
+  return false;
+}
+
+function scaleRangeByFactor(range, constraint, factor) {
+  const normalized = normalizeRangePair(range);
+  if (!normalized || !constraint || normalized.kind !== constraint.kind) return null;
+
+  const center = (normalized.low + normalized.high) / 2;
+  const nextSpan = (normalized.high - normalized.low) * factor;
+  const rawRange = [
+    formatAxisValue(center - (nextSpan / 2), constraint.kind),
+    formatAxisValue(center + (nextSpan / 2), constraint.kind),
+  ];
+
+  return clampRangeToConstraint(rawRange, constraint);
+}
+
 function getLegendConfig(traceCount, isMatrix) {
   if (isMatrix || traceCount <= 1) {
     return { showlegend: false, legend: {}, legendRows: 0 };
   }
 
   const legendRows = Math.max(1, Math.ceil(traceCount / 4));
-  const legendYOffset = -0.14 - ((legendRows - 1) * 0.11);
+  const legendYOffset = -0.16 - ((legendRows - 1) * 0.08);
 
   return {
     showlegend: true,
@@ -90,10 +263,12 @@ function getLegendConfig(traceCount, isMatrix) {
       orientation: "h",
       yanchor: "top",
       y: legendYOffset,
-      xanchor: "center",
-      x: 0.5,
+      xanchor: "left",
+      x: 0,
       font: { size: 11, color: "rgba(255,255,255,0.8)" },
-      tracegroupgap: 6,
+      tracegroupgap: 10,
+      entrywidthmode: "pixels",
+      entrywidth: 92,
     },
   };
 }
@@ -106,8 +281,182 @@ function shouldHideLegend(data, traceCount) {
   return false;
 }
 
+function cleanPlotSummaryText(value) {
+  const raw = String(value ?? "").trim();
+  if (!raw) return "";
+
+  return raw
+    .replace(/^#+\s*/gm, "")
+    .replace(/\bAI[_\s-]*NARRATIVE\b\s*[:\-]*/gi, "")
+    .replace(/\bPLOT[_\s-]*SUMMARY\b\s*[:\-]*/gi, "")
+    .replace(/^\s*summary\s*[:\-]\s*/i, "")
+    .replace(/\s{2,}/g, " ")
+    .trim();
+}
+
+function getPlotSummary(desc, fig, key) {
+  const cleaned = cleanPlotSummaryText(desc);
+  if (cleaned) return cleaned;
+
+  const traceType = String(fig?.data?.[0]?.type || "chart").toLowerCase();
+  const xTitle = cleanAxisTitle(fig?.layout?.xaxis?.title?.text || fig?.layout?.xaxis?.title || "");
+  const yTitle = cleanAxisTitle(fig?.layout?.yaxis?.title?.text || fig?.layout?.yaxis?.title || "");
+  const chartTitle = cleanQuestionLabel(fig?.layout?.title?.text || fig?.layout?.title || key.replaceAll("_", " "));
+
+  if (traceType === "pie") return `${chartTitle} highlights category share distribution across the selected groups.`;
+  if (traceType === "histogram") return `${chartTitle} shows frequency spread${xTitle ? ` for ${xTitle}` : ""}, helping identify skew and concentration.`;
+  if (traceType === "box") return `${chartTitle} summarizes median, spread, and outliers${xTitle ? ` across ${xTitle}` : ""}.`;
+  if (traceType === "heatmap") return `${chartTitle} maps intensity patterns to expose high and low concentration zones.`;
+
+  if (xTitle && yTitle) {
+    return `${chartTitle} compares ${yTitle} across ${xTitle} to surface key differences and trends.`;
+  }
+  return `${chartTitle} provides a focused visual summary of the most relevant variation in this dataset segment.`;
+}
+
+function getNumericExtent(trace) {
+  const candidates = [];
+  const yVals = Array.isArray(trace?.y) ? trace.y : [];
+  const xVals = Array.isArray(trace?.x) ? trace.x : [];
+
+  yVals.forEach((v) => {
+    if (typeof v === "number" && Number.isFinite(v)) candidates.push(v);
+  });
+  xVals.forEach((v) => {
+    if (typeof v === "number" && Number.isFinite(v)) candidates.push(v);
+  });
+
+  if (candidates.length < 2) return null;
+  return { min: Math.min(...candidates), max: Math.max(...candidates), count: candidates.length };
+}
+
+function getCoreRevelations(desc, fig, key) {
+  const traces = Array.isArray(fig?.data) ? fig.data : [];
+  const traceType = String(traces[0]?.type || "chart").toLowerCase();
+  const xTitle = cleanAxisTitle(fig?.layout?.xaxis?.title?.text || fig?.layout?.xaxis?.title || "x-axis");
+  const yTitle = cleanAxisTitle(fig?.layout?.yaxis?.title?.text || fig?.layout?.yaxis?.title || "y-axis");
+  const chartTitle = cleanQuestionLabel(fig?.layout?.title?.text || fig?.layout?.title || key.replaceAll("_", " "));
+  const cleanedSummary = cleanPlotSummaryText(desc);
+  const summarySentences = cleanedSummary
+    ? cleanedSummary.split(/(?<=[.!?])\s+/).map((s) => s.trim()).filter(Boolean)
+    : [];
+
+  const firstTrace = traces[0] || {};
+  const dataPointCount = Math.max(
+    Array.isArray(firstTrace?.x) ? firstTrace.x.length : 0,
+    Array.isArray(firstTrace?.y) ? firstTrace.y.length : 0,
+  );
+  const extent = getNumericExtent(firstTrace);
+
+  const insights = [];
+  if (summarySentences.length > 0) insights.push(summarySentences[0]);
+  if (summarySentences.length > 1) insights.push(summarySentences[1]);
+
+  if (traceType === "histogram") {
+    insights.push(`The distribution across ${xTitle} highlights where observations are most concentrated.`);
+  } else if (traceType === "box" || traceType === "violin") {
+    insights.push(`Spread and quartile structure indicate how variable ${yTitle} is across groups.`);
+  } else if (traceType === "pie" || traceType === "donut") {
+    insights.push(`Category proportions reveal which segments dominate the overall composition.`);
+  } else if (traceType === "heatmap") {
+    insights.push(`Color intensity shows where pairings of ${xTitle} and ${yTitle} are strongest or weakest.`);
+  } else {
+    insights.push(`${chartTitle} compares ${yTitle} across ${xTitle}, exposing meaningful differences between categories.`);
+  }
+
+  if (traces.length > 1) {
+    insights.push(`This view overlays ${traces.length} series, making cross-series comparison easier at a glance.`);
+  }
+
+  if (dataPointCount > 0) {
+    insights.push(`The chart summarizes ${dataPointCount.toLocaleString()} plotted observations in the primary series.`);
+  }
+
+  if (extent) {
+    insights.push(`Observed numeric range spans from ${extent.min.toFixed(2)} to ${extent.max.toFixed(2)}, indicating notable spread.`);
+  }
+
+  insights.push("Use this chart as a decision anchor to validate trends before acting on downstream analysis outputs.");
+
+  return Array.from(new Set(insights)).slice(0, 5);
+}
+
+function isChartZoomable(data) {
+  const traces = Array.isArray(data) ? data : [];
+  if (traces.length === 0) return false;
+
+  const nonZoomableTypes = new Set([
+    "pie",
+    "sunburst",
+    "treemap",
+    "funnelarea",
+    "parcats",
+    "parcoords",
+    "sankey",
+    "table",
+    "indicator",
+  ]);
+
+  return traces.some((trace) => {
+    const traceType = String(trace?.type || "scatter").toLowerCase();
+    if (nonZoomableTypes.has(traceType)) return false;
+    if (Array.isArray(trace?.x) || Array.isArray(trace?.y)) return true;
+    if (trace?.xaxis || trace?.yaxis) return true;
+    return [
+      "scatter",
+      "bar",
+      "histogram",
+      "box",
+      "violin",
+      "heatmap",
+      "contour",
+      "candlestick",
+      "ohlc",
+      "waterfall",
+      "funnel",
+    ].includes(traceType);
+  });
+}
+
 function ChartPanel({ result, PlotComponent }) {
   const [flipped, setFlipped] = useState({});
+  const [chartRevisions, setChartRevisions] = useState({});
+  const [chartViewports, setChartViewports] = useState({});
+  const [chartInitialBounds, setChartInitialBounds] = useState({});
+  const [chartInteractionMode, setChartInteractionMode] = useState({});
+  const [spotlightChartKey, setSpotlightChartKey] = useState(null);
+
+  useEffect(() => {
+    if (!spotlightChartKey) return undefined;
+
+    const handleEscape = (event) => {
+      if (event.key === "Escape") {
+        setSpotlightChartKey(null);
+      }
+    };
+
+    window.addEventListener("keydown", handleEscape);
+    return () => {
+      window.removeEventListener("keydown", handleEscape);
+    };
+  }, [spotlightChartKey]);
+
+  const captureInitialBounds = useCallback((key, figure) => {
+    const xRange = normalizeRangePair(figure?.layout?.xaxis?.range);
+    const yRange = normalizeRangePair(figure?.layout?.yaxis?.range);
+    if (!xRange && !yRange) return;
+
+    setChartInitialBounds((prev) => {
+      if (prev[key]) return prev;
+      return {
+        ...prev,
+        [key]: {
+          x: xRange ? [formatAxisValue(xRange.low, xRange.kind), formatAxisValue(xRange.high, xRange.kind)] : null,
+          y: yRange ? [formatAxisValue(yRange.low, yRange.kind), formatAxisValue(yRange.high, yRange.kind)] : null,
+        },
+      };
+    });
+  }, []);
 
   if (!PlotComponent) {
     return (
@@ -160,9 +509,58 @@ function ChartPanel({ result, PlotComponent }) {
     setFlipped(prev => ({ ...prev, [key]: !prev[key] }));
   };
 
+  const resetChartView = useCallback((key) => {
+    setChartViewports((prev) => {
+      if (!prev[key]) return prev;
+      const next = { ...prev };
+      delete next[key];
+      return next;
+    });
+    setChartRevisions((prev) => ({ ...prev, [key]: (prev[key] || 0) + 1 }));
+  }, []);
+
+  const setChartMode = useCallback((key, mode) => {
+    setChartInteractionMode((prev) => ({ ...prev, [key]: mode }));
+  }, []);
+
+  const renderedEntries = useMemo(() => {
+    if (!spotlightChartKey) return entries;
+
+    const spotlightIndex = entries.findIndex(([key]) => key === spotlightChartKey);
+    if (spotlightIndex <= 0) return entries;
+
+    const current = entries[spotlightIndex];
+    const previous = entries[spotlightIndex - 1];
+    if (!current || !previous) return entries;
+
+    const currentKey = current[0];
+    const previousKey = previous[0];
+    const currentIsWide = currentKey.startsWith("scatter_matrix") || currentKey.startsWith("heatmap") || currentKey.includes("matrix") || currentKey.startsWith("timeseries") || currentKey.startsWith("line");
+    const previousIsWide = previousKey.startsWith("scatter_matrix") || previousKey.startsWith("heatmap") || previousKey.includes("matrix") || previousKey.startsWith("timeseries") || previousKey.startsWith("line");
+
+    // For a right-column chart in a two-column row, swap with left sibling so expansion starts at the same row position.
+    if (currentIsWide || previousIsWide) return entries;
+
+    const next = [...entries];
+    next[spotlightIndex - 1] = current;
+    next[spotlightIndex] = previous;
+    return next;
+  }, [entries, spotlightChartKey]);
+
   return (
-    <div style={{ display: "grid", gridTemplateColumns: "repeat(12, 1fr)", gap: "24px", paddingBottom: "40px", alignItems: "start" }}>
-      {entries.map(([key, fig, desc], idx) => {
+    <>
+      <div
+        className={`chart-grid ${spotlightChartKey ? "chart-grid-spotlight-active" : ""}`}
+        style={{ display: "grid", gridTemplateColumns: "repeat(12, 1fr)", gap: "24px", paddingBottom: "40px", alignItems: "start" }}
+      >
+      {spotlightChartKey && (
+        <div
+          className="chart-spotlight-backdrop"
+          onClick={() => setSpotlightChartKey(null)}
+          aria-label="Exit chart focus"
+        />
+      )}
+      {renderedEntries.map(([key, fig, desc], idx) => {
         const isMatrix = key.startsWith("scatter_matrix") || key.startsWith("heatmap") || key.includes("matrix");
         const isWide = isMatrix || key.startsWith("timeseries") || key.startsWith("line");
         const traceCount = Array.isArray(fig.data) ? fig.data.length : 0;
@@ -170,26 +568,114 @@ function ChartPanel({ result, PlotComponent }) {
         const { showlegend, legend, legendRows } = getLegendConfig(traceCount, isMatrix);
         const hideLegend = shouldHideLegend(fig.data, traceCount);
         const effectiveShowLegend = hideLegend ? false : showlegend;
+        const showViewportControls = isChartZoomable(fig.data);
+        const isSpotlighted = spotlightChartKey === key;
+        const isDimmed = Boolean(spotlightChartKey) && !isSpotlighted;
         const gridSpan = isWide ? "span 12" : "span 6";
-        const chartHeight = isMatrix ? 620 : isWide ? 500 : 450;
+        const baseChartHeight = isMatrix ? 560 : isWide ? 455 : 405;
+        const spotlightChartHeight = isMatrix ? 720 : isWide ? 640 : 560;
+        const chartHeight = isSpotlighted ? spotlightChartHeight : baseChartHeight;
+        const cardExtraHeight = effectiveShowLegend ? (isSpotlighted ? 90 : 72) : (isSpotlighted ? 72 : 58);
         const normalizedData = normalizeTraceData(fig.data);
         const margin = {
           l: 60,
           r: 24,
           t: 70,
-          b: effectiveShowLegend ? (95 + (legendRows * 24)) : (hasLongLabels ? 90 : 68),
+          b: effectiveShowLegend ? (72 + (legendRows * 18)) : (hasLongLabels ? 78 : 58),
+        };
+        const initialBounds = chartInitialBounds[key] || {};
+        const xBaseAxis = initialBounds.x ? { range: initialBounds.x } : fig.layout?.xaxis;
+        const yBaseAxis = initialBounds.y ? { range: initialBounds.y } : fig.layout?.yaxis;
+        const xConstraint = buildAxisConstraint(xBaseAxis, collectAxisValues(fig.data, "x"));
+        const yConstraint = buildAxisConstraint(yBaseAxis, collectAxisValues(fig.data, "y"));
+        const viewport = chartViewports[key] || {};
+        const chartMode = chartInteractionMode[key] || "zoom";
+        const currentXRange = viewport.x || initialBounds.x || fig.layout?.xaxis?.range || null;
+        const currentYRange = viewport.y || initialBounds.y || fig.layout?.yaxis?.range || null;
+        const zoomChart = (factor) => {
+          setChartViewports((prev) => {
+            const current = prev[key] || {};
+            const sourceX = current.x || currentXRange;
+            const sourceY = current.y || currentYRange;
+            const nextX = xConstraint ? scaleRangeByFactor(sourceX, xConstraint, factor) : null;
+            const nextY = yConstraint ? scaleRangeByFactor(sourceY, yConstraint, factor) : null;
+            if (!nextX && !nextY) return prev;
+
+            const nextViewport = {
+              ...current,
+              ...(nextX ? { x: nextX } : {}),
+              ...(nextY ? { y: nextY } : {}),
+            };
+
+            if (rangesEqual(current.x, nextViewport.x) && rangesEqual(current.y, nextViewport.y)) {
+              return prev;
+            }
+
+            return { ...prev, [key]: nextViewport };
+          });
+        };
+        const onChartWheel = (event) => {
+          if (event.ctrlKey || event.metaKey) {
+            event.preventDefault();
+            return;
+          }
+
+          if (!xConstraint && !yConstraint) return;
+          const direction = event.deltaY < 0 ? "in" : "out";
+
+          const axesAtBoundary = [];
+          if (xConstraint) axesAtBoundary.push(isRangeAtZoomBoundary(currentXRange, xConstraint, direction));
+          if (yConstraint) axesAtBoundary.push(isRangeAtZoomBoundary(currentYRange, yConstraint, direction));
+          if (axesAtBoundary.length > 0 && axesAtBoundary.every(Boolean)) {
+            event.preventDefault();
+          }
+        };
+        const onChartRelayout = (eventData) => {
+          if (!eventData) return;
+
+          if (eventData["xaxis.autorange"] || eventData["yaxis.autorange"]) {
+            setChartViewports((prev) => {
+              if (!prev[key]) return prev;
+              const next = { ...prev };
+              delete next[key];
+              return next;
+            });
+            return;
+          }
+
+          const rawX = getRelayoutRange(eventData, "xaxis");
+          const rawY = getRelayoutRange(eventData, "yaxis");
+          const clampedX = xConstraint ? clampRangeToConstraint(rawX, xConstraint) : null;
+          const clampedY = yConstraint ? clampRangeToConstraint(rawY, yConstraint) : null;
+          if (!clampedX && !clampedY) return;
+
+          setChartViewports((prev) => {
+            const current = prev[key] || {};
+            const nextViewport = {
+              ...current,
+              ...(clampedX ? { x: clampedX } : {}),
+              ...(clampedY ? { y: clampedY } : {}),
+            };
+
+            if (rangesEqual(current.x, nextViewport.x) && rangesEqual(current.y, nextViewport.y)) {
+              return prev;
+            }
+            return { ...prev, [key]: nextViewport };
+          });
         };
 
         return (
           <div
             key={key}
-            className={`chart-flip-wrapper ${flipped[key] ? 'flipped' : ''}`}
+            className={`chart-flip-wrapper ${flipped[key] ? 'flipped' : ''} ${isSpotlighted ? 'chart-spotlighted' : ''} ${isDimmed ? 'chart-dimmed' : ''}`}
             style={{
-              gridColumn: gridSpan,
+              gridColumn: isSpotlighted ? "1 / -1" : gridSpan,
               minWidth: 0,
-              height: `${chartHeight + 110}px`, // Accommodate padding and title padding
-              animation: 'fadeIn 0.35s cubic-bezier(0.2, 0.8, 0.2, 1) both',
-              animationDelay: `${idx * 90}ms`,
+              height: `${chartHeight + cardExtraHeight}px`,
+              width: isSpotlighted ? "min(100%, 1160px)" : undefined,
+              justifySelf: isSpotlighted ? "center" : undefined,
+              animation: isSpotlighted ? "none" : 'fadeIn 0.24s ease-out both',
+              animationDelay: isSpotlighted ? undefined : `${Math.min(idx * 28, 260)}ms`,
             }}
           >
             <div className="chart-flip-inner">
@@ -203,58 +689,111 @@ function ChartPanel({ result, PlotComponent }) {
                   ℹ
                 </button>
 
-                <PlotComponent
-                  data={normalizedData}
-                  layout={{
-                    ...PLOTLY_DARK_LAYOUT,
-                    ...fig.layout,
-                    authorise: true,
-                    title: {
-                      ...(fig.layout?.title || {}),
-                      text: truncateLabel(cleanQuestionLabel(fig.layout?.title?.text || fig.layout?.title || key.replaceAll("_", " ")), 85),
-                      font: { color: "#FFFFFF", size: 16, weight: 'bold' },
-                      x: 0.5,
-                      xanchor: "center",
-                    },
-                    paper_bgcolor: "rgba(0,0,0,0)",
-                    plot_bgcolor: "rgba(0,0,0,0)",
-                    font: { color: "#FFFFFF", family: "'Inter', sans-serif" },
-                    hovermode: fig.layout?.hovermode || "closest",
-                    hoverlabel: {
-                      ...PLOTLY_DARK_LAYOUT.hoverlabel,
-                      ...(fig.layout?.hoverlabel || {}),
-                    },
-                    height: chartHeight,
-                    showlegend: effectiveShowLegend,
-                    margin,
-                    legend: {
-                      ...(fig.layout?.legend || {}),
-                      ...legend,
-                    },
-                    xaxis: {
-                      ...(fig.layout?.xaxis || {}),
+                <button
+                  className="chart-focus-btn"
+                  onClick={() => setSpotlightChartKey(isSpotlighted ? null : key)}
+                  data-tooltip={isSpotlighted ? "Exit Focus" : "Focus Chart"}
+                >
+                  {isSpotlighted ? "⤡" : "⤢"}
+                </button>
+
+                {showViewportControls && (
+                  <div className="chart-action-group">
+                    <button
+                      className="chart-action-btn"
+                      onClick={() => zoomChart(0.8)}
+                    >
+                      +
+                    </button>
+                    <button
+                      className="chart-action-btn"
+                      onClick={() => zoomChart(1.25)}
+                    >
+                      -
+                    </button>
+                    <button
+                      className={`chart-action-btn chart-pan-btn ${chartMode === "pan" ? "active" : ""}`}
+                      onClick={() => setChartMode(key, chartMode === "pan" ? "zoom" : "pan")}
+                    >
+                      Pan
+                    </button>
+                    <button
+                      className="chart-action-btn chart-reset-btn"
+                      onClick={() => resetChartView(key)}
+                    >
+                      Reset
+                    </button>
+                  </div>
+                )}
+
+                <div onWheel={onChartWheel}>
+                  <PlotComponent
+                    data={normalizedData}
+                    revision={chartRevisions[key] || 0}
+                    onInitialized={(figure) => captureInitialBounds(key, figure)}
+                    onRelayout={onChartRelayout}
+                    layout={{
+                      ...PLOTLY_DARK_LAYOUT,
+                      ...fig.layout,
+                      authorise: true,
                       title: {
-                        ...(fig.layout?.xaxis?.title || {}),
-                        text: cleanAxisTitle(fig.layout?.xaxis?.title?.text || fig.layout?.xaxis?.title || ""),
+                        ...(fig.layout?.title || {}),
+                        text: truncateLabel(cleanQuestionLabel(fig.layout?.title?.text || fig.layout?.title || key.replaceAll("_", " ")), 85),
+                        font: { color: "#FFFFFF", size: 16, weight: 'bold' },
+                        x: 0.5,
+                        xanchor: "center",
                       },
-                      automargin: true,
-                      tickangle: hasLongLabels ? -28 : (fig.layout?.xaxis?.tickangle ?? 0),
-                      tickfont: { color: "#FFFFFF", size: 11 },
-                    },
-                    yaxis: {
-                      ...(fig.layout?.yaxis || {}),
-                      title: {
-                        ...(fig.layout?.yaxis?.title || {}),
-                        text: cleanAxisTitle(fig.layout?.yaxis?.title?.text || fig.layout?.yaxis?.title || ""),
+                      paper_bgcolor: "rgba(0,0,0,0)",
+                      plot_bgcolor: "rgba(0,0,0,0)",
+                      font: { color: "#FFFFFF", family: "'Inter', sans-serif" },
+                      dragmode: showViewportControls ? chartMode : (fig.layout?.dragmode || "zoom"),
+                      hovermode: fig.layout?.hovermode || "closest",
+                      hoverlabel: {
+                        ...PLOTLY_DARK_LAYOUT.hoverlabel,
+                        ...(fig.layout?.hoverlabel || {}),
                       },
-                      automargin: true,
-                      tickfont: { color: "#FFFFFF", size: 11 },
-                    },
-                    uniformtext: { minsize: 10, mode: "hide" },
-                  }}
-                  config={PLOTLY_CONFIG}
-                  style={{ width: "100%", height: `${chartHeight}px` }}
-                />
+                      height: chartHeight,
+                      showlegend: effectiveShowLegend,
+                      margin,
+                      legend: {
+                        ...(fig.layout?.legend || {}),
+                        ...legend,
+                      },
+                      xaxis: {
+                        ...(fig.layout?.xaxis || {}),
+                        title: {
+                          ...(fig.layout?.xaxis?.title || {}),
+                          text: cleanAxisTitle(fig.layout?.xaxis?.title?.text || fig.layout?.xaxis?.title || ""),
+                        },
+                        ...(xConstraint ? {
+                          minallowed: formatAxisValue(xConstraint.hardMin, xConstraint.kind),
+                          maxallowed: formatAxisValue(xConstraint.hardMax, xConstraint.kind),
+                        } : {}),
+                        ...(viewport.x ? { range: viewport.x, autorange: false } : {}),
+                        automargin: true,
+                        tickangle: hasLongLabels ? -28 : (fig.layout?.xaxis?.tickangle ?? 0),
+                        tickfont: { color: "#FFFFFF", size: 11 },
+                      },
+                      yaxis: {
+                        ...(fig.layout?.yaxis || {}),
+                        title: {
+                          ...(fig.layout?.yaxis?.title || {}),
+                          text: cleanAxisTitle(fig.layout?.yaxis?.title?.text || fig.layout?.yaxis?.title || ""),
+                        },
+                        ...(yConstraint ? {
+                          minallowed: formatAxisValue(yConstraint.hardMin, yConstraint.kind),
+                          maxallowed: formatAxisValue(yConstraint.hardMax, yConstraint.kind),
+                        } : {}),
+                        ...(viewport.y ? { range: viewport.y, autorange: false } : {}),
+                        automargin: true,
+                        tickfont: { color: "#FFFFFF", size: 11 },
+                      },
+                      uniformtext: { minsize: 10, mode: "hide" },
+                    }}
+                    config={PLOTLY_CONFIG}
+                    style={{ width: "100%", height: `${chartHeight}px` }}
+                  />
+                </div>
               </div>
 
               {/* BACK SIDE */}
@@ -265,6 +804,14 @@ function ChartPanel({ result, PlotComponent }) {
                   data-tooltip="Flip Back"
                 >
                   ✕
+                </button>
+
+                <button
+                  className="chart-focus-btn"
+                  onClick={() => setSpotlightChartKey(isSpotlighted ? null : key)}
+                  data-tooltip={isSpotlighted ? "Exit Focus" : "Focus Chart"}
+                >
+                  {isSpotlighted ? "⤡" : "⤢"}
                 </button>
 
                 <div className="chart-back-badge">
@@ -281,16 +828,18 @@ function ChartPanel({ result, PlotComponent }) {
 
                 <div className="chart-back-divider" />
 
-                <div className="chart-back-section-label">AI Narrative</div>
+                <div className="chart-back-section-label">Plot Summary</div>
                 <p className="chart-back-description">
-                  {desc || "Our multi-agent orchestration performed a deep vector analysis on this distribution. The patterns identified suggest a strong alignment with normalized expectations for this domain."}
+                  {getPlotSummary(desc, fig, key)}
                 </p>
 
                 <div className="chart-back-section-label">Core Revelation</div>
-                <div className="chart-back-insight-item">
-                  <div className="chart-back-insight-dot" />
-                  <span>{desc ? "The statistical significance of this variance suggests a primary pivot point for strategy." : "Automated outlier detection confirmed data integrity within this specific dimension."}</span>
-                </div>
+                {getCoreRevelations(desc, fig, key).map((insight, insightIdx) => (
+                  <div className="chart-back-insight-item" key={`${key}-insight-${insightIdx}`}>
+                    <div className="chart-back-insight-dot" />
+                    <span>{insight}</span>
+                  </div>
+                ))}
 
                 <div style={{ marginTop: 'auto', paddingTop: '20px', display: 'flex', alignItems: 'center', gap: '8px', opacity: 0.5 }}>
                   <div style={{ height: '1px', flex: 1, background: 'var(--border-subtle)' }} />
@@ -302,7 +851,8 @@ function ChartPanel({ result, PlotComponent }) {
           </div>
         );
       })}
-    </div>
+      </div>
+    </>
   );
 }
 
@@ -1176,23 +1726,26 @@ export default function DataPulse({ user, onLogout }) {
                                 const layout = (parsedFig?.layout && typeof parsedFig.layout === 'object') ? parsedFig.layout : {};
                                 return PlotComponent ? (
                                   <div key={pIdx} style={{ margin: '16px 0', border: '1px solid rgba(99,102,241,0.2)', borderRadius: '12px', overflow: 'hidden', padding: '12px', background: 'rgba(0,0,0,0.3)', width: '100%' }}>
-                                    <PlotComponent
-                                      data={data.map(t => ({ ...t, textfont: { color: "#FFFFFF" } }))}
-                                      layout={{
-                                        ...PLOTLY_DARK_LAYOUT,
-                                        ...layout,
-                                        paper_bgcolor: "rgba(0,0,0,0)",
-                                        plot_bgcolor: "rgba(0,0,0,0)",
-                                        font: { color: "#FFFFFF", family: "'Inter', sans-serif" },
-                                        hoverlabel: { bgcolor: "rgba(8,12,24,0.98)", font: { color: "#F8FAFC", size: 12 }, bordercolor: "rgba(99,102,241,0.85)" },
-                                        height: 280,
-                                        margin: { l: 40, r: 20, t: 40, b: 40 },
-                                        title: { ...(layout.title || {}), font: { size: 14, color: '#fff', weight: 'bold' }, y: 0.95, yanchor: 'top' },
-                                        legend: { orientation: "h", yanchor: "top", y: -0.2, xanchor: "center", x: 0.5, font: { size: 10, color: "rgba(255,255,255,0.7)" } }
-                                      }}
-                                      config={PLOTLY_CONFIG}
-                                      style={{ width: "100%", height: "280px" }}
-                                    />
+                                    <div onWheel={stopPageZoomOnCtrlWheel}>
+                                      <PlotComponent
+                                        data={data.map(t => ({ ...t, textfont: { color: "#FFFFFF" } }))}
+                                        layout={{
+                                          ...PLOTLY_DARK_LAYOUT,
+                                          ...layout,
+                                          paper_bgcolor: "rgba(0,0,0,0)",
+                                          plot_bgcolor: "rgba(0,0,0,0)",
+                                          font: { color: "#FFFFFF", family: "'Inter', sans-serif" },
+                                          dragmode: layout?.dragmode || "zoom",
+                                          hoverlabel: { bgcolor: "rgba(8,12,24,0.98)", font: { color: "#F8FAFC", size: 12 }, bordercolor: "rgba(99,102,241,0.85)" },
+                                          height: 280,
+                                          margin: { l: 40, r: 20, t: 40, b: 40 },
+                                          title: { ...(layout.title || {}), font: { size: 14, color: '#fff', weight: 'bold' }, y: 0.95, yanchor: 'top' },
+                                          legend: { orientation: "h", yanchor: "top", y: -0.2, xanchor: "center", x: 0.5, font: { size: 10, color: "rgba(255,255,255,0.7)" } }
+                                        }}
+                                        config={PLOTLY_CONFIG}
+                                        style={{ width: "100%", height: "280px" }}
+                                      />
+                                    </div>
                                   </div>
                                 ) : <div key={pIdx} style={{ color: 'var(--primary-500)' }}>[Rendering Chart...]</div>;
                               }
@@ -1230,36 +1783,39 @@ export default function DataPulse({ user, onLogout }) {
                                 <span style={{ fontSize: '10px', color: 'var(--text-muted)', marginLeft: 'auto' }}>{m.newChart.id}</span>
                               </div>
                               <div style={{ padding: '8px' }}>
-                                <PlotComponent
-                                  data={(m.newChart.fig.data || []).map(t => ({ ...t, textfont: { color: "#FFFFFF" } }))}
-                                  layout={{
-                                    ...PLOTLY_DARK_LAYOUT,
-                                    ...(m.newChart.fig.layout || {}),
-                                    paper_bgcolor: "rgba(0,0,0,0)",
-                                    plot_bgcolor: "rgba(0,0,0,0)",
-                                    font: { color: "#FFFFFF", family: "'Inter', sans-serif", size: 11 },
-                                    hoverlabel: { bgcolor: "rgba(8,12,24,0.98)", font: { color: "#F8FAFC", size: 12 }, bordercolor: "rgba(99,102,241,0.85)" },
-                                    height: 300,
-                                    margin: { l: 45, r: 16, t: 36, b: 45 },
-                                    title: {
-                                      ...(m.newChart.fig.layout?.title || {}),
-                                      font: { size: 13, color: '#FFFFFF', weight: 'bold' },
-                                      y: 0.97, yanchor: 'top',
-                                    },
-                                    xaxis: { ...(m.newChart.fig.layout?.xaxis || {}), tickfont: { color: "#FFFFFF", size: 10 }, gridcolor: "rgba(99,102,241,0.1)", automargin: true },
-                                    yaxis: { ...(m.newChart.fig.layout?.yaxis || {}), tickfont: { color: "#FFFFFF", size: 10 }, gridcolor: "rgba(99,102,241,0.1)", automargin: true },
-                                    showlegend: false,
-                                  }}
-                                  config={{ ...PLOTLY_CONFIG, modeBarButtons: [['zoomIn2d', 'zoomOut2d', 'resetScale2d', 'toImage']] }}
-                                  style={{ width: "100%", height: "300px" }}
-                                />
+                                <div onWheel={stopPageZoomOnCtrlWheel}>
+                                  <PlotComponent
+                                    data={(m.newChart.fig.data || []).map(t => ({ ...t, textfont: { color: "#FFFFFF" } }))}
+                                    layout={{
+                                      ...PLOTLY_DARK_LAYOUT,
+                                      ...(m.newChart.fig.layout || {}),
+                                      paper_bgcolor: "rgba(0,0,0,0)",
+                                      plot_bgcolor: "rgba(0,0,0,0)",
+                                      font: { color: "#FFFFFF", family: "'Inter', sans-serif", size: 11 },
+                                      dragmode: m.newChart.fig.layout?.dragmode || "zoom",
+                                      hoverlabel: { bgcolor: "rgba(8,12,24,0.98)", font: { color: "#F8FAFC", size: 12 }, bordercolor: "rgba(99,102,241,0.85)" },
+                                      height: 300,
+                                      margin: { l: 45, r: 16, t: 36, b: 45 },
+                                      title: {
+                                        ...(m.newChart.fig.layout?.title || {}),
+                                        font: { size: 13, color: '#FFFFFF', weight: 'bold' },
+                                        y: 0.97, yanchor: 'top',
+                                      },
+                                      xaxis: { ...(m.newChart.fig.layout?.xaxis || {}), tickfont: { color: "#FFFFFF", size: 10 }, gridcolor: "rgba(99,102,241,0.1)", automargin: true },
+                                      yaxis: { ...(m.newChart.fig.layout?.yaxis || {}), tickfont: { color: "#FFFFFF", size: 10 }, gridcolor: "rgba(99,102,241,0.1)", automargin: true },
+                                      showlegend: false,
+                                    }}
+                                    config={PLOTLY_CONFIG}
+                                    style={{ width: "100%", height: "300px" }}
+                                  />
+                                </div>
                               </div>
                             </div>
                           </div>
                         )}
                       </div>
                     ))}
-                    {chatLoading && <div style={{ fontSize: '13px', color: 'var(--primary-500)', fontFamily: "'Outfit', monospace" }}>Gener...</div>}
+                    {chatLoading && <div style={{ fontSize: '13px', color: 'var(--primary-500)', fontFamily: "'Outfit', monospace" }}>Generating response...</div>}
                     {chatMsgs.length >= MAX_CHAT_MESSAGES && (
                       <div style={{ fontSize: '11px', color: 'var(--text-muted)', textAlign: 'center', padding: '4px 0', borderTop: '1px solid var(--border-subtle)', marginTop: '4px' }}>
                         Showing last {MAX_CHAT_MESSAGES} messages
@@ -1456,7 +2012,23 @@ export default function DataPulse({ user, onLogout }) {
 
                       <div style={{ padding: '20px', background: 'var(--bg-input)', borderRadius: '12px', border: '1px solid var(--border-subtle)' }}>
                         <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '16px' }}>
-                          <span style={{ fontSize: '18px' }}>🔍</span>
+                          <div style={{
+                            width: '32px',
+                            height: '32px',
+                            borderRadius: '10px',
+                            border: '1px solid rgba(6,182,212,0.35)',
+                            background: 'rgba(6,182,212,0.08)',
+                            color: '#7dd3fc',
+                            display: 'flex',
+                            alignItems: 'center',
+                            justifyContent: 'center',
+                            flexShrink: 0,
+                          }}>
+                            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                              <circle cx="11" cy="11" r="7" />
+                              <line x1="16.65" y1="16.65" x2="21" y2="21" />
+                            </svg>
+                          </div>
                           <strong style={{ fontSize: '15px', color: 'var(--text-main)', fontFamily: "'Inter', sans-serif" }}>Analyst Findings</strong>
                           <span style={{ marginLeft: 'auto', fontSize: '11px', padding: '3px 10px', borderRadius: '100px', background: 'rgba(6,182,212,0.1)', border: '1px solid rgba(6,182,212,0.25)', color: '#7dd3fc', textTransform: 'uppercase', letterSpacing: '0.08em' }}>AI Generated</span>
                         </div>
@@ -1470,7 +2042,23 @@ export default function DataPulse({ user, onLogout }) {
 
                       <div style={{ padding: '20px', background: 'var(--bg-input)', borderRadius: '12px', border: '1px solid var(--border-subtle)' }}>
                         <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '16px' }}>
-                          <span style={{ fontSize: '18px' }}>🚀</span>
+                          <div style={{
+                            width: '32px',
+                            height: '32px',
+                            borderRadius: '10px',
+                            border: '1px solid rgba(99,102,241,0.35)',
+                            background: 'rgba(99,102,241,0.10)',
+                            color: 'var(--primary-500)',
+                            display: 'flex',
+                            alignItems: 'center',
+                            justifyContent: 'center',
+                            flexShrink: 0,
+                          }}>
+                            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                              <path d="M4.5 19.5l6.2-2.1 8.8-8.8a2.1 2.1 0 0 0-3-3l-8.8 8.8-2.1 6.2z" />
+                              <path d="M12.5 11.5l2 2" />
+                            </svg>
+                          </div>
                           <strong style={{ fontSize: '15px', color: 'var(--text-main)', fontFamily: "'Inter', sans-serif" }}>Strategic Recommendations</strong>
                           <span style={{ marginLeft: 'auto', fontSize: '11px', padding: '3px 10px', borderRadius: '100px', background: 'rgba(99,102,241,0.1)', border: '1px solid rgba(99,102,241,0.25)', color: 'var(--primary-500)', textTransform: 'uppercase', letterSpacing: '0.08em' }}>Actionable</span>
                         </div>
