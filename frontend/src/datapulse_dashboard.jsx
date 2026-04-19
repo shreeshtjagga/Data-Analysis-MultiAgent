@@ -33,9 +33,9 @@ const PLOTLY_CONFIG = {
   doubleClick: "reset+autosize"
 };
 
-const MIN_ZOOM_SPAN_RATIO = 0.02;
-const MAX_ZOOM_OUT_MULTIPLIER = 6;
-const ZOOM_BOUNDARY_PADDING_RATIO = 1.5;
+const MIN_ZOOM_SPAN_RATIO = 0.08;
+const MAX_ZOOM_OUT_MULTIPLIER = 1.1;
+const ZOOM_BOUNDARY_PADDING_RATIO = 0.05;
 
 function truncateLabel(value, max = 26) {
   const text = String(value ?? "").trim();
@@ -487,7 +487,7 @@ const ChatBubble = memo(({ m, PlotComponent, result, stopPageZoomOnCtrlWheel }) 
                     yaxis: { ...(m.newChart.fig.layout?.yaxis || {}), tickfont: { color: "#FFFFFF", size: 10 }, gridcolor: "rgba(99,102,241,0.1)", automargin: true },
                     showlegend: false,
                   }}
-                  config={PLOTLY_CONFIG}
+                  config={{ ...PLOTLY_CONFIG, scrollZoom: false }}
                   style={{ width: "100%", height: "300px" }}
                 />
               </div>
@@ -539,7 +539,7 @@ const ChatBubble = memo(({ m, PlotComponent, result, stopPageZoomOnCtrlWheel }) 
                         title: { ...(layout.title || {}), font: { size: 14, color: '#fff', weight: 'bold' }, y: 0.95, yanchor: 'top' },
                         legend: { orientation: "h", yanchor: "top", y: -0.2, xanchor: "center", x: 0.5, font: { size: 10, color: "rgba(255,255,255,0.7)" } }
                       }}
-                      config={PLOTLY_CONFIG}
+                      config={{ ...PLOTLY_CONFIG, scrollZoom: false }}
                       style={{ width: "100%", height: "280px" }}
                     />
                   </div>
@@ -728,12 +728,31 @@ const ChartPanel = memo(({ result, PlotComponent }) => {
           b: effectiveShowLegend ? (72 + (legendRows * 18)) : (hasLongLabels ? 78 : 58),
         };
         const initialBounds = chartInitialBounds[key] || {};
+        const optimizedData = normalizedData.map(trace => {
+          // Reduce clutter in dense scatter plots by scaling markers down slightly when in grid view
+          if (trace.type === "scatter" || trace.type === "scattergl") {
+            const baseSize = trace.marker?.size || 8;
+            return {
+              ...trace,
+              marker: {
+                ...(trace.marker || {}),
+                size: isSpotlighted ? baseSize : Math.max(4, baseSize - 2),
+                opacity: isSpotlighted ? 0.8 : 0.6,
+                line: {
+                  width: isSpotlighted ? (trace.marker?.line?.width || 0.5) : 0,
+                  color: trace.marker?.line?.color || "rgba(255,255,255,0.2)"
+                }
+              }
+            };
+          }
+          return trace;
+        });
         const xBaseAxis = initialBounds.x ? { range: initialBounds.x } : fig.layout?.xaxis;
         const yBaseAxis = initialBounds.y ? { range: initialBounds.y } : fig.layout?.yaxis;
         const xConstraint = buildAxisConstraint(xBaseAxis, collectAxisValues(fig.data, "x"));
         const yConstraint = buildAxisConstraint(yBaseAxis, collectAxisValues(fig.data, "y"));
         const viewport = chartViewports[key] || {};
-        const chartMode = chartInteractionMode[key] || "zoom";
+        const chartMode = chartInteractionMode[key] || (isSpotlighted ? "pan" : "zoom");
         const currentXRange = viewport.x || initialBounds.x || fig.layout?.xaxis?.range || null;
         const currentYRange = viewport.y || initialBounds.y || fig.layout?.yaxis?.range || null;
         const zoomChart = (factor) => {
@@ -759,6 +778,10 @@ const ChartPanel = memo(({ result, PlotComponent }) => {
           });
         };
         const onChartWheel = (event) => {
+          // If not in focus mode, we don't want to intercept any wheel events for zooming.
+          // This allows natural page scrolling even if mouse is over a chart.
+          if (!isSpotlighted) return;
+
           if (event.ctrlKey || event.metaKey) {
             event.preventDefault();
             return;
@@ -841,7 +864,7 @@ const ChartPanel = memo(({ result, PlotComponent }) => {
                   {isSpotlighted ? "⤡" : "⤢"}
                 </button>
 
-                {showViewportControls && (
+                {isSpotlighted && showViewportControls && (
                   <div className="chart-action-group">
                     <button
                       className="chart-action-btn"
@@ -872,7 +895,7 @@ const ChartPanel = memo(({ result, PlotComponent }) => {
 
                 <div onWheel={onChartWheel}>
                   <PlotComponent
-                    data={normalizedData}
+                    data={optimizedData}
                     revision={chartRevisions[key] || 0}
                     onInitialized={(figure) => captureInitialBounds(key, figure)}
                     onRelayout={onChartRelayout}
@@ -890,7 +913,8 @@ const ChartPanel = memo(({ result, PlotComponent }) => {
                       paper_bgcolor: "rgba(0,0,0,0)",
                       plot_bgcolor: "rgba(0,0,0,0)",
                       font: { color: "#FFFFFF", family: "'Inter', sans-serif" },
-                      dragmode: showViewportControls ? chartMode : (fig.layout?.dragmode || "zoom"),
+                      uniformtext: { mode: 'hide', minsize: 10 },
+                      dragmode: isSpotlighted && showViewportControls ? chartMode : false, 
                       hovermode: fig.layout?.hovermode || "closest",
                       hoverlabel: {
                         ...PLOTLY_DARK_LAYOUT.hoverlabel,
@@ -934,7 +958,10 @@ const ChartPanel = memo(({ result, PlotComponent }) => {
                       },
                       uniformtext: { minsize: 10, mode: "hide" },
                     }}
-                    config={PLOTLY_CONFIG}
+                    config={{
+                      ...PLOTLY_CONFIG,
+                      scrollZoom: isSpotlighted && showViewportControls,
+                    }}
                     style={{ width: "100%", height: `${chartHeight}px` }}
                   />
                 </div>
@@ -1885,8 +1912,18 @@ export default function DataPulse({ user, onLogout }) {
                     <div className="flex-col gap-24">
                       {headline && (
                         <div style={{ padding: '20px', background: 'rgba(99,102,241,0.05)', borderRadius: '12px', borderLeft: '4px solid var(--primary-500)' }}>
-                          <strong style={{ fontSize: '12px', color: 'var(--primary-500)', textTransform: 'uppercase', display: 'block', marginBottom: '8px', letterSpacing: '0.1em' }}>Executive Matrix</strong>
-                          <p style={{ fontSize: '15px', color: 'var(--text-main)' }}>{headline}</p>
+                          <strong style={{ fontSize: '12px', color: 'var(--primary-500)', textTransform: 'uppercase', display: 'block', marginBottom: '8px', letterSpacing: '0.1em' }}>Data Synopsis</strong>
+                          <p style={{ fontSize: '15px', color: 'var(--text-main)', marginBottom: (insights.data_info && insights.data_info.length > 0) ? '12px' : '0' }}>{headline}</p>
+                          {insights.data_info && insights.data_info.length > 0 && (
+                            <div style={{ display: 'flex', flexDirection: 'column', gap: '6px', paddingTop: '12px', borderTop: '1px solid rgba(99,102,241,0.1)' }}>
+                              {toTextList(insights.data_info).map((info, i) => (
+                                <div key={`di-${i}`} style={{ fontSize: '13px', color: 'var(--text-muted)', display: 'flex', gap: '8px', alignItems: 'flex-start' }}>
+                                  <span style={{ color: 'var(--primary-500)', fontSize: '14px', lineHeight: '18px' }}>•</span>
+                                  <span>{info}</span>
+                                </div>
+                              ))}
+                            </div>
+                          )}
                         </div>
                       )}
                       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '16px' }}>
@@ -1901,26 +1938,6 @@ export default function DataPulse({ user, onLogout }) {
                         <strong style={{ fontSize: '15px', display: 'block', marginBottom: '16px', color: 'var(--text-main)', fontFamily: "'Inter', sans-serif" }}>Data Info</strong>
                         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px' }}>
                           {[
-                            {
-                              label: 'Total Records',
-                              value: (stats.row_count || 0).toLocaleString(),
-                              color: '#818cf8',
-                              icon: (
-                                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                                  <ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M3 5v14a9 3 0 0 0 18 0V5"/><path d="M3 12a9 3 0 0 0 18 0"/>
-                                </svg>
-                              )
-                            },
-                            {
-                              label: 'Total Columns',
-                              value: stats.column_count || 0,
-                              color: '#a78bfa',
-                              icon: (
-                                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                                  <rect x="3" y="3" width="5" height="18" rx="1"/><rect x="10" y="3" width="5" height="18" rx="1"/><rect x="17" y="3" width="4" height="18" rx="1"/>
-                                </svg>
-                              )
-                            },
                             {
                               label: 'Numeric Columns',
                               value: Object.keys(stats.numeric_columns || {}).length || '—',
@@ -1962,22 +1979,42 @@ export default function DataPulse({ user, onLogout }) {
                               )
                             },
                             {
-                              label: 'Data Completeness',
-                              value: formatPercent(dq.completeness || 100),
-                              color: '#34d399',
-                              icon: (
-                                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                                  <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/><polyline points="9 12 11 14 15 10"/>
-                                </svg>
-                              )
-                            },
-                            {
                               label: 'Dataset Type',
                               value: datasetTypeLabel || '—',
                               color: '#38bdf8',
                               icon: (
                                 <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                                   <line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/>
+                                </svg>
+                              )
+                            },
+                            {
+                              label: 'Noise Filtered',
+                              value: (stats.excluded_columns || []).length,
+                              color: '#94a3b8',
+                              icon: (
+                                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                                  <path d="M22 3H2l8 9.46V19l4 2v-8.54L22 3z"/>
+                                </svg>
+                              )
+                            },
+                            {
+                              label: 'Detected Outlier Count',
+                              value: Object.values(stats.outliers || {}).reduce((acc, curr) => acc + (curr.count || 0), 0).toLocaleString(),
+                              color: '#f43f5e',
+                              icon: (
+                                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                                  <circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/>
+                                </svg>
+                              )
+                            },
+                            {
+                              label: 'Strong Correlations',
+                              value: (stats.strong_correlations || []).length,
+                              color: '#8b5cf6',
+                              icon: (
+                                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                                  <path d="M18 8A3 3 0 1018 2a3 3 0 000 6zM6 15A3 3 0 106 9a3 3 0 000 6zM18 22A3 3 0 1018 16a3 3 0 000 6z"/><path d="M9 12l6-4M9 12l6 7"/>
                                 </svg>
                               )
                             },
