@@ -84,6 +84,30 @@ export default function App() {
             : <Login onLogin={handleLogin} />
         }
       />
+      <Route
+        path="/register"
+        element={
+          authState.user
+            ? <Navigate to="/" replace />
+            : <Login onLogin={handleLogin} />
+        }
+      />
+      <Route
+        path="/forgot-password"
+        element={
+          authState.user
+            ? <Navigate to="/" replace />
+            : <Login onLogin={handleLogin} />
+        }
+      />
+      <Route
+        path="/reset-password"
+        element={
+          authState.user
+            ? <Navigate to="/" replace />
+            : <Login onLogin={handleLogin} />
+        }
+      />
       {/* Protected dashboard */}
       <Route
         path="/"
