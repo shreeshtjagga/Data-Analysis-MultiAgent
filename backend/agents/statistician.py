@@ -1,6 +1,8 @@
 
 
 import logging
+import json
+import time
 
 import numpy as np
 import pandas as pd
@@ -14,6 +16,24 @@ logger = logging.getLogger(__name__)
 _CSV_FORMULA_PREFIXES = ("=", "+", "-", "@")
 _MAX_CATEGORY_VALUE_CHARS = 200
 _MAX_STRONG_CORRELATIONS = 200
+
+
+def _debug_log(run_id: str, hypothesis_id: str, location: str, message: str, data: dict) -> None:
+    # #region agent log
+    try:
+        with open("debug-da5cdd.log", "a", encoding="utf-8") as _fh:
+            _fh.write(json.dumps({
+                "sessionId": "da5cdd",
+                "runId": run_id,
+                "hypothesisId": hypothesis_id,
+                "location": location,
+                "message": message,
+                "data": data,
+                "timestamp": int(time.time() * 1000),
+            }, ensure_ascii=True) + "\n")
+    except Exception:
+        pass
+    # #endregion
 
 
 def _sanitize_cell_for_output(value: object) -> str:
@@ -37,8 +57,9 @@ def statistician_agent(state: AnalysisState) -> AnalysisState:
         if state.clean_df is None or state.clean_df.empty:
             raise ValueError("No clean data available for statistical analysis")
 
-        # Work on a view — we coerce in place (local only, clean_df is not returned)
+        # Work on a view for safe local transformation before final write-back.
         df = state.clean_df.copy()
+        _debug_log("pre-fix", "H5", "backend/agents/statistician.py:statistician_agent", "copied clean_df for coercion", {"rows": int(len(df)), "cols": int(len(df.columns))})
 
 
         excluded_names: set[str] = set()
@@ -133,6 +154,10 @@ def statistician_agent(state: AnalysisState) -> AnalysisState:
                 
                 lower_bound = q1 - 1.5 * iqr
                 upper_bound = q3 + 1.5 * iqr
+                if not (pd.notna(lower_bound) and pd.notna(upper_bound)):
+                    _debug_log("pre-fix", "H5", "backend/agents/statistician.py:statistician_agent", "invalid outlier bounds", {"column": col, "iqr": iqr, "q1": q1, "q3": q3})
+                    # FIX 3: Skip outlier serialization when bounds are invalid
+                    continue
 
                 outliers = df[(df[col] < lower_bound) | (df[col] > upper_bound)]
                 if len(outliers) > 0:
@@ -216,14 +241,18 @@ def statistician_agent(state: AnalysisState) -> AnalysisState:
                     )
                     correlation_matrix = corr_sample.corr()
                     strong_correlations = []
-                    for i in range(len(correlation_matrix.columns)):
-                        for j in range(i + 1, len(correlation_matrix.columns)):
-                            corr_val = correlation_matrix.iloc[i, j]
+                    # FIX 4: Use label-based correlation iteration to avoid index drift
+                    cols_list = list(correlation_matrix.columns)
+                    for i, c1 in enumerate(cols_list):
+                        for j, c2 in enumerate(cols_list):
+                            if j <= i:
+                                continue
+                            corr_val = correlation_matrix.loc[c1, c2]
                             if abs(corr_val) > 0.7 and pd.notna(corr_val):
                                 strong_correlations.append(
                                     {
-                                        "col1": correlation_matrix.columns[i],
-                                        "col2": correlation_matrix.columns[j],
+                                        "col1": c1,
+                                        "col2": c2,
                                         "correlation": float(corr_val),
                                     }
                                 )
@@ -259,6 +288,8 @@ def statistician_agent(state: AnalysisState) -> AnalysisState:
                 stats_summary[key] = prev[key]
 
         state.stats_summary = stats_summary
+        # FIX 2: Persist coerced dataframe back into state for downstream agents
+        state.clean_df = df
         logger.info(
             "Statistician complete. %d numeric, %d categorical columns analysed",
             len(numeric_stats),

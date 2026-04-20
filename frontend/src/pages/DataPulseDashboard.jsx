@@ -60,6 +60,13 @@ function cleanAxisTitle(value) {
   return truncateLabel(cleanQuestionLabel(value), 42);
 }
 
+// FIX 33: Support Plotly title values that may be string or object.
+function getFigureTitleText(fig, fallback = "") {
+  const title = fig?.layout?.title;
+  if (typeof title === "string") return title;
+  return title?.text || fallback;
+}
+
 function stopPageZoomOnCtrlWheel(event) {
   // Keep wheel events available for Plotly zoom while blocking browser page zoom.
   if (event.ctrlKey || event.metaKey) {
@@ -474,12 +481,15 @@ const ChatBubble = memo(({ m, PlotComponent, result, stopPageZoomOnCtrlWheel }) 
                     paper_bgcolor: "rgba(0,0,0,0)",
                     plot_bgcolor: "rgba(0,0,0,0)",
                     font: { color: "#FFFFFF", family: "'Inter', sans-serif", size: 11 },
+                    autosize: true,
+                    width: undefined,
                     dragmode: m.newChart.fig.layout?.dragmode || "zoom",
                     hoverlabel: { bgcolor: "rgba(8,12,24,0.98)", font: { color: "#F8FAFC", size: 12 }, bordercolor: "rgba(99,102,241,0.85)" },
-                    height: 300,
+                    height: 360,
                     margin: { l: 45, r: 16, t: 36, b: 45 },
                     title: {
-                      ...(m.newChart.fig.layout?.title || {}),
+                      ...(typeof m.newChart.fig.layout?.title === "object" ? m.newChart.fig.layout.title : {}),
+                      text: getFigureTitleText(m.newChart.fig, ""),
                       font: { size: 13, color: '#FFFFFF', weight: 'bold' },
                       y: 0.97, yanchor: 'top',
                     },
@@ -488,7 +498,13 @@ const ChatBubble = memo(({ m, PlotComponent, result, stopPageZoomOnCtrlWheel }) 
                     showlegend: false,
                   }}
                   config={{ ...PLOTLY_CONFIG, scrollZoom: false }}
-                  style={{ width: "100%", height: "300px" }}
+                  useResizeHandler
+                  style={{ width: "100%", height: "360px" }}
+                  onInitialized={(figure) => {
+                    // #region agent log
+                    fetch('http://127.0.0.1:7453/ingest/05241122-7592-426a-ba9c-df1222b6ac79',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'da5cdd'},body:JSON.stringify({sessionId:'da5cdd',runId:'pre-fix',hypothesisId:'H8',location:'frontend/src/pages/DataPulseDashboard.jsx:ChatBubble',message:'new chart initialized',data:{chartId:m?.newChart?.id||null,initializedWidth:figure?.layout?.width??null,initializedHeight:figure?.layout?.height??null,xTickAngle:figure?.layout?.xaxis?.tickangle??null,yTickAngle:figure?.layout?.yaxis?.tickangle??null},timestamp:Date.now()})}).catch(()=>{});
+                    // #endregion
+                  }}
                 />
               </div>
             </div>
@@ -514,9 +530,14 @@ const ChatBubble = memo(({ m, PlotComponent, result, stopPageZoomOnCtrlWheel }) 
         {(() => {
           if (m.role !== 'ai' || !m.text.includes('[CHART:')) return m.text;
           const parts = m.text.split(/(\[CHART:\s*[^\]]+\])/);
+          let renderedChartCount = 0;
           return parts.map((part, pIdx) => {
             const match = part.match(/\[CHART:\s*([^\]]+)\]/);
             if (match && result?.charts?.[match[1]]) {
+              if (renderedChartCount >= 1) {
+                return null;
+              }
+              renderedChartCount += 1;
               const figStr = result.charts[match[1]];
               let parsedFig = typeof figStr === "string" ? JSON.parse(figStr) : figStr;
               const data = Array.isArray(parsedFig?.data) ? parsedFig.data : [];
@@ -532,15 +553,18 @@ const ChatBubble = memo(({ m, PlotComponent, result, stopPageZoomOnCtrlWheel }) 
                         paper_bgcolor: "rgba(0,0,0,0)",
                         plot_bgcolor: "rgba(0,0,0,0)",
                         font: { color: "#FFFFFF", family: "'Inter', sans-serif" },
+                        autosize: true,
+                        width: undefined,
                         dragmode: layout?.dragmode || "zoom",
                         hoverlabel: { bgcolor: "rgba(8,12,24,0.98)", font: { color: "#F8FAFC", size: 12 }, bordercolor: "rgba(99,102,241,0.85)" },
-                        height: 280,
+                        height: 340,
                         margin: { l: 40, r: 20, t: 40, b: 40 },
                         title: { ...(layout.title || {}), font: { size: 14, color: '#fff', weight: 'bold' }, y: 0.95, yanchor: 'top' },
                         legend: { orientation: "h", yanchor: "top", y: -0.2, xanchor: "center", x: 0.5, font: { size: 10, color: "rgba(255,255,255,0.7)" } }
                       }}
                       config={{ ...PLOTLY_CONFIG, scrollZoom: false }}
-                      style={{ width: "100%", height: "280px" }}
+                      useResizeHandler
+                      style={{ width: "100%", height: "340px" }}
                     />
                   </div>
                 </div>
@@ -581,7 +605,10 @@ const ChartPanel = memo(({ result, PlotComponent }) => {
   }, [spotlightChartKey]);
 
   const captureInitialBounds = useCallback((key, figure) => {
-    const xRange = normalizeRangePair(figure?.layout?.xaxis?.range);
+    // FIX 32: Guard undefined layout/xaxis during plot initialization.
+    const xRange = figure?.layout?.xaxis?.range
+      ? normalizeRangePair(figure.layout.xaxis.range)
+      : null;
     const yRange = normalizeRangePair(figure?.layout?.yaxis?.range);
     if (!xRange && !yRange) return;
 
@@ -907,8 +934,8 @@ const ChartPanel = memo(({ result, PlotComponent }) => {
                       ...fig.layout,
                       authorise: true,
                       title: {
-                        ...(fig.layout?.title || {}),
-                        text: truncateLabel(cleanQuestionLabel(fig.layout?.title?.text || fig.layout?.title || key.replaceAll("_", " ")), 85),
+                        ...(typeof fig.layout?.title === "object" ? fig.layout.title : {}),
+                      text: truncateLabel(cleanQuestionLabel(getFigureTitleText(fig, key.replaceAll("_", " "))), 85),
                         font: { color: "#FFFFFF", size: 16, weight: 'bold' },
                         x: 0.5,
                         xanchor: "center",
@@ -996,7 +1023,7 @@ const ChartPanel = memo(({ result, PlotComponent }) => {
                 </div>
 
                 <h3 className="chart-back-title">
-                  {cleanQuestionLabel(fig.layout?.title?.text || fig.layout?.title || key.replaceAll("_", " "))}
+                  {cleanQuestionLabel(getFigureTitleText(fig, key.replaceAll("_", " ")))}
                 </h3>
 
                 <div className="chart-back-divider" />
@@ -1117,6 +1144,7 @@ export default function DataPulse({ user, onLogout }) {
   }, [result, PlotComponent]);
   const clearStageTimers = () => {
     stageTimersRef.current.forEach((timerId) => {
+      // FIX 36: Explicitly clear both timeout and interval timer IDs.
       clearTimeout(timerId);
       clearInterval(timerId);
     });
@@ -1382,7 +1410,8 @@ export default function DataPulse({ user, onLogout }) {
         const yGap = 12;
         const chartBoxHeight = totalRows > 1 ? (availableHeight - yGap) / totalRows : Math.min(availableHeight, 100);
 
-        for (let i = 0; i < totalCharts; i++) {
+      // FIX 34: Keep per-chart try/catch inside loop to avoid whole-export failure.
+      for (let i = 0; i < totalCharts; i++) {
           const key = chartKeys[i];
           const fig = charts[key];
           if (!fig || !fig.data) continue;
@@ -1552,7 +1581,7 @@ export default function DataPulse({ user, onLogout }) {
     const q = chatInput.trim();
     if (!q || chatLoading || !result) return;
     
-    // Prepare history before updating local state with the new message
+    // FIX 35: Build history before appending current user message.
     const history = chatMsgs.map(m => ({
       role: m.role === 'ai' ? 'assistant' : 'user',
       content: m.text
@@ -1563,10 +1592,17 @@ export default function DataPulse({ user, onLogout }) {
     setChatLoading(true);
     try {
       const resp = await apiChat(q, chatContext || {}, history);
+      // #region agent log
+      fetch('http://127.0.0.1:7453/ingest/05241122-7592-426a-ba9c-df1222b6ac79',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'da5cdd'},body:JSON.stringify({sessionId:'da5cdd',runId:'pre-fix',hypothesisId:'H8',location:'frontend/src/pages/DataPulseDashboard.jsx:sendChat',message:'chat response received',data:{hasNewChart:!!resp?.new_chart?.fig,newChartId:resp?.new_chart?.id||null,layoutWidth:resp?.new_chart?.fig?.layout?.width??null,layoutHeight:resp?.new_chart?.fig?.layout?.height??null,titleType:typeof resp?.new_chart?.fig?.layout?.title,traceCount:Array.isArray(resp?.new_chart?.fig?.data)?resp.new_chart.fig.data.length:0},timestamp:Date.now()})}).catch(()=>{});
+      // #endregion
       if (resp?.new_chart?.id) {
         setGeneratedChartKeys((prev) => (prev.includes(resp.new_chart.id) ? prev : [...prev, resp.new_chart.id]));
       }
       const rawAnswer = (resp.answer || "").trim() || "No response generated.";
+      const chartTagMatches = rawAnswer.match(/\[CHART:\s*[^\]]+\]/g) || [];
+      // #region agent log
+      fetch('http://127.0.0.1:7453/ingest/05241122-7592-426a-ba9c-df1222b6ac79',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'da5cdd'},body:JSON.stringify({sessionId:'da5cdd',runId:'post-fix',hypothesisId:'H9',location:'frontend/src/pages/DataPulseDashboard.jsx:sendChat',message:'chat answer chart tags counted',data:{chartTagCount:chartTagMatches.length,hasNewChart:!!resp?.new_chart?.fig},timestamp:Date.now()})}).catch(()=>{});
+      // #endregion
       // Strip all double stars (**) for a cleaner plain-text look
       const cleanAnswer = rawAnswer.replace(/\*\*/g, '');
 
@@ -1674,6 +1710,7 @@ export default function DataPulse({ user, onLogout }) {
 
                 {/* The Rotating AI Globe Core Container */}
                 <div className="ai-hologram-layer" style={{ zIndex: 1 }}>
+                  {/* FIX 37: Globe pointer interaction intentionally disabled for now. */}
                   <GlobeCanvas size={390} />
                 </div>
               </div>

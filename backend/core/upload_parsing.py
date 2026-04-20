@@ -44,6 +44,14 @@ def validate_upload_magic(parsed_ext: str, file_bytes: bytes) -> None:
     if parsed_ext == "xlsx":
         if not zipfile.is_zipfile(io.BytesIO(file_bytes)):
             raise HTTPException(status_code=400, detail="Invalid XLSX file signature")
+        # FIX 47: Perform deeper XLSX validation for smaller files only.
+        if len(file_bytes) < 1_000_000:
+            try:
+                from openpyxl import load_workbook
+                wb = load_workbook(io.BytesIO(file_bytes), read_only=True)
+                wb.close()
+            except Exception:
+                raise HTTPException(status_code=400, detail="Invalid XLSX content")
         return
 
     if parsed_ext == "xls":
@@ -74,6 +82,7 @@ def detect_csv_delimiter(file_bytes: bytes) -> Optional[str]:
         dialect = csv.Sniffer().sniff(sniff_sample, delimiters=[",", ";", "\t", "|"])
         return dialect.delimiter
     except csv.Error:
+        # FIX 46: Returning None here intentionally falls back to pandas auto-detection.
         return None
 
 
@@ -92,12 +101,13 @@ def read_csv_with_fallback(
         attempts.append({"engine": "python", "sep": None, "encoding": encoding})
     attempts.append({})
 
-    errors = []
+    # FIX 45: Rename local parse errors accumulator for clarity.
+    parse_errors = []
     for csv_kwargs in attempts:
         try:
             header_df = pd.read_csv(io.BytesIO(file_bytes), nrows=0, on_bad_lines="skip", **csv_kwargs)
             if header_df.shape[1] == 0:
-                errors.append("No columns detected in CSV header")
+                parse_errors.append("No columns detected in CSV header")
                 continue
             if header_df.shape[1] > max_analyze_columns:
                 raise HTTPException(
@@ -114,7 +124,7 @@ def read_csv_with_fallback(
         except HTTPException:
             raise
         except Exception as exc:
-            errors.append(str(exc))
+            parse_errors.append(str(exc))
 
-    first_error = errors[0] if errors else "Unknown CSV parse error"
+    first_error = parse_errors[0] if parse_errors else "Unknown CSV parse error"
     raise HTTPException(status_code=422, detail=f"Could not parse file: {first_error}")

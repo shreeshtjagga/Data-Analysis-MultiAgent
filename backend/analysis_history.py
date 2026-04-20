@@ -8,6 +8,7 @@ from typing import Optional
 
 import pandas as pd
 from sqlalchemy import delete, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from .core import cache as redis_cache
@@ -36,6 +37,7 @@ def _serialize_charts(charts: dict) -> dict:
     out = {}
     for key, fig in charts.items():
         try:
+            # FIX 26: Accept both Plotly figure objects and already-serialized dicts.
             if hasattr(fig, "to_plotly_json"):
                 fig_json = fig.to_plotly_json()
                 fig_json.pop("uid", None)
@@ -149,11 +151,27 @@ async def save_analysis(
                 errors=_to_json(errors),
                 completed_agents=_to_json(analysis_result.get("completed_agents", [])),
             )
-            db.add(row)
-            await db.flush()
-            await db.refresh(row)
-            analysis_id = row.id
-            message = "Analysis saved successfully"
+            # FIX 29: Ensure analysis_id is assigned on duplicate-hash IntegrityError paths.
+            try:
+                db.add(row)
+                await db.flush()
+                await db.refresh(row)
+                analysis_id = row.id
+                message = "Analysis saved successfully"
+            except IntegrityError:
+                await db.rollback()
+                result = await db.execute(
+                    select(AnalysisHistory).where(
+                        AnalysisHistory.user_id == user_id,
+                        AnalysisHistory.file_hash == file_hash,
+                    )
+                )
+                existing = result.scalar_one_or_none()
+                if existing:
+                    analysis_id = existing.id
+                    message = "Analysis updated (same file detected)"
+                else:
+                    raise
 
 
         meta_result = await db.execute(

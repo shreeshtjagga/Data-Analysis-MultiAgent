@@ -211,6 +211,7 @@ async def get_db() -> AsyncSession:
         yield session
         await session.commit()
     except Exception:
+        # FIX 44: Roll back on any session error before propagating.
         await session.rollback()
         raise
     finally:

@@ -100,8 +100,8 @@ async def ping() -> bool:
 
 async def increment_with_ttl(key: str, ttl_seconds: int) -> int:
     """Atomically increment a key and set its expiry on first use."""
+    client = _get_client()
     try:
-        client = _get_client()
         script = """
         local current = redis.call('INCR', KEYS[1])
         if current == 1 then
@@ -112,5 +112,9 @@ async def increment_with_ttl(key: str, ttl_seconds: int) -> int:
         count = await client.eval(script, 1, key, ttl_seconds)
         return int(count)
     except Exception as exc:
-        logger.warning("Cache INCR+EXPIRE failed for key '%s': %s", key, exc)
-        raise
+        logger.warning("Cache INCR+EXPIRE eval failed for key '%s': %s", key, exc)
+        # FIX 30: Fallback for Redis services that do not support Lua eval.
+        count = await client.incr(key)
+        if count == 1:
+            await client.expire(key, ttl_seconds)
+        return int(count)
