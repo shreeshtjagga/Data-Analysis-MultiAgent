@@ -17,6 +17,10 @@
 // In Production, vercel.json proxies this to the Render backend.
 const BASE = "/api";
 
+// #region agent log
+fetch('http://127.0.0.1:7453/ingest/05241122-7592-426a-ba9c-df1222b6ac79',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'da5cdd'},body:JSON.stringify({sessionId:'da5cdd',runId:'pre-fix',hypothesisId:'H7',location:'frontend/src/api.js:module',message:'frontend api module loaded',data:{base:BASE},timestamp:Date.now()})}).catch(()=>{});
+// #endregion
+
 // ── Token storage: in-memory access token + HttpOnly refresh cookie ───────
 
 // Access token is held only in memory (lost on hard refresh). Refresh tokens
@@ -243,9 +247,28 @@ export async function apiAnalyze(file) {
 }
 
 export async function apiChat(question, context = {}, history = []) {
+  // FIX 31: Guard against circular references in context payloads.
+  let safeContext = context;
+  try {
+    JSON.stringify(context);
+  } catch (_) {
+    safeContext = { ...(context || {}), charts: {} };
+  }
+  let chatBody;
+  try {
+    chatBody = JSON.stringify({ question, context: safeContext, history });
+    // #region agent log
+    fetch('http://127.0.0.1:7453/ingest/05241122-7592-426a-ba9c-df1222b6ac79',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'da5cdd'},body:JSON.stringify({sessionId:'da5cdd',runId:'pre-fix',hypothesisId:'H1',location:'frontend/src/api.js:apiChat',message:'chat body serialization succeeded',data:{contextKeys:Object.keys(context || {}).length,historyCount:Array.isArray(history)?history.length:0},timestamp:Date.now()})}).catch(()=>{});
+    // #endregion
+  } catch (err) {
+    // #region agent log
+    fetch('http://127.0.0.1:7453/ingest/05241122-7592-426a-ba9c-df1222b6ac79',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'da5cdd'},body:JSON.stringify({sessionId:'da5cdd',runId:'pre-fix',hypothesisId:'H1',location:'frontend/src/api.js:apiChat',message:'chat body serialization failed',data:{error:String(err)},timestamp:Date.now()})}).catch(()=>{});
+    // #endregion
+    throw err;
+  }
   return apiFetch("/chat", {
     method: "POST",
-    body: JSON.stringify({ question, context, history }),
+    body: chatBody,
   });
 }
 

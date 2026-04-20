@@ -2,6 +2,8 @@ import json
 import logging
 import os
 from typing import Optional
+# FIX 5: Ensure pd.isna is available in narrative builder
+import pandas as pd
 
 from ..core.state import AnalysisState
 from ..core.errors import add_pipeline_error
@@ -13,7 +15,6 @@ logger = logging.getLogger(__name__)
 
 def _build_column_narrative(stats: dict) -> str:
     """Build a flat, readable column summary for the LLM to reason about directly."""
-    import pandas as pd
     lines = []
     numeric = stats.get("numeric_columns", {})
     for col, d in list(numeric.items())[:12]:
@@ -138,7 +139,8 @@ def _rule_based_insights(stats: dict) -> dict:
     outliers = stats.get("outliers", {})
     correlations = stats.get("strong_correlations", [])
     dq = stats.get("data_quality", {})
-    profile = stats.get("dataset_profile", {})
+    # FIX 6: Handle explicit None dataset_profile safely
+    profile = stats.get("dataset_profile") or {}
 
     # data_info: structural facts about what the dataset IS
     data_info = [

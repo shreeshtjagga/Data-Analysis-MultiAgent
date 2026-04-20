@@ -51,6 +51,7 @@ import json
 import logging
 import os
 import re
+import time
 from dataclasses import dataclass, field
 from typing import Optional
 
@@ -75,6 +76,24 @@ _SCATTER_MAX_ROWS = 3_000
 _HIST_MAX_ROWS    = 8_000
 _TS_MAX_POINTS    = 600
 _RANKED_BAR_TOP_N = 25
+
+
+def _debug_log(run_id: str, hypothesis_id: str, location: str, message: str, data: dict) -> None:
+    # #region agent log
+    try:
+        with open("debug-da5cdd.log", "a", encoding="utf-8") as _fh:
+            _fh.write(json.dumps({
+                "sessionId": "da5cdd",
+                "runId": run_id,
+                "hypothesisId": hypothesis_id,
+                "location": location,
+                "message": message,
+                "data": data,
+                "timestamp": int(time.time() * 1000),
+            }, ensure_ascii=True) + "\n")
+    except Exception:
+        pass
+    # #endregion
 
 
 # ── Helpers ──────────────────────────────────────────────────────────────────
@@ -411,7 +430,13 @@ def _build_ranked_bar(df: pd.DataFrame, x_col: str, y_col: str,
         return None
 
     if agg == "auto":
-        agg = "sum" if _should_sum(y_col, df[y_col]) else "mean"
+        try:
+            agg = "sum" if _should_sum(y_col, df[y_col]) else "mean"
+        except Exception as agg_exc:
+            _debug_log("pre-fix", "H6", "backend/agents/visualizer.py:_build_ranked_bar", "auto aggregation resolution failed", {"column": y_col, "error": str(agg_exc)})
+    # FIX 12: Guard unsupported/failed aggregation modes before pandas agg()
+    if agg not in ("sum", "mean", "count", "min", "max"):
+        agg = "mean"
 
     try:
         grouped = (
@@ -586,7 +611,13 @@ def _build_line(df: pd.DataFrame, date_col: str, num_cols: list[str],
             valid_nums = [max(valid_nums, key=lambda c: abs(df[c].median()))]
     cols_use = valid_nums[:4]
     plot_df = _resample_ts(df_s, date_col, cols_use, _TS_MAX_POINTS)
-    if plot_df[date_col].nunique() < 4:
+    try:
+        unique_points = int(plot_df[date_col].nunique())
+    except Exception as unique_exc:
+        _debug_log("pre-fix", "H6", "backend/agents/visualizer.py:_build_line", "date nunique failed", {"date_col": date_col, "error": str(unique_exc)})
+        unique_points = -1
+    # FIX 13: Guard nunique edge-case failures in pandas versions with NaT issues
+    if unique_points < 4:
         return None
 
     long_df = plot_df.melt(id_vars=date_col, var_name="Series", value_name="Value")
@@ -904,12 +935,10 @@ def _execute_plan(df: pd.DataFrame, plan: list[dict], cols: dict, stats: dict) -
                 chart = _build_box(df, y, x, title=None)
 
         elif ct == "violin" and x and y:
+            # FIX 14: Do not fallback to scatter here to avoid key collisions/overwrites.
             chart = _build_violin(df, x, y, title=ttl)
             if chart is None:
                 chart = _build_violin(df, y, x, title=None)
-                x_fallback = next((c for c in cols["num"] if c != y), None)
-                if x_fallback:
-                    chart = _build_scatter(df, x_fallback, y, color_col=x if x in df.columns else col, title=ttl)
 
         elif ct == "line" and x:
             val_cols = [y] if y else cols["num"]
@@ -972,6 +1001,7 @@ def _chart_has_signal(chart: Chart) -> bool:
     fig = chart.fig
     if not fig or not getattr(fig, "data", None):
         return False
+    # FIX 16: Filter out None traces before attribute access
     traces = [t for t in fig.data if t is not None]
     if not traces:
         return False
@@ -1243,8 +1273,11 @@ def _chart_summary_for_llm(chart: Chart, df: pd.DataFrame) -> dict:
     }
     try:
         layout = fig.layout
+        # FIX 15: Support both string and object title representations
+        title_obj = layout.title
         summary["title"] = (
-            layout.title.text if layout.title and layout.title.text else chart.key
+            (title_obj.text if hasattr(title_obj, "text") else str(title_obj))
+            if title_obj else chart.key
         )
         trace_previews = []
         for t in fig.data[:2]:  # summarise first 2 traces

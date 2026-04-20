@@ -309,7 +309,9 @@ function RegisterForm({ onLogin, setTab }) {
       const loginData = await apiLogin(email, password);
       onLogin(loginData.user, loginData.access_token);
     } catch (err) {
-      setError(err.message || "Registration failed");
+      // FIX 38: Show clearer error when auto-login fails after successful registration.
+      const msg = err.message || "Registration failed";
+      setError(msg.includes("rate") ? "Registered! Please try logging in manually." : msg);
     } finally {
       setLoading(false);
     }

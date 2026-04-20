@@ -1,6 +1,9 @@
 import logging
 import signal
 import concurrent.futures
+import json
+import time
+import pandas as pd
 from .state import AnalysisState
 from .constants import PIPELINE_VERSION
 from ..agents.architect import architect_agent, profile_dataset
@@ -11,6 +14,24 @@ from ..agents.insights import insights_agent
 logger = logging.getLogger(__name__)
 
 _AGENT_TIMEOUT_SECONDS = 90   # max seconds a single agent may run
+
+
+def _debug_log(run_id: str, hypothesis_id: str, location: str, message: str, data: dict) -> None:
+    # #region agent log
+    try:
+        with open("debug-da5cdd.log", "a", encoding="utf-8") as _fh:
+            _fh.write(json.dumps({
+                "sessionId": "da5cdd",
+                "runId": run_id,
+                "hypothesisId": hypothesis_id,
+                "location": location,
+                "message": message,
+                "data": data,
+                "timestamp": int(time.time() * 1000),
+            }, ensure_ascii=True) + "\n")
+    except Exception:
+        pass
+    # #endregion
 
 
 def _run_agent_with_timeout(agent_fn, state: AnalysisState, name: str) -> AnalysisState:
@@ -42,6 +63,11 @@ def _run_parallel_agents(state: AnalysisState) -> AnalysisState:
     """
     # Give each agent its own isolated copy of the state so writes don't race.
     # We use deep=True to ensure nested lists (like .errors) are not shared.
+    # FIX 9: Ensure dataframe fields are non-None before model_copy
+    if state.clean_df is None:
+        state.clean_df = pd.DataFrame()
+    if state.raw_df is None:
+        state.raw_df = pd.DataFrame()
     viz_state_in  = state.model_copy(deep=True)
     ins_state_in  = state.model_copy(deep=True)
 
@@ -68,12 +94,12 @@ def _run_parallel_agents(state: AnalysisState) -> AnalysisState:
             except TimeoutError as exc:
                 msg = str(exc) or f"Agent '{name}' timed out"
                 logger.error(msg)
-                state.errors.append({"code": "TIMEOUT", "agent": name, "message": msg})
+                state.errors.append({"code": "TIMEOUT", "agent": name, "message": msg, "type": "pipeline"})
                 state.partial = True
             except Exception as exc:
                 msg = f"Agent '{name}' raised an unexpected error: {exc}"
                 logger.exception(msg)
-                state.errors.append({"code": "UNEXPECTED", "agent": name, "message": msg})
+                state.errors.append({"code": "UNEXPECTED", "agent": name, "message": msg, "type": "pipeline"})
                 state.partial = True
 
     # Merge results back into the main state
@@ -109,18 +135,27 @@ def run_pipeline(df) -> AnalysisState:
         state = _run_agent_with_timeout(architect_agent, state, "architect")
     except Exception as exc:
         logger.exception("Architect failed: %s", exc)
-        state.errors.append(f"Architect failed: {exc}")
+        _debug_log("pre-fix", "H4", "backend/core/graph.py:run_pipeline", "architect failure append type", {"append_value_type": "str"})
+        # FIX 11: Keep state.errors schema consistent (dict only)
+        state.errors.append({
+            "code": "ARCHITECT_FAILED",
+            "agent": "orchestrator",
+            "message": str(exc),
+            "type": "pipeline",
+        })
         state.partial = True
         return state
 
     # Usable Data Guard: If architect excludes everything, stop early.
     excluded = (state.stats_summary or {}).get("excluded_columns", [])
+    # FIX 10: Compare clean columns against excluded column names set
+    excluded_names = {e["column"] for e in excluded}
     clean_cols = [c for c in (state.clean_df.columns if state.clean_df is not None else [])
-                  if c not in [e["column"] for e in excluded]]
+                  if c not in excluded_names]
     if len(clean_cols) == 0:
         msg = "No usable columns found after initial classification."
         logger.error(msg)
-        state.errors.append({"code": "NO_USABLE_COLUMNS", "agent": "orchestrator", "message": msg})
+        state.errors.append({"code": "NO_USABLE_COLUMNS", "agent": "orchestrator", "message": msg, "type": "pipeline"})
         state.partial = True
         return state
 
@@ -128,6 +163,10 @@ def run_pipeline(df) -> AnalysisState:
     logger.info("Running Statistician and Dataset Profiler concurrently...")
     with concurrent.futures.ThreadPoolExecutor(max_workers=2) as pool:
         # Give statistician its own state copy (standard pattern here)
+        if state.clean_df is None:
+            state.clean_df = pd.DataFrame()
+        if state.raw_df is None:
+            state.raw_df = pd.DataFrame()
         stat_state_in = state.model_copy(deep=True)
         
         stat_future = pool.submit(_run_agent_with_timeout, statistician_agent, stat_state_in, "statistician")
@@ -145,7 +184,13 @@ def run_pipeline(df) -> AnalysisState:
                 state.partial = True
         except Exception as exc:
             logger.exception("Statistician failed in parallel block: %s", exc)
-            state.errors.append(f"Statistician failed: {exc}")
+            _debug_log("pre-fix", "H4", "backend/core/graph.py:run_pipeline", "statistician failure append type", {"append_value_type": "str"})
+            state.errors.append({
+                "code": "STATISTICIAN_FAILED",
+                "agent": "orchestrator",
+                "message": str(exc),
+                "type": "pipeline",
+            })
             state.partial = True
 
         try:

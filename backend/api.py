@@ -25,7 +25,8 @@ _INJECTION_PATTERNS = [
     r"you\s+are\s+now\s+a",
     r"act\s+as\s+(if\s+you\s+are\s+)?a",
     r"disregard\s+(all\s+)?prior",
-    r"system\s*:\s*",
+    # FIX 40: Bound whitespace quantifiers to reduce regex backtracking risk
+    r"system\s{0,5}:\s{0,5}",
     r"<\s*system\s*>",
     r"<\s*/?inst\s*>",
     r"\[INST\]",
@@ -35,6 +36,30 @@ _INJECTION_PATTERNS = [
     r"pretend\s+(you\s+are|to\s+be)",
 ]
 _INJECTION_RE = _re.compile("|".join(_INJECTION_PATTERNS), _re.IGNORECASE)
+
+
+def _debug_log(run_id: str, hypothesis_id: str, location: str, message: str, data: dict) -> None:
+    # #region agent log
+    try:
+        with open("debug-da5cdd.log", "a", encoding="utf-8") as _fh:
+            _fh.write(
+                json.dumps(
+                    {
+                        "sessionId": "da5cdd",
+                        "runId": run_id,
+                        "hypothesisId": hypothesis_id,
+                        "location": location,
+                        "message": message,
+                        "data": data,
+                        "timestamp": int(datetime.now().timestamp() * 1000),
+                    },
+                    ensure_ascii=True,
+                )
+                + "\n"
+            )
+    except Exception:
+        pass
+    # #endregion
 
 def sanitize_chat_input(text: str) -> str:
     """Strip prompt injection patterns and null bytes from user input."""
@@ -121,6 +146,13 @@ origins = [o.strip() for o in _raw_origins.split(",") if o.strip()]
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    _debug_log(
+        "pre-fix",
+        "H7",
+        "backend/api.py:lifespan",
+        "backend lifespan started",
+        {"app_env": APP_ENV},
+    )
     logger.info("Starting DataPulse API v2 (pipeline %s)", PIPELINE_VERSION)
 
     if not os.getenv("GROQ_API_KEY"):
@@ -354,7 +386,8 @@ async def login_with_google(body: GoogleLoginRequest, db: AsyncSession = Depends
     if frontend_client_id and GOOGLE_CLIENT_ID and frontend_client_id != GOOGLE_CLIENT_ID:
         raise HTTPException(status_code=400, detail="Google client ID mismatch")
 
-    idinfo = verify_google_token(credential)
+    # FIX 43: Move blocking Google token verification off the async event loop
+    idinfo = await asyncio.to_thread(verify_google_token, credential)
     if not idinfo:
         raise HTTPException(status_code=401, detail="Invalid Google token")
     if GOOGLE_CLIENT_ID and idinfo.get("aud") != GOOGLE_CLIENT_ID:
@@ -480,6 +513,8 @@ _PARQUET_STORAGE_DIR = os.path.join(_API_FILE_DIR, "storage", "data")
 def persist_full_data_backend(df: pd.DataFrame, file_hash: str):
     """Saves cleaned DataFrame to Parquet in the background."""
     try:
+        # FIX 42: Enforce strict hash format before constructing parquet path.
+        assert _re.match(r"^[a-f0-9]{64}$", file_hash), "Invalid file hash"
         os.makedirs(_PARQUET_STORAGE_DIR, exist_ok=True)
         storage_path = os.path.join(_PARQUET_STORAGE_DIR, f"{file_hash}.parquet")
         df.to_parquet(storage_path, index=False)
@@ -495,7 +530,13 @@ def cleanup_old_parquet_files(retention_days: int = 3):
         cutoff = datetime.now() - timedelta(days=max(0, retention_days))
 
         deleted = 0
+        # FIX 48: Cap per-run scan to avoid long cleanup loops.
+        files_checked = 0
+        MAX_CHECK = 500
         for name in os.listdir(_PARQUET_STORAGE_DIR):
+            if files_checked > MAX_CHECK:
+                break
+            files_checked += 1
             if not name.lower().endswith(".parquet"):
                 continue
 
@@ -518,11 +559,18 @@ def cleanup_old_parquet_files(retention_days: int = 3):
 
 def _stratified_preview(df: pd.DataFrame, n: int) -> list:
     if len(df) <= n:
-        return json.loads(df.to_json(orient="records"))
+        # FIX 49: Preserve datetime readability in preview payload.
+        df_preview = df.copy()
+        for col in df_preview.select_dtypes(include=["datetime64"]).columns:
+            df_preview[col] = df_preview[col].dt.strftime("%Y-%m-%d %H:%M:%S")
+        return json.loads(df_preview.to_json(orient="records"))
     # Sample uniformly across the index so edge values are represented
     step = max(1, len(df) // n)
     sampled = df.iloc[::step].head(n)
-    return json.loads(sampled.to_json(orient="records"))
+    df_preview = sampled.copy()
+    for col in df_preview.select_dtypes(include=["datetime64"]).columns:
+        df_preview[col] = df_preview[col].dt.strftime("%Y-%m-%d %H:%M:%S")
+    return json.loads(df_preview.to_json(orient="records"))
 
 
 @app.post("/analyze", tags=["analysis"])
@@ -532,8 +580,16 @@ async def analyze(
     user_id: int = Depends(check_user_rate_limit), # check_user_rate_limit now returns user_id
     db: AsyncSession = Depends(get_db),
 ):
+    _debug_log(
+        "pre-fix",
+        "H7",
+        "backend/api.py:analyze",
+        "analyze endpoint invoked",
+        {"has_filename": bool(file.filename)},
+    )
 
-    filename = file.filename or ""
+    # FIX 41: Sanitize uploaded filename before hashing and downstream usage.
+    filename = os.path.basename(file.filename or "upload").strip()
     parsed_ext = filename.lower().split('.')[-1] if '.' in filename else ""
     if parsed_ext not in ("csv", "xlsx", "xls"):
         raise HTTPException(status_code=400, detail="Only CSV and Excel files are accepted")
@@ -559,6 +615,10 @@ async def analyze(
     validate_upload_magic(parsed_ext, file_bytes)
 
     file_hash = compute_file_hash(file_bytes, filename)
+    # FIX 42: Enforce strict hash format before any filesystem usage.
+    assert _re.match(r"^[a-f0-9]{64}$", file_hash), "Invalid file hash"
+    # FIX 42: Enforce expected SHA256 hash format before path construction.
+    assert _re.match(r"^[a-f0-9]{64}$", file_hash), "Invalid file hash"
 
 
     cached = await get_analysis_by_hash(db, user_id, file_hash)
@@ -572,7 +632,7 @@ async def analyze(
         cached["charts"] = {k: v for k, v in (cached.get("charts") or {}).items()}
         return {"from_cache": True, **cached}
     elif cached:
-        logger.info("Cache not eligible for reuse for user %d / %s — re-running pipeline", user_id, file.filename)
+        logger.info("Cache not eligible for reuse for user %d / %s — re-running pipeline", user_id, filename)
 
     await db.rollback()
 
@@ -855,20 +915,23 @@ def _is_result_plausible(data_result: dict, stats: dict) -> tuple[bool, str]:
     if result == "No rows found." or result is None:
         return False, "empty result"
     
+    # FIX 22: Skip plausibility range checks for non-numeric result payloads.
+    if not isinstance(result, (int, float)):
+        return True, ""
+
     # Check numeric results against known column ranges
     numeric_cols = stats.get("numeric_columns", {})
     
     # For top_n / aggregate results that return a single number,
     # verify it's within known min/max
-    if isinstance(result, (int, float)):
-        # Find which column was queried
-        sort_col = data_result.get("sort_column") or data_result.get("query", "")
-        for col, col_stats in numeric_cols.items():
-            if col.lower() in sort_col.lower():
-                col_min = col_stats.get("min", float("-inf"))
-                col_max = col_stats.get("max", float("inf"))
-                if not (col_min <= result <= col_max * 1.01):  # 1% tolerance
-                    return False, f"value {result} outside known range [{col_min}, {col_max}]"
+    # Find which column was queried
+    sort_col = data_result.get("sort_column") or data_result.get("query", "")
+    for col, col_stats in numeric_cols.items():
+        if col.lower() in sort_col.lower():
+            col_min = col_stats.get("min", float("-inf"))
+            col_max = col_stats.get("max", float("inf"))
+            if not (col_min <= result <= col_max * 1.01):  # 1% tolerance
+                return False, f"value {result} outside known range [{col_min}, {col_max}]"
     
     # Check row_count results don't exceed known row_count
     if data_result.get("query", "").startswith("Row count"):
@@ -906,6 +969,8 @@ def _classify_chat_intent(question: str) -> str:
         "can you plot", "can you chart", "can you make",
         "plot a", "chart a", "visualize", "visualise",
         "show some", "show a ", "give some",
+        "show me chart", "show me a chart", "show chart",
+        "show me plot", "show me a plot", "show plot",
     )
     if any(t in q for t in _GENERATE_TRIGGERS):
         return "generate_chart"
@@ -943,8 +1008,8 @@ async def chat_with_analysis(
             raise exc
         logger.warning("Redis rate limiter unavailable for user %s: %s", user_id, exc)
 
-    question = body.question.strip()
-    question = sanitize_chat_input(question)
+    # FIX 18: Sanitize user input immediately before any question usage.
+    question = sanitize_chat_input(body.question.strip())
     context = body.context or {}
 
     if not question:
@@ -952,7 +1017,32 @@ async def chat_with_analysis(
     if len(question) > MAX_QUESTION_CHARS:
         raise HTTPException(status_code=413, detail=f"Question too long. Max {MAX_QUESTION_CHARS} characters.")
 
-    context_blob = json.dumps(context, default=str)
+    # FIX 39: Lightweight pre-check before full JSON serialization.
+    rough_context_bytes = 0
+    if isinstance(context, dict):
+        for k, v in context.items():
+            rough_context_bytes += len(str(k).encode("utf-8")) + len(str(type(v)).encode("utf-8"))
+    if rough_context_bytes > MAX_CONTEXT_BYTES:
+        raise HTTPException(status_code=413, detail=f"Context too large. Max {MAX_CONTEXT_BYTES // 1024} KB.")
+
+    try:
+        context_blob = json.dumps(context, default=str)
+        _debug_log(
+            "pre-fix",
+            "H2",
+            "backend/api.py:chat_with_analysis",
+            "context serialization succeeded",
+            {"context_type": type(context).__name__, "context_keys": len(context) if isinstance(context, dict) else -1},
+        )
+    except Exception as context_exc:
+        _debug_log(
+            "pre-fix",
+            "H2",
+            "backend/api.py:chat_with_analysis",
+            "context serialization failed",
+            {"error": str(context_exc)},
+        )
+        raise
     if len(context_blob.encode("utf-8")) > MAX_CONTEXT_BYTES:
         raise HTTPException(status_code=413, detail=f"Context too large. Max {MAX_CONTEXT_BYTES // 1024} KB.")
 
@@ -967,6 +1057,8 @@ async def chat_with_analysis(
     using_preview_only = False
     if file_hash:
         try:
+            # FIX 42: Validate file hash before storage-path usage in chat branch.
+            assert _re.match(r"^[a-f0-9]{64}$", file_hash), "Invalid file hash"
             storage_path = os.path.join(_PARQUET_STORAGE_DIR, f"{file_hash}.parquet")
             if os.path.exists(storage_path):
                 df_full = pd.read_parquet(storage_path)
@@ -1001,6 +1093,13 @@ async def chat_with_analysis(
     # ── Classify intent ───────────────────────────────────────────────────────
     intent = _classify_chat_intent(question)
     logger.info("Chat intent classified as '%s' for question: %s", intent, question[:80])
+    _debug_log(
+        "post-fix",
+        "H9",
+        "backend/api.py:chat_with_analysis",
+        "chat intent classified",
+        {"question": question[:120], "intent": intent},
+    )
 
     # ══════════════════════════════════════════════════════════════════════════
     # BRANCH A — Generate a new chart
@@ -1113,6 +1212,13 @@ async def chat_with_analysis(
         if matched_key and isinstance(charts_data, dict) and matched_key in charts_data:
             try:
                 raw = charts_data[matched_key]
+                _debug_log(
+                    "pre-fix",
+                    "H3",
+                    "backend/api.py:chat_with_analysis",
+                    "matched chart parse attempt",
+                    {"raw_type": type(raw).__name__},
+                )
                 chart_fig = json.loads(raw) if isinstance(raw, str) else raw
                 # Build a readable summary of the chart's data
                 traces_info = []
@@ -1230,6 +1336,13 @@ async def chat_with_analysis(
     if isinstance(charts_data, dict):
         for k, v in charts_data.items():
             try:
+                _debug_log(
+                    "pre-fix",
+                    "H3",
+                    "backend/api.py:chat_with_analysis",
+                    "charts_summary parse attempt",
+                    {"chart_key": str(k), "raw_type": type(v).__name__},
+                )
                 c = json.loads(v) if isinstance(v, str) else v
                 details = []
                 for trace in c.get("data", []):
@@ -1425,6 +1538,7 @@ async def chat_with_analysis(
 
                     try:
                         if "{" in intent_text and "}" in intent_text:
+                            # FIX 21: Parse planner JSON once inside a single guarded block.
                             raw_json = intent_text[intent_text.find("{"):intent_text.rfind("}")+1]
                             raw_plan = json.loads(raw_json)
                             query_plan = QueryPlan(**raw_plan)  # validate before running
@@ -1446,21 +1560,21 @@ async def chat_with_analysis(
                                 run_data_query, file_hash, query_plan.type, query_plan.params
                             )
                             logger.info("Data Agent result: %s", str(data_result)[:500])
+                            result_is_empty = (
+                                not data_result
+                                or "error" in data_result
+                                or (isinstance(data_result.get("result"), list) and len(data_result["result"]) == 0)
+                                or data_result.get("result") == "No rows found."
+                            )
+                            if result_is_empty and resolved_subject:
+                                data_result = await asyncio.to_thread(
+                                    run_data_query, file_hash, "search", {"value": resolved_subject, "n": 3}
+                                )
                     except (json.JSONDecodeError, ValueError) as e:
                         logger.warning("Intent plan invalid (%s), skipping data query", e)
                         data_result = None
 
-                    if "{" in intent_text and "}" in intent_text:
-                        # (The above try/except handles the loading, this is for the fallback check)
-                        result_is_empty = (
-                            not data_result
-                            or "error" in data_result
-                            or (isinstance(data_result.get("result"), list) and len(data_result["result"]) == 0)
-                            or data_result.get("result") == "No rows found."
-                        )
-                        if result_is_empty and resolved_subject:
-                            data_result = await asyncio.to_thread(run_data_query, file_hash, "search", {"value": resolved_subject, "n": 3})
-                    else:
+                    if not ("{" in intent_text and "}" in intent_text):
                         _LOOKUP_SIGNALS = {
                             "birthday", "born", "dob", "date of birth", "age", "address",
                             "nationality", "country", "team", "salary", "height", "weight",

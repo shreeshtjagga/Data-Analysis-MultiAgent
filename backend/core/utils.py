@@ -430,6 +430,11 @@ def json_default(obj: Any) -> Any:
         return obj.isoformat()
     if isinstance(obj, set):
         return list(obj)
+    # FIX 28: Handle bytes payloads and Python complex values.
+    if isinstance(obj, bytes):
+        return obj.decode("utf-8", errors="replace")
+    if isinstance(obj, complex):
+        return abs(obj)
     return str(obj)
 
 
@@ -440,6 +445,11 @@ def sanitize_for_json(value: Any) -> Any:
         return [sanitize_for_json(v) for v in value]
     if isinstance(value, tuple):
         return [sanitize_for_json(v) for v in value]
+    # FIX 27: Normalize datetime-like values recursively.
+    if isinstance(value, (pd.Timestamp, datetime, date)):
+        return value.isoformat()
+    if isinstance(value, float) and (value != value):
+        return None
     if isinstance(value, float):
         return value if math.isfinite(value) else None
     if isinstance(value, (np.floating,)):

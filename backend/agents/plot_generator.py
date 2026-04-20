@@ -16,6 +16,7 @@ import json
 import logging
 import os
 import re
+import time
 from typing import Optional
 
 import pandas as pd
@@ -36,6 +37,24 @@ from .visualizer import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+def _debug_log(run_id: str, hypothesis_id: str, location: str, message: str, data: dict) -> None:
+    # #region agent log
+    try:
+        with open("debug-da5cdd.log", "a", encoding="utf-8") as _fh:
+            _fh.write(json.dumps({
+                "sessionId": "da5cdd",
+                "runId": run_id,
+                "hypothesisId": hypothesis_id,
+                "location": location,
+                "message": message,
+                "data": data,
+                "timestamp": int(time.time() * 1000),
+            }, ensure_ascii=True) + "\n")
+    except Exception:
+        pass
+    # #endregion
 
 SUPPORTED_CHART_TYPES = frozenset({
     "scatter", "histogram", "ranked_bar", "grouped_bar", "bar",
@@ -88,7 +107,14 @@ def _records_to_df(records: list[dict]) -> pd.DataFrame:
             pass
     for col in df.select_dtypes(include=["object"]).columns:
         try:
+            # FIX 23: Handle pandas versions without format='mixed' support.
             parsed = pd.to_datetime(df[col], format="mixed", errors="coerce")
+        except (ValueError, TypeError):
+            try:
+                parsed = pd.to_datetime(df[col], infer_datetime_format=True, errors="coerce")
+            except Exception:
+                continue
+        try:
             if parsed.notna().sum() / max(len(df), 1) >= 0.70:
                 df[col] = parsed
         except Exception:
@@ -321,7 +347,15 @@ def suggest_novel_chart(
     if requested_types:
         # Try each requested type in order
         for rtype in requested_types:
-            type_candidates = [c for c in all_candidates if c["chart_type"] == rtype]
+            # FIX 24: Treat pie and donut as interchangeable request aliases.
+            type_candidates = [
+                c for c in all_candidates
+                if c["chart_type"] in (
+                    rtype,
+                    "donut" if rtype == "pie" else rtype,
+                    "pie" if rtype == "donut" else rtype,
+                )
+            ]
 
             # If user also mentioned specific columns, prefer those
             if mentioned_cols and type_candidates:
@@ -458,9 +492,11 @@ def generate_on_demand_chart(
     candidate_key = _predict_chart_key(chart_type, x, y)
     if existing_chart_keys and _is_duplicate(candidate_key, existing_chart_keys):
         logger.info("Duplicate chart detected: %s", candidate_key)
+        # FIX 25: Return consistent duplicate response payload shape.
         return {"id": "duplicate", "fig": None, "error": None, "is_duplicate": True}
 
     num_cols = [c for c in df.columns if pd.api.types.is_numeric_dtype(df[c])]
+    cat_cols = [c for c in df.columns if not pd.api.types.is_numeric_dtype(df[c])]
     chart = None
 
     if chart_type == "scatter":
@@ -537,8 +573,35 @@ def generate_on_demand_chart(
         chart = _build_freq_bar(df, col, title=title)
 
     if chart is None or not _chart_has_signal(chart):
+        _debug_log(
+            "post-fix",
+            "H10",
+            "backend/agents/plot_generator.py:generate_on_demand_chart",
+            "primary chart build failed, trying fallbacks",
+            {"chart_type": chart_type, "x": x, "y": y, "num_cols": len(num_cols), "cat_cols": len(cat_cols)},
+        )
+        fallback_chart = None
+        # Try robust defaults so generic "show me a chart" always returns at least one chart.
+        if len(num_cols) >= 3:
+            fallback_chart = _build_heatmap(df, num_cols, title="Correlation Heatmap")
+        if fallback_chart is None and num_cols:
+            fallback_chart = _build_histogram(df, num_cols[0], title=f"Distribution of {num_cols[0]}")
+        if fallback_chart is None and cat_cols:
+            fallback_chart = _build_freq_bar(df, cat_cols[0], title=f"Frequency of {cat_cols[0]}")
+        if fallback_chart is None and cat_cols and num_cols:
+            fallback_chart = _build_ranked_bar(df, cat_cols[0], num_cols[0], title=f"Top {cat_cols[0]} by {num_cols[0]}")
+        if fallback_chart is not None and _chart_has_signal(fallback_chart):
+            chart = fallback_chart
+            _debug_log(
+                "post-fix",
+                "H10",
+                "backend/agents/plot_generator.py:generate_on_demand_chart",
+                "fallback chart selected",
+                {"fallback_key": chart.key},
+            )
+
+    if chart is None or not _chart_has_signal(chart):
         n_num = len(num_cols)
-        cat_cols = [c for c in df.columns if not pd.api.types.is_numeric_dtype(df[c])]
         n_cat = len(cat_cols)
         type_label = _TYPE_DISPLAY.get(chart_type, chart_type)
         col_info = " and ".join(

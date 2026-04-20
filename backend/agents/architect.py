@@ -201,6 +201,7 @@ def architect_agent(state: AnalysisState) -> AnalysisState:
     clean_df = None
     try:
         clean_df, impute_logs = clean_dataframe(raw_df.copy())
+        # FIX 7: Only persist imputations after successful clean_dataframe completion
         if impute_logs:
             state.stats_summary["imputations"] = impute_logs
             
