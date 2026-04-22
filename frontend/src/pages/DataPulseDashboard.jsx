@@ -3,8 +3,7 @@ import jsPDF from "jspdf";
 import { apiAnalyze, apiChat, apiHistory, apiHistoryAnalysis, apiDeleteAnalysis } from "../api.js";
 import ParticleBackground from "../components/ParticleBackground.jsx";
 import GlobeCanvas from "../components/GlobeCanvas.jsx";
-
-
+import PlotComponent from "react-plotly.js";
 const PALETTE = ["#6366f1", "#10b981", "#f59e0b", "#06b6d4", "#ef4444", "#a855f7", "#34d399", "#f472b6"];
 
 const PLOTLY_DARK_LAYOUT = {
@@ -1080,7 +1079,6 @@ function inferDatasetType(result, fileName) {
 }
 
 export default function DataPulse({ user, onLogout }) {
-  const [PlotComponent, setPlotComponent] = useState(null);
   const [phase, setPhase] = useState("upload");
   const [result, setResult] = useState(null);
   const [fileName, setFileName] = useState("");
@@ -1105,7 +1103,6 @@ export default function DataPulse({ user, onLogout }) {
   const chatContainerRef = useRef(null);
   const dragCounterRef = useRef(0);
   const stageTimersRef = useRef([]);
-  const plotlyPreloadRef = useRef(null);
 
   useEffect(() => {
     loadHistory();
@@ -1118,6 +1115,7 @@ export default function DataPulse({ user, onLogout }) {
     });
   }, []);
 
+  // PlotComponent is now statically imported
   useEffect(() => {
     if (chatContainerRef.current) {
       // Use requestAnimationFrame instead of setTimeout to guarantee browser paint cycle has completed
@@ -1128,23 +1126,6 @@ export default function DataPulse({ user, onLogout }) {
       });
     }
   }, [chatMsgs, chatLoading]);
-
-  useEffect(() => {
-    if (!result || PlotComponent || plotlyPreloadRef.current) return;
-
-    plotlyPreloadRef.current = Promise.all([
-      import("plotly.js-dist-min"),
-      import("react-plotly.js/factory"),
-    ])
-      .then(([PlotlyModule, factoryModule]) => {
-        const createPlotlyComponent = factoryModule.default;
-        const PlotlyLib = PlotlyModule.default;
-        setPlotComponent(() => createPlotlyComponent(PlotlyLib));
-      })
-      .catch(() => {
-        plotlyPreloadRef.current = null;
-      });
-  }, [result, PlotComponent]);
   const clearStageTimers = () => {
     stageTimersRef.current.forEach((timerId) => {
       // FIX 36: Explicitly clear both timeout and interval timer IDs.
