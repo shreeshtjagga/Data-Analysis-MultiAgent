@@ -58,33 +58,74 @@ def compute_file_hash(file_bytes: bytes, file_name: Optional[str] = None) -> str
 
 
 async def _enforce_cache_policy(user_id: int, db: AsyncSession) -> None:
+    """
+    Enforce two eviction policies:
+      1. Time-based: delete analyses older than CACHE_TTL_DAYS.
+      2. Count-based: keep only the newest MAX_CACHE_FILES_PER_USER analyses.
 
+    IMPORTANT: SQLAlchemy Core delete() does NOT trigger ORM cascade='all,
+    delete-orphan'. We must manually delete AnalysisMetadata rows (child) before
+    deleting AnalysisHistory rows (parent) to avoid FK violations and orphaned
+    metadata rows that ghost on the history page.
+    """
+    # ── 1. Time-based eviction ────────────────────────────────────────────────
     cutoff = datetime.now(tz=timezone.utc) - timedelta(days=CACHE_TTL_DAYS)
-    time_result = await db.execute(
-        delete(AnalysisHistory)
+
+    # Collect IDs of expired analyses first (so we can clean metadata + Redis)
+    expired_result = await db.execute(
+        select(AnalysisHistory.id, AnalysisHistory.file_hash)
         .where(AnalysisHistory.user_id == user_id)
         .where(AnalysisHistory.analysis_date < cutoff)
-        .returning(AnalysisHistory.id)
     )
-    time_deleted_ids = time_result.scalars().all()
-    if time_deleted_ids:
-        logger.info("Evicted %d expired analyses for user %d (older than %d days)", len(time_deleted_ids), user_id, CACHE_TTL_DAYS)
+    expired_rows = expired_result.all()
+    expired_ids = [r[0] for r in expired_rows]
+    expired_hashes = [r[1] for r in expired_rows]
 
+    if expired_ids:
+        # Delete child metadata first, then parent history
+        await db.execute(
+            delete(AnalysisMetadata).where(AnalysisMetadata.analysis_id.in_(expired_ids))
+        )
+        await db.execute(
+            delete(AnalysisHistory).where(AnalysisHistory.id.in_(expired_ids))
+        )
+        logger.info(
+            "Evicted %d expired analyses for user %d (older than %d days)",
+            len(expired_ids), user_id, CACHE_TTL_DAYS,
+        )
+        # Purge Redis so stale cache hits don't resurrect evicted analyses
+        for file_hash in expired_hashes:
+            try:
+                await redis_cache.delete(redis_cache.analysis_key(user_id, file_hash))
+            except Exception:
+                pass
 
+    # ── 2. Count-based eviction ───────────────────────────────────────────────
     result = await db.execute(
-        select(AnalysisHistory.id)
+        select(AnalysisHistory.id, AnalysisHistory.file_hash)
         .where(AnalysisHistory.user_id == user_id)
         .order_by(AnalysisHistory.analysis_date.desc())
     )
-    all_ids = [row[0] for row in result.fetchall()]
-    overflow_ids = all_ids[MAX_CACHE_FILES_PER_USER:]
+    all_rows = result.all()
+    overflow_rows = all_rows[MAX_CACHE_FILES_PER_USER:]
+    overflow_ids = [r[0] for r in overflow_rows]
+    overflow_hashes = [r[1] for r in overflow_rows]
 
     if overflow_ids:
-
+        # Delete child metadata first, then parent history
+        await db.execute(
+            delete(AnalysisMetadata).where(AnalysisMetadata.analysis_id.in_(overflow_ids))
+        )
         await db.execute(
             delete(AnalysisHistory).where(AnalysisHistory.id.in_(overflow_ids))
         )
         logger.info("Evicted %d overflow analyses for user %d", len(overflow_ids), user_id)
+        # Purge Redis for evicted analyses
+        for file_hash in overflow_hashes:
+            try:
+                await redis_cache.delete(redis_cache.analysis_key(user_id, file_hash))
+            except Exception:
+                pass
 
 
 
@@ -332,25 +373,36 @@ async def get_analysis_by_id(
 async def delete_analysis(
     db: AsyncSession, user_id: int, analysis_id: int
 ) -> dict:
-    # Single DELETE … RETURNING — no extra SELECT round-trip needed.
-    del_result = await db.execute(
-        delete(AnalysisHistory)
-        .where(
+    # First, fetch the file_hash we need for Redis + Parquet cleanup,
+    # and confirm this analysis belongs to the user.
+    fetch_result = await db.execute(
+        select(AnalysisHistory.file_hash).where(
             AnalysisHistory.id == analysis_id,
             AnalysisHistory.user_id == user_id,
         )
-        .returning(AnalysisHistory.file_hash)
     )
-    file_hash: Optional[str] = del_result.scalar_one_or_none()
+    file_hash: Optional[str] = fetch_result.scalar_one_or_none()
 
     if file_hash is None:
-        await db.rollback()
         return {"success": False, "message": "Analysis not found or access denied"}
 
+    # FIX: SQLAlchemy Core delete() does NOT trigger ORM cascade='all, delete-orphan'.
+    # Delete AnalysisMetadata (child) first, then AnalysisHistory (parent).
+    await db.execute(
+        delete(AnalysisMetadata).where(AnalysisMetadata.analysis_id == analysis_id)
+    )
+    await db.execute(
+        delete(AnalysisHistory).where(
+            AnalysisHistory.id == analysis_id,
+            AnalysisHistory.user_id == user_id,
+        )
+    )
     await db.commit()
 
+    # Purge Redis cache entry
     cache_key = redis_cache.analysis_key(user_id, file_hash)
     await redis_cache.delete(cache_key)
 
     logger.info("Deleted analysis id=%d for user %d", analysis_id, user_id)
     return {"success": True, "message": "Analysis deleted successfully"}
+

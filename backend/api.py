@@ -1016,6 +1016,12 @@ async def chat_with_analysis(
         raise HTTPException(status_code=400, detail="Question is required")
     if len(question) > MAX_QUESTION_CHARS:
         raise HTTPException(status_code=413, detail=f"Question too long. Max {MAX_QUESTION_CHARS} characters.")
+    # FIX 17: Also enforce a byte-length cap. len() counts Unicode code-points,
+    # not bytes — a CJK / emoji string can pass the char check while sending
+    # 3-4× more bytes to the LLM, bypassing the intended input budget.
+    _MAX_QUESTION_BYTES = MAX_QUESTION_CHARS * 4  # worst-case UTF-8 expansion
+    if len(question.encode("utf-8")) > _MAX_QUESTION_BYTES:
+        raise HTTPException(status_code=413, detail=f"Question too long. Max {MAX_QUESTION_CHARS} characters.")
 
     # FIX 39: Lightweight pre-check before full JSON serialization.
     rough_context_bytes = 0

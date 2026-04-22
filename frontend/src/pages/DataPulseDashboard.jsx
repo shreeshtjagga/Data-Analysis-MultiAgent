@@ -500,11 +500,6 @@ const ChatBubble = memo(({ m, PlotComponent, result, stopPageZoomOnCtrlWheel }) 
                   config={{ ...PLOTLY_CONFIG, scrollZoom: false }}
                   useResizeHandler
                   style={{ width: "100%", height: "360px" }}
-                  onInitialized={(figure) => {
-                    // #region agent log
-                    fetch('http://127.0.0.1:7453/ingest/05241122-7592-426a-ba9c-df1222b6ac79',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'da5cdd'},body:JSON.stringify({sessionId:'da5cdd',runId:'pre-fix',hypothesisId:'H8',location:'frontend/src/pages/DataPulseDashboard.jsx:ChatBubble',message:'new chart initialized',data:{chartId:m?.newChart?.id||null,initializedWidth:figure?.layout?.width??null,initializedHeight:figure?.layout?.height??null,xTickAngle:figure?.layout?.xaxis?.tickangle??null,yTickAngle:figure?.layout?.yaxis?.tickangle??null},timestamp:Date.now()})}).catch(()=>{});
-                    // #endregion
-                  }}
                 />
               </div>
             </div>
@@ -539,7 +534,15 @@ const ChatBubble = memo(({ m, PlotComponent, result, stopPageZoomOnCtrlWheel }) 
               }
               renderedChartCount += 1;
               const figStr = result.charts[match[1]];
-              let parsedFig = typeof figStr === "string" ? JSON.parse(figStr) : figStr;
+              let parsedFig = figStr;
+              if (typeof figStr === "string") {
+                try {
+                  parsedFig = JSON.parse(figStr);
+                } catch (e) {
+                  console.warn("Failed to parse chart JSON:", e);
+                  parsedFig = {};
+                }
+              }
               const data = Array.isArray(parsedFig?.data) ? parsedFig.data : [];
               const layout = (parsedFig?.layout && typeof parsedFig.layout === 'object') ? parsedFig.layout : {};
               return PlotComponent ? (
@@ -1592,17 +1595,11 @@ export default function DataPulse({ user, onLogout }) {
     setChatLoading(true);
     try {
       const resp = await apiChat(q, chatContext || {}, history);
-      // #region agent log
-      fetch('http://127.0.0.1:7453/ingest/05241122-7592-426a-ba9c-df1222b6ac79',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'da5cdd'},body:JSON.stringify({sessionId:'da5cdd',runId:'pre-fix',hypothesisId:'H8',location:'frontend/src/pages/DataPulseDashboard.jsx:sendChat',message:'chat response received',data:{hasNewChart:!!resp?.new_chart?.fig,newChartId:resp?.new_chart?.id||null,layoutWidth:resp?.new_chart?.fig?.layout?.width??null,layoutHeight:resp?.new_chart?.fig?.layout?.height??null,titleType:typeof resp?.new_chart?.fig?.layout?.title,traceCount:Array.isArray(resp?.new_chart?.fig?.data)?resp.new_chart.fig.data.length:0},timestamp:Date.now()})}).catch(()=>{});
-      // #endregion
       if (resp?.new_chart?.id) {
         setGeneratedChartKeys((prev) => (prev.includes(resp.new_chart.id) ? prev : [...prev, resp.new_chart.id]));
       }
       const rawAnswer = (resp.answer || "").trim() || "No response generated.";
       const chartTagMatches = rawAnswer.match(/\[CHART:\s*[^\]]+\]/g) || [];
-      // #region agent log
-      fetch('http://127.0.0.1:7453/ingest/05241122-7592-426a-ba9c-df1222b6ac79',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'da5cdd'},body:JSON.stringify({sessionId:'da5cdd',runId:'post-fix',hypothesisId:'H9',location:'frontend/src/pages/DataPulseDashboard.jsx:sendChat',message:'chat answer chart tags counted',data:{chartTagCount:chartTagMatches.length,hasNewChart:!!resp?.new_chart?.fig},timestamp:Date.now()})}).catch(()=>{});
-      // #endregion
       // Strip all double stars (**) for a cleaner plain-text look
       const cleanAnswer = rawAnswer.replace(/\*\*/g, '');
 
@@ -2248,17 +2245,31 @@ export default function DataPulse({ user, onLogout }) {
               {historyLoading ? <div style={{ color: 'var(--primary-500)' }}>Syncing history...</div> : (
                 (Array.isArray(history) ? history.length : 0) === 0 ? <div style={{ color: 'var(--text-muted)' }}>No recorded sessions found.</div> : (
                   (Array.isArray(history) ? history : []).map(item => (
-                    <div key={item.analysis_id} className="card" style={{ padding: '16px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', cursor: 'pointer', border: historySelectLoading === item.analysis_id ? '1px solid var(--primary-500)' : '1px solid var(--border-subtle)' }} onClick={() => loadHistoryItem(item)}>
-                      <div className="flex-col gap-4">
-                        <strong style={{ fontSize: '14px', color: 'var(--text-main)', display: 'block' }}>{item.file_name}</strong>
+                    <div key={item.analysis_id} className="card" style={{ 
+                      padding: '16px', 
+                      display: 'flex', 
+                      justifyContent: 'space-between', 
+                      alignItems: 'center', 
+                      cursor: deleteLoading === item.analysis_id ? 'wait' : 'pointer', 
+                      border: historySelectLoading === item.analysis_id ? '1px solid var(--primary-500)' : '1px solid var(--border-subtle)',
+                      opacity: deleteLoading === item.analysis_id ? 0.5 : 1,
+                      pointerEvents: deleteLoading === item.analysis_id ? 'none' : 'auto',
+                      transition: 'opacity 0.2s ease, border-color 0.2s ease'
+                    }} onClick={() => loadHistoryItem(item)}>
+                      <div className="flex-col gap-4" style={{ flex: 1, minWidth: 0, paddingRight: '12px' }}>
+                        <strong style={{ fontSize: '14px', color: 'var(--text-main)', display: 'block', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{item.file_name}</strong>
                         <span className="caption">{new Date(item.analyzed_at).toLocaleDateString()} • {item.row_count} rows</span>
                       </div>
                       <button
                         onClick={(e) => { e.stopPropagation(); deleteItem(item.analysis_id); }}
                         disabled={deleteLoading === item.analysis_id}
-                        style={{ background: 'none', border: 'none', color: 'var(--text-muted)', cursor: 'pointer', padding: '8px', fontSize: '24px' }}
+                        style={{ background: 'none', border: 'none', color: 'var(--text-muted)', cursor: deleteLoading === item.analysis_id ? 'wait' : 'pointer', padding: '8px', fontSize: '24px', display: 'flex', alignItems: 'center', justifyContent: 'center' }}
                       >
-                        {deleteLoading === item.analysis_id ? "..." : "🗑"}
+                        {deleteLoading === item.analysis_id ? (
+                          <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ animation: 'spin 1s linear infinite' }}>
+                            <path d="M21 12a9 9 0 1 1-6.219-8.56"></path>
+                          </svg>
+                        ) : "🗑"}
                       </button>
                     </div>
                   ))
