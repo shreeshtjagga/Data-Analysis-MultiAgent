@@ -519,62 +519,76 @@ const ChatBubble = memo(({ m, PlotComponent, result, stopPageZoomOnCtrlWheel }) 
           border: m.role === 'user' ? '1px solid rgba(255,255,255,0.1)' : '1px solid rgba(99,102,241,0.2)',
           boxShadow: m.role === 'user' ? '0 4px 15px rgba(99,102,241,0.3)' : '0 4px 15px rgba(0,0,0,0.2)',
           lineHeight: 1.5,
+          display: 'flex',
+          flexDirection: 'column',
+          gap: '10px',
         }}
       >
         {(() => {
-          if (m.role !== 'ai' || !m.text.includes('[CHART:')) return m.text;
-          const parts = m.text.split(/(\[CHART:\s*[^\]]+\])/);
-          let renderedChartCount = 0;
-          return parts.map((part, pIdx) => {
-            const match = part.match(/\[CHART:\s*([^\]]+)\]/);
-            if (match && result?.charts?.[match[1]]) {
-              if (renderedChartCount >= 1) {
-                return null;
+          if (m.role !== 'ai' || !m.text.includes('[CHART:')) {
+            return m.text.split('\n').map((line, i) => (
+              <p key={i} style={{ margin: 0 }}>{line || '\u00A0'}</p>
+            ));
+          }
+          // Phase 1: Strip ALL [CHART:...] tags -> clean readable text, no orphaned words
+          const cleanText = m.text
+            .replace(/\[CHART:\s*[^\]]+\]/g, '')
+            .replace(/[ \t]{2,}/g, ' ')
+            .trim();
+          // Phase 2: Find the FIRST valid chart key and build its JSX
+          let inlineChartJSX = null;
+          const CHART_TAG_RE = /\[CHART:\s*([^\]]+)\]/g;
+          let tagM;
+          while ((tagM = CHART_TAG_RE.exec(m.text)) !== null) {
+            const key = tagM[1].trim();
+            if (result?.charts?.[key]) {
+              const figRaw = result.charts[key];
+              let parsedFig = figRaw;
+              if (typeof figRaw === 'string') {
+                try { parsedFig = JSON.parse(figRaw); }
+                catch (e) { console.warn('Failed to parse chart JSON:', e); parsedFig = {}; }
               }
-              renderedChartCount += 1;
-              const figStr = result.charts[match[1]];
-              let parsedFig = figStr;
-              if (typeof figStr === "string") {
-                try {
-                  parsedFig = JSON.parse(figStr);
-                } catch (e) {
-                  console.warn("Failed to parse chart JSON:", e);
-                  parsedFig = {};
-                }
-              }
-              const data = Array.isArray(parsedFig?.data) ? parsedFig.data : [];
-              const layout = (parsedFig?.layout && typeof parsedFig.layout === 'object') ? parsedFig.layout : {};
-              return PlotComponent ? (
-                <div key={pIdx} style={{ margin: '16px 0', border: '1px solid rgba(99,102,241,0.2)', borderRadius: '12px', overflow: 'hidden', padding: '12px', background: 'rgba(0,0,0,0.3)', width: '100%' }}>
+              const cData = Array.isArray(parsedFig?.data) ? parsedFig.data : [];
+              const cLayout = (parsedFig?.layout && typeof parsedFig.layout === 'object') ? parsedFig.layout : {};
+              inlineChartJSX = (
+                <div style={{ border: '1px solid rgba(99,102,241,0.2)', borderRadius: '12px', overflow: 'hidden', background: 'rgba(0,0,0,0.3)', width: '100%' }}>
                   <div onWheel={stopPageZoomOnCtrlWheel}>
                     <PlotComponent
-                      data={data.map(t => ({ ...t, textfont: { color: "#FFFFFF" } }))}
+                      data={cData.map(t => ({ ...t, textfont: { color: '#FFFFFF' } }))}
                       layout={{
                         ...PLOTLY_DARK_LAYOUT,
-                        ...layout,
-                        paper_bgcolor: "rgba(0,0,0,0)",
-                        plot_bgcolor: "rgba(0,0,0,0)",
-                        font: { color: "#FFFFFF", family: "'Inter', sans-serif" },
+                        ...cLayout,
+                        paper_bgcolor: 'rgba(0,0,0,0)',
+                        plot_bgcolor: 'rgba(0,0,0,0)',
+                        font: { color: '#FFFFFF', family: "'Inter', sans-serif" },
                         autosize: true,
                         width: undefined,
-                        dragmode: layout?.dragmode || "zoom",
-                        hoverlabel: { bgcolor: "rgba(8,12,24,0.98)", font: { color: "#F8FAFC", size: 12 }, bordercolor: "rgba(99,102,241,0.85)" },
+                        dragmode: cLayout?.dragmode || 'zoom',
+                        hoverlabel: { bgcolor: 'rgba(8,12,24,0.98)', font: { color: '#F8FAFC', size: 12 }, bordercolor: 'rgba(99,102,241,0.85)' },
                         height: 340,
                         margin: { l: 40, r: 20, t: 40, b: 40 },
-                        title: { ...(layout.title || {}), font: { size: 14, color: '#fff', weight: 'bold' }, y: 0.95, yanchor: 'top' },
-                        legend: { orientation: "h", yanchor: "top", y: -0.2, xanchor: "center", x: 0.5, font: { size: 10, color: "rgba(255,255,255,0.7)" } }
+                        title: { ...(cLayout.title || {}), font: { size: 14, color: '#fff', weight: 'bold' }, y: 0.95, yanchor: 'top' },
+                        legend: { orientation: 'h', yanchor: 'top', y: -0.2, xanchor: 'center', x: 0.5, font: { size: 10, color: 'rgba(255,255,255,0.7)' } },
                       }}
                       config={{ ...PLOTLY_CONFIG, scrollZoom: false }}
                       useResizeHandler
-                      style={{ width: "100%", height: "340px" }}
+                      style={{ width: '100%', height: '340px' }}
                     />
                   </div>
                 </div>
-              ) : <div key={pIdx} style={{ color: 'var(--primary-500)' }}>[Rendering Chart...]</div>;
+              );
+              break;
             }
-            if (match) return null;
-            return <span key={pIdx}>{part}</span>;
-          });
+          }
+          return (
+            <>
+              {cleanText && cleanText.split('\n').map((line, i) => {
+                const t = line.trim();
+                return t ? <p key={i} style={{ margin: 0 }}>{t}</p> : null;
+              })}
+              {inlineChartJSX}
+            </>
+          );
         })()}
       </div>
     </div>
