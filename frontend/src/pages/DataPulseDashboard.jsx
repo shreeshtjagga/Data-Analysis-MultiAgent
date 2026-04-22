@@ -482,10 +482,10 @@ const ChatBubble = memo(({ m, PlotComponent, result, stopPageZoomOnCtrlWheel }) 
                     font: { color: "#FFFFFF", family: "'Inter', sans-serif", size: 11 },
                     autosize: true,
                     width: undefined,
-                    dragmode: m.newChart.fig.layout?.dragmode || "zoom",
+                    dragmode: false,
                     hoverlabel: { bgcolor: "rgba(8,12,24,0.98)", font: { color: "#F8FAFC", size: 12 }, bordercolor: "rgba(99,102,241,0.85)" },
                     height: 360,
-                    margin: { l: 45, r: 16, t: 36, b: 45 },
+                    margin: { r: 16, t: 36, b: 45 },
                     title: {
                       ...(typeof m.newChart.fig.layout?.title === "object" ? m.newChart.fig.layout.title : {}),
                       text: getFigureTitleText(m.newChart.fig, ""),
@@ -493,10 +493,10 @@ const ChatBubble = memo(({ m, PlotComponent, result, stopPageZoomOnCtrlWheel }) 
                       y: 0.97, yanchor: 'top',
                     },
                     xaxis: { ...(m.newChart.fig.layout?.xaxis || {}), tickfont: { color: "#FFFFFF", size: 10 }, gridcolor: "rgba(99,102,241,0.1)", automargin: true },
-                    yaxis: { ...(m.newChart.fig.layout?.yaxis || {}), tickfont: { color: "#FFFFFF", size: 10 }, gridcolor: "rgba(99,102,241,0.1)", automargin: true },
+                    yaxis: { ...(m.newChart.fig.layout?.yaxis || {}), tickfont: { color: "#FFFFFF", size: 10 }, gridcolor: "rgba(99,102,241,0.1)", automargin: true, tickmode: "auto", nticks: 10 },
                     showlegend: false,
                   }}
-                  config={{ ...PLOTLY_CONFIG, scrollZoom: false }}
+                  config={{ ...PLOTLY_CONFIG, scrollZoom: false, staticPlot: true, displayModeBar: false }}
                   useResizeHandler
                   style={{ width: "100%", height: "360px" }}
                 />
@@ -565,14 +565,16 @@ const ChatBubble = memo(({ m, PlotComponent, result, stopPageZoomOnCtrlWheel }) 
                         width: undefined,
                         dragmode: cLayout?.dragmode || 'zoom',
                         hoverlabel: { bgcolor: 'rgba(8,12,24,0.98)', font: { color: '#F8FAFC', size: 12 }, bordercolor: 'rgba(99,102,241,0.85)' },
-                        height: 340,
-                        margin: { l: 40, r: 20, t: 40, b: 40 },
+                        height: 300,
+                        margin: { r: 16, t: 36, b: 36 },
+                        xaxis: { ...(cLayout.xaxis || {}), tickfont: { color: '#FFFFFF', size: 10 }, automargin: true },
+                        yaxis: { ...(cLayout.yaxis || {}), tickfont: { color: '#FFFFFF', size: 10 }, automargin: true, tickmode: 'auto', nticks: 10 },
                         title: { ...(cLayout.title || {}), font: { size: 14, color: '#fff', weight: 'bold' }, y: 0.95, yanchor: 'top' },
                         legend: { orientation: 'h', yanchor: 'top', y: -0.2, xanchor: 'center', x: 0.5, font: { size: 10, color: 'rgba(255,255,255,0.7)' } },
                       }}
-                      config={{ ...PLOTLY_CONFIG, scrollZoom: false }}
+                      config={{ ...PLOTLY_CONFIG, scrollZoom: false, staticPlot: true, displayModeBar: false }}
                       useResizeHandler
-                      style={{ width: '100%', height: '340px' }}
+                      style={{ width: '100%', height: '360px' }}
                     />
                   </div>
                 </div>
