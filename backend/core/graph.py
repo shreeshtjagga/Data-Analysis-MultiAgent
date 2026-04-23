@@ -102,10 +102,18 @@ def _run_parallel_agents(state: AnalysisState) -> AnalysisState:
                 state.errors.append({"code": "UNEXPECTED", "agent": name, "message": msg, "type": "pipeline"})
                 state.partial = True
 
-    # Merge results back into the main state
+    # FIX 8: Only merge errors that are NEW (added by the agent itself).
+    # Both viz_state_in and ins_state_in were deep-copied from state, so they
+    # already contain all of state.errors at copy time.  If we extend with the
+    # full out.errors list we double-count every pre-existing error.
+    # We track the baseline error count so we can slice only the new tail.
+    baseline_error_count = len(state.errors)
+
     if viz_state_out is not None:
         state.charts = viz_state_out.charts
-        state.errors.extend(viz_state_out.errors)
+        # Only take errors that the visualizer *added* (beyond what it started with)
+        new_viz_errors = viz_state_out.errors[baseline_error_count:]
+        state.errors.extend(new_viz_errors)
         state.completed_agents.extend(
             a for a in viz_state_out.completed_agents if a not in state.completed_agents
         )
@@ -114,7 +122,9 @@ def _run_parallel_agents(state: AnalysisState) -> AnalysisState:
 
     if ins_state_out is not None:
         state.insights = ins_state_out.insights
-        state.errors.extend(ins_state_out.errors)
+        # Same deduplication for insights agent errors
+        new_ins_errors = ins_state_out.errors[baseline_error_count:]
+        state.errors.extend(new_ins_errors)
         state.completed_agents.extend(
             a for a in ins_state_out.completed_agents if a not in state.completed_agents
         )

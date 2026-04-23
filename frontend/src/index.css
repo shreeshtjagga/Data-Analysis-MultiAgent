@@ -740,3 +740,40 @@ p, body { font-size: var(--font-body); font-weight: 400; color: var(--text-muted
   }
 }
 
+/* =========================================================================
+   PLOTLY CURSOR OVERRIDE
+   Default cursor normally; mode-aware cursor only in spotlight
+   ========================================================================= */
+
+/* Force default cursor on ALL Plotly elements when NOT spotlighted */
+.chart-flip-wrapper:not(.chart-spotlighted) .js-plotly-plot .plotly,
+.chart-flip-wrapper:not(.chart-spotlighted) .js-plotly-plot .plotly svg,
+.chart-flip-wrapper:not(.chart-spotlighted) .js-plotly-plot .plotly .cursor-crosshair,
+.chart-flip-wrapper:not(.chart-spotlighted) .js-plotly-plot .plotly .cursor-move,
+.chart-flip-wrapper:not(.chart-spotlighted) .js-plotly-plot .plotly .cursor-pointer,
+.chart-flip-wrapper:not(.chart-spotlighted) .js-plotly-plot g.cursor-crosshair,
+.chart-flip-wrapper:not(.chart-spotlighted) .js-plotly-plot g.cursor-move,
+.chart-flip-wrapper:not(.chart-spotlighted) .js-plotly-plot rect {
+  cursor: default !important;
+}
+
+/* Spotlight + zoom mode → crosshair (+) to indicate drag-to-zoom */
+.chart-flip-wrapper.chart-spotlighted[data-mode="zoom"] .js-plotly-plot .plotly svg,
+.chart-flip-wrapper.chart-spotlighted[data-mode="zoom"] .js-plotly-plot g.cursor-crosshair,
+.chart-flip-wrapper.chart-spotlighted[data-mode="zoom"] .js-plotly-plot rect {
+  cursor: crosshair !important;
+}
+
+/* Spotlight + pan mode → grab hand to indicate dragging/panning */
+.chart-flip-wrapper.chart-spotlighted[data-mode="pan"] .js-plotly-plot .plotly svg,
+.chart-flip-wrapper.chart-spotlighted[data-mode="pan"] .js-plotly-plot g.cursor-crosshair,
+.chart-flip-wrapper.chart-spotlighted[data-mode="pan"] .js-plotly-plot g.cursor-move,
+.chart-flip-wrapper.chart-spotlighted[data-mode="pan"] .js-plotly-plot rect {
+  cursor: grab !important;
+}
+
+/* While actively dragging in pan mode, switch to grabbing */
+.chart-flip-wrapper.chart-spotlighted[data-mode="pan"] .js-plotly-plot g.cursor-move {
+  cursor: grabbing !important;
+}
+

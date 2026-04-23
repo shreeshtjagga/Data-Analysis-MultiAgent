@@ -1018,6 +1018,12 @@ async def chat_with_analysis(
         raise HTTPException(status_code=400, detail="Question is required")
     if len(question) > MAX_QUESTION_CHARS:
         raise HTTPException(status_code=413, detail=f"Question too long. Max {MAX_QUESTION_CHARS} characters.")
+    # FIX 17: Also enforce a byte-length cap. len() counts Unicode code-points,
+    # not bytes — a CJK / emoji string can pass the char check while sending
+    # 3-4× more bytes to the LLM, bypassing the intended input budget.
+    _MAX_QUESTION_BYTES = MAX_QUESTION_CHARS * 4  # worst-case UTF-8 expansion
+    if len(question.encode("utf-8")) > _MAX_QUESTION_BYTES:
+        raise HTTPException(status_code=413, detail=f"Question too long. Max {MAX_QUESTION_CHARS} characters.")
 
     # FIX 39: Lightweight pre-check before full JSON serialization.
     rough_context_bytes = 0
@@ -1269,9 +1275,13 @@ async def chat_with_analysis(
                     {
                         "role": "system",
                         "content": (
-                            "You are a Senior Data Analyst explaining charts to a non-technical user. "
-                            "Be specific, mention actual values from the chart data, and give 2-3 sentences "
-                            "of genuine insight. Never say 'I cannot see the chart' — use the data provided."
+                            "You are a friendly data analyst. Explain charts in plain everyday English.\n"
+                            "BANNED WORDS: skew, variance, modal, heterogeneous, homogeneous, multicollinear, "
+                            "kurtosis, distribution (say 'spread'), coefficient, indicate, exhibit, demonstrate, represent.\n"
+                            "RULES:\n"
+                            "- Use actual values from the chart data provided.\n"
+                            "- Keep it to 2 short sentences total. Be direct.\n"
+                            "- CRITICAL: Do NOT include [CHART: ...] in your response, it is appended automatically."
                         )
                     },
                     {
@@ -1293,7 +1303,9 @@ async def chat_with_analysis(
                 )
                 answer = (completion.choices[0].message.content or "").strip()
                 if answer:
-                    return {"answer": answer, "data_queried": False, "new_chart": None}
+                    # Always inject the chart tag so the frontend renders it
+                    chart_tag = f"\n[CHART: {matched_key}]" if matched_key else ""
+                    return {"answer": answer + chart_tag, "data_queried": False, "new_chart": None}
             except Exception as exc:
                 logger.warning("LLM chart explanation failed: %s", exc)
 
@@ -1301,9 +1313,9 @@ async def chat_with_analysis(
         if matched_key:
             return {
                 "answer": (
-                    f"The {matched_key} chart shows the relationship between the "
-                    f"dataset columns it visualizes. Look for patterns, clusters, or "
-                    f"outliers in the data points to draw insights."
+                    f"Here's the chart. Look for patterns, peaks, or gaps in the data — "
+                    f"those usually tell the most interesting story."
+                    f"\n[CHART: {matched_key}]"
                 ),
                 "data_queried": False,
                 "new_chart": None,
@@ -1404,22 +1416,43 @@ async def chat_with_analysis(
     )
 
     system_prompt = (
-        "You are an elite Senior Data Analyst. Answer questions strictly grounded in the dataset context.\n"
-        "Tone: Professional, authoritative, yet accessible. "
-        "Brevity: Keep responses strictly between 1-4 sentences.\n"
-        "Grounding Rules:\n"
-        "1. MANDATORY: If you receive an 'ADDITIONAL DATA FROM FULL DATASET QUERY' block, you MUST use "
-        "   those exact values to answer the question. Do NOT say 'I don't have that information'.\n"
-        "2. For top_n / bottom_n results: look at 'top_entry' → state its name and value explicitly.\n"
-        "3. For group_aggregate: 'result' is a dict of {entity: value}. Pick highest/lowest as needed.\n"
-        "4. For search results: each item in 'result' is a full row dict — read the relevant field directly.\n"
-        "5. NEVER say 'I don't have that data' if an ADDITIONAL DATA block is present.\n"
-        "6. If truly no data available, say: 'I couldn't find that in the dataset.'\n"
-        "7. If the user is chatty (hi, thanks), be polite but don't spontaneously analyze data.\n"
-        f"8. Reference charts using exactly `[CHART: key]` with only these keys: {exact_chart_keys}.\n"
-        "9. Use previous messages to maintain continuity. Resolve pronouns from conversation history. Do NOT use markdown bolding like **text** in your response.\n"
-        "10. CRITICAL: Never invent values. If a fact is not in the data context or ADDITIONAL DATA block, "
-        "    say exactly: 'That information isn't in the dataset.' Never estimate or assume.\n"
+        "You are a friendly, conversational data analyst. Talk to the user like a helpful colleague — clear, direct, and easy to understand.\n"
+        "\n"
+        "BANNED WORDS (never use these):\n"
+        "skewness, variance, modal, heterogeneous, homogeneous, multicollinear, bivariate, univariate, "
+        "quartile, percentile, kurtosis, distribution (say 'spread' instead), coefficient, "
+        "statistically significant, exhibit, demonstrate, indicate (say 'show' or 'suggest'), "
+        "represent (say 'make up'), parameter, metric (say 'number' or 'value').\n"
+        "\n"
+        "LANGUAGE RULES:\n"
+        "• Say 'average' not 'mean'. Say 'most common' not 'modal'. Say 'spread' not 'variance/std dev'. Say 'skewed' → say 'most values are clustered at one end'.\n"
+        "• Keep every sentence under 20 words. Be direct.\n"
+        "• No markdown bold (**text**). No dash bullet lists. No jargon.\n"
+        "• Use conversation history: if the user says 'show me another' or 'what about that' — refer to the previous topic.\n"
+        "\n"
+        "CHART RULES (CRITICAL — READ CAREFULLY):\n"
+        f"Available chart keys: {exact_chart_keys}\n"
+        "• ONLY include a [CHART: key] tag when the user EXPLICITLY asks to see or show a chart. Example triggers: 'show me a chart', 'show the scatter plot', 'display the bar chart'.\n"
+        "• For ALL other questions (facts, insights, comparisons, 'any more', 'tell me', 'what about', 'explain') — give TEXT ONLY. NO [CHART:] tag.\n"
+        "• If the user says 'no chart', 'not chart', 'without chart', 'only text' — give TEXT ONLY, absolutely no [CHART:] tag.\n"
+        "• When you do show a chart: 1-2 sentences max, then `[CHART: exact_key]` on its own line.\n"
+        "• Use ONLY the exact keys listed above. Do not guess or invent keys.\n"
+        "\n"
+        "CONVERSATION CONTEXT:\n"
+        "• Read the full conversation history to understand what the user is referring to.\n"
+        "• If they say 'that chart', 'this one', 'the last one' — figure it out from history.\n"
+        "• Keep answers short — 2 to 4 sentences max. The user can always ask follow-ups.\n"
+        "\n"
+        "RECOMMENDATION RULE:\n"
+        "Add 'Recommendation:' ONLY if the finding reveals something actionable (a trend, outlier, or pattern worth acting on). Skip it for simple lookups, greetings, or chart-view requests.\n"
+        "\n"
+        "GROUNDING RULES:\n"
+        f"1. If there is an 'ADDITIONAL DATA FROM FULL DATASET QUERY' block, use those exact values.\n"
+        "2. For top_n/bottom_n: state the name and value from 'top_entry' directly.\n"
+        "3. For group_aggregate: 'result' is {entity: value} — pick the highest/lowest as needed.\n"
+        "4. NEVER say 'I don't have that data' if data is in the context.\n"
+        "5. If no data: say 'I couldn't find that in the dataset.'\n"
+        "6. Never invent values. If unsure: 'That information isn't in the dataset.'\n"
         f"{data_coverage_note}"
     )
 
@@ -1615,10 +1648,44 @@ async def chat_with_analysis(
                 model=SYNTHESIS_MODEL,
                 messages=messages,
                 temperature=synthesis_temp,
-                max_tokens=450,
+                max_tokens=200,  # Keep answers short, reduce hallucination risk
             )
             answer = (completion.choices[0].message.content or "").strip()
             if answer:
+                q_lower_str = question.lower()
+                # Detect if user explicitly does NOT want charts
+                _no_chart_phrases = ["not chart", "no chart", "without chart", "only text",
+                                     "not a chart", "don't show chart", "dont show chart"]
+                _user_rejects_chart = any(p in q_lower_str for p in _no_chart_phrases)
+
+                if _user_rejects_chart:
+                    # Strip any [CHART:] tag the LLM may have injected
+                    import re as _re2
+                    answer = _re2.sub(r'\[CHART:[^\]]*\]', '', answer).strip()
+                else:
+                    # If the user asked to see/show a chart but the LLM forgot [CHART: key],
+                    # detect and inject it automatically.
+                    _show_words = ["show me", "see the", "view the", "display the",
+                                   "show chart", "show a chart", "give me a chart",
+                                   "show plot", "show me a"]
+                    _user_wants_chart = any(w in q_lower_str for w in _show_words)
+                    if _user_wants_chart and "[CHART:" not in answer and existing_chart_keys:
+                        answer_lower = answer.lower()
+                        best_key = None
+                        best_score = 0
+                        for ck in existing_chart_keys:
+                            words = ck.replace("_", " ").lower().split()
+                            score = sum(1 for w in words if w in answer_lower and len(w) > 3)
+                            if score > best_score:
+                                best_score = score
+                                best_key = ck
+                        if not best_key:
+                            best_key = existing_chart_keys[0]
+                        answer = answer + f"\n[CHART: {best_key}]"
+                    elif not _user_wants_chart and "[CHART:" in answer:
+                        # LLM injected a chart the user didn't ask for — strip it
+                        import re as _re3
+                        answer = _re3.sub(r'\[CHART:[^\]]*\]', '', answer).strip()
                 return {"answer": answer, "data_queried": bool(data_result), "new_chart": None}
 
         except Exception as exc:

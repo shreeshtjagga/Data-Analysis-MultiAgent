@@ -53,20 +53,27 @@ def _build_llm_prompt(slim_stats: dict) -> str:
     payload_json = json.dumps(clean_stats, ensure_ascii=True)
     
     return "\n".join([
-        f"You are an Expert Data Analyst specialising in {domain} data.",
-        f"Dataset: {label}",
+        f"You are a friendly data analyst. Your job is to explain data findings in plain English that anyone can understand.",
+        f"Dataset: {label} (domain: {domain})",
         "",
         "Column summary:",
         col_narrative,
         "",
-        "Full stats (JSON) [TRUNCATED FOR CONTEXT]:",
+        "Full stats (JSON):",
         f"<analysis_json>{payload_json}</analysis_json>",
+        "",
+        "STRICT LANGUAGE RULES:",
+        "- Use everyday words only. No jargon.",
+        "- Say 'average' not 'mean'. Say 'most common' not 'modal'. Say 'spread' not 'variance'.",
+        "- Every finding must include at least one specific number, percentage, or count.",
+        "- Keep each sentence short (under 20 words).",
         "",
         "Respond with ONLY valid JSON (no markdown, no explanation):",
         "{",
-        '  "headline": "One powerful conclusion drawn from the data in one sentence.",',
-        '  "data_info": ["3-5 factual statements about WHAT this dataset is: its structure, columns, types, size, completeness, and what domain/subject it covers. Plain language, no analysis."],',
-        '  "findings": ["5-8 conclusions. EACH finding MUST cite at least one specific numeric value, percentage, or count from the data. No vague statements like \"values vary widely\" — every finding must have a number."]',
+        '  "headline": "One plain-English conclusion from the data in one short sentence.",',
+        '  "data_info": ["3-5 simple sentences about WHAT this dataset contains: its size, columns, and topic. No analysis here, just facts."],',
+        '  "findings": ["5-8 plain-English findings, each with a specific number. Example: The average age is 34 years. No vague phrases like values vary."],',
+        '  "recommendations": ["ONLY include items here if a finding is genuinely actionable. Examples: a dominant group worth focusing on, an outlier to investigate, a data quality issue, or a pattern with business implications. If nothing is clearly actionable, return an empty array []. Start each item with a verb."]',
         "}",
     ])
 
@@ -95,9 +102,8 @@ def _llm_insights(stats: dict) -> Optional[dict]:
                 {
                     "role": "system",
                     "content": (
-                        f"You are a senior data analyst specialising in {domain} data. "
-                        f"The dataset is: {label}. "
-                        "Always respond with valid JSON only. No markdown fences."
+                        f"You are a friendly data analyst explaining findings about {label} ({domain} domain). "
+                        "Write in plain, simple English — no jargon. Always respond with valid JSON only. No markdown fences."
                     ),
                 },
                 {"role": "user", "content": prompt},
@@ -116,6 +122,9 @@ def _llm_insights(stats: dict) -> Optional[dict]:
         if not isinstance(result, dict) or not required.issubset(result.keys()):
             logger.warning("LLM insights returned unexpected schema: %s", list(result.keys()) if isinstance(result, dict) else type(result))
             return None  # triggers rule-based fallback
+        # Ensure recommendations field always exists (may be omitted by LLM)
+        if "recommendations" not in result or not isinstance(result.get("recommendations"), list):
+            result["recommendations"] = []
 
         if not isinstance(result.get("findings"), list) or len(result["findings"]) == 0:
             logger.warning("LLM insights returned empty findings list")

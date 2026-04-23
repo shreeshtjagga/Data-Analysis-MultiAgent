@@ -3,8 +3,7 @@ import jsPDF from "jspdf";
 import { apiAnalyze, apiChat, apiHistory, apiHistoryAnalysis, apiDeleteAnalysis } from "../api.js";
 import ParticleBackground from "../components/ParticleBackground.jsx";
 import GlobeCanvas from "../components/GlobeCanvas.jsx";
-
-
+import PlotComponent from "react-plotly.js";
 const PALETTE = ["#6366f1", "#10b981", "#f59e0b", "#06b6d4", "#ef4444", "#a855f7", "#34d399", "#f472b6"];
 
 const PLOTLY_DARK_LAYOUT = {
@@ -483,10 +482,10 @@ const ChatBubble = memo(({ m, PlotComponent, result, stopPageZoomOnCtrlWheel }) 
                     font: { color: "#FFFFFF", family: "'Inter', sans-serif", size: 11 },
                     autosize: true,
                     width: undefined,
-                    dragmode: m.newChart.fig.layout?.dragmode || "zoom",
+                    dragmode: false,
                     hoverlabel: { bgcolor: "rgba(8,12,24,0.98)", font: { color: "#F8FAFC", size: 12 }, bordercolor: "rgba(99,102,241,0.85)" },
                     height: 360,
-                    margin: { l: 45, r: 16, t: 36, b: 45 },
+                    margin: { r: 16, t: 36, b: 45 },
                     title: {
                       ...(typeof m.newChart.fig.layout?.title === "object" ? m.newChart.fig.layout.title : {}),
                       text: getFigureTitleText(m.newChart.fig, ""),
@@ -494,17 +493,12 @@ const ChatBubble = memo(({ m, PlotComponent, result, stopPageZoomOnCtrlWheel }) 
                       y: 0.97, yanchor: 'top',
                     },
                     xaxis: { ...(m.newChart.fig.layout?.xaxis || {}), tickfont: { color: "#FFFFFF", size: 10 }, gridcolor: "rgba(99,102,241,0.1)", automargin: true },
-                    yaxis: { ...(m.newChart.fig.layout?.yaxis || {}), tickfont: { color: "#FFFFFF", size: 10 }, gridcolor: "rgba(99,102,241,0.1)", automargin: true },
+                    yaxis: { ...(m.newChart.fig.layout?.yaxis || {}), tickfont: { color: "#FFFFFF", size: 10 }, gridcolor: "rgba(99,102,241,0.1)", automargin: true, tickmode: "auto", nticks: 10 },
                     showlegend: false,
                   }}
-                  config={{ ...PLOTLY_CONFIG, scrollZoom: false }}
+                  config={{ ...PLOTLY_CONFIG, scrollZoom: false, staticPlot: true, displayModeBar: false }}
                   useResizeHandler
                   style={{ width: "100%", height: "360px" }}
-                  onInitialized={(figure) => {
-                    // #region agent log
-                    fetch('http://127.0.0.1:7453/ingest/05241122-7592-426a-ba9c-df1222b6ac79',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'da5cdd'},body:JSON.stringify({sessionId:'da5cdd',runId:'pre-fix',hypothesisId:'H8',location:'frontend/src/pages/DataPulseDashboard.jsx:ChatBubble',message:'new chart initialized',data:{chartId:m?.newChart?.id||null,initializedWidth:figure?.layout?.width??null,initializedHeight:figure?.layout?.height??null,xTickAngle:figure?.layout?.xaxis?.tickangle??null,yTickAngle:figure?.layout?.yaxis?.tickangle??null},timestamp:Date.now()})}).catch(()=>{});
-                    // #endregion
-                  }}
                 />
               </div>
             </div>
@@ -525,54 +519,78 @@ const ChatBubble = memo(({ m, PlotComponent, result, stopPageZoomOnCtrlWheel }) 
           border: m.role === 'user' ? '1px solid rgba(255,255,255,0.1)' : '1px solid rgba(99,102,241,0.2)',
           boxShadow: m.role === 'user' ? '0 4px 15px rgba(99,102,241,0.3)' : '0 4px 15px rgba(0,0,0,0.2)',
           lineHeight: 1.5,
+          display: 'flex',
+          flexDirection: 'column',
+          gap: '10px',
         }}
       >
         {(() => {
-          if (m.role !== 'ai' || !m.text.includes('[CHART:')) return m.text;
-          const parts = m.text.split(/(\[CHART:\s*[^\]]+\])/);
-          let renderedChartCount = 0;
-          return parts.map((part, pIdx) => {
-            const match = part.match(/\[CHART:\s*([^\]]+)\]/);
-            if (match && result?.charts?.[match[1]]) {
-              if (renderedChartCount >= 1) {
-                return null;
+          if (m.role !== 'ai' || !m.text.includes('[CHART:')) {
+            return m.text.split('\n').map((line, i) => (
+              <p key={i} style={{ margin: 0 }}>{line || '\u00A0'}</p>
+            ));
+          }
+          // Phase 1: Strip ALL [CHART:...] tags -> clean readable text, no orphaned words
+          const cleanText = m.text
+            .replace(/\[CHART:\s*[^\]]+\]/g, '')
+            .replace(/[ \t]{2,}/g, ' ')
+            .trim();
+          // Phase 2: Find the FIRST valid chart key and build its JSX
+          let inlineChartJSX = null;
+          const CHART_TAG_RE = /\[CHART:\s*([^\]]+)\]/g;
+          let tagM;
+          while ((tagM = CHART_TAG_RE.exec(m.text)) !== null) {
+            const key = tagM[1].trim();
+            if (result?.charts?.[key]) {
+              const figRaw = result.charts[key];
+              let parsedFig = figRaw;
+              if (typeof figRaw === 'string') {
+                try { parsedFig = JSON.parse(figRaw); }
+                catch (e) { console.warn('Failed to parse chart JSON:', e); parsedFig = {}; }
               }
-              renderedChartCount += 1;
-              const figStr = result.charts[match[1]];
-              let parsedFig = typeof figStr === "string" ? JSON.parse(figStr) : figStr;
-              const data = Array.isArray(parsedFig?.data) ? parsedFig.data : [];
-              const layout = (parsedFig?.layout && typeof parsedFig.layout === 'object') ? parsedFig.layout : {};
-              return PlotComponent ? (
-                <div key={pIdx} style={{ margin: '16px 0', border: '1px solid rgba(99,102,241,0.2)', borderRadius: '12px', overflow: 'hidden', padding: '12px', background: 'rgba(0,0,0,0.3)', width: '100%' }}>
+              const cData = Array.isArray(parsedFig?.data) ? parsedFig.data : [];
+              const cLayout = (parsedFig?.layout && typeof parsedFig.layout === 'object') ? parsedFig.layout : {};
+              inlineChartJSX = (
+                <div style={{ border: '1px solid rgba(99,102,241,0.2)', borderRadius: '12px', overflow: 'hidden', background: 'rgba(0,0,0,0.3)', width: '100%' }}>
                   <div onWheel={stopPageZoomOnCtrlWheel}>
                     <PlotComponent
-                      data={data.map(t => ({ ...t, textfont: { color: "#FFFFFF" } }))}
+                      data={cData.map(t => ({ ...t, textfont: { color: '#FFFFFF' } }))}
                       layout={{
                         ...PLOTLY_DARK_LAYOUT,
-                        ...layout,
-                        paper_bgcolor: "rgba(0,0,0,0)",
-                        plot_bgcolor: "rgba(0,0,0,0)",
-                        font: { color: "#FFFFFF", family: "'Inter', sans-serif" },
+                        ...cLayout,
+                        paper_bgcolor: 'rgba(0,0,0,0)',
+                        plot_bgcolor: 'rgba(0,0,0,0)',
+                        font: { color: '#FFFFFF', family: "'Inter', sans-serif" },
                         autosize: true,
                         width: undefined,
-                        dragmode: layout?.dragmode || "zoom",
-                        hoverlabel: { bgcolor: "rgba(8,12,24,0.98)", font: { color: "#F8FAFC", size: 12 }, bordercolor: "rgba(99,102,241,0.85)" },
-                        height: 340,
-                        margin: { l: 40, r: 20, t: 40, b: 40 },
-                        title: { ...(layout.title || {}), font: { size: 14, color: '#fff', weight: 'bold' }, y: 0.95, yanchor: 'top' },
-                        legend: { orientation: "h", yanchor: "top", y: -0.2, xanchor: "center", x: 0.5, font: { size: 10, color: "rgba(255,255,255,0.7)" } }
+                        dragmode: cLayout?.dragmode || 'zoom',
+                        hoverlabel: { bgcolor: 'rgba(8,12,24,0.98)', font: { color: '#F8FAFC', size: 12 }, bordercolor: 'rgba(99,102,241,0.85)' },
+                        height: 300,
+                        margin: { r: 16, t: 36, b: 36 },
+                        xaxis: { ...(cLayout.xaxis || {}), tickfont: { color: '#FFFFFF', size: 10 }, automargin: true },
+                        yaxis: { ...(cLayout.yaxis || {}), tickfont: { color: '#FFFFFF', size: 10 }, automargin: true, tickmode: 'auto', nticks: 10 },
+                        title: { ...(cLayout.title || {}), font: { size: 14, color: '#fff', weight: 'bold' }, y: 0.95, yanchor: 'top' },
+                        legend: { orientation: 'h', yanchor: 'top', y: -0.2, xanchor: 'center', x: 0.5, font: { size: 10, color: 'rgba(255,255,255,0.7)' } },
                       }}
-                      config={{ ...PLOTLY_CONFIG, scrollZoom: false }}
+                      config={{ ...PLOTLY_CONFIG, scrollZoom: false, staticPlot: true, displayModeBar: false }}
                       useResizeHandler
-                      style={{ width: "100%", height: "340px" }}
+                      style={{ width: '100%', height: '360px' }}
                     />
                   </div>
                 </div>
-              ) : <div key={pIdx} style={{ color: 'var(--primary-500)' }}>[Rendering Chart...]</div>;
+              );
+              break;
             }
-            if (match) return null;
-            return <span key={pIdx}>{part}</span>;
-          });
+          }
+          return (
+            <>
+              {cleanText && cleanText.split('\n').map((line, i) => {
+                const t = line.trim();
+                return t ? <p key={i} style={{ margin: 0 }}>{t}</p> : null;
+              })}
+              {inlineChartJSX}
+            </>
+          );
         })()}
       </div>
     </div>
@@ -865,6 +883,7 @@ const ChartPanel = memo(({ result, PlotComponent }) => {
           <div
             key={key}
             className={`chart-flip-wrapper ${flipped[key] ? 'flipped' : ''} ${isSpotlighted ? 'chart-spotlighted' : ''} ${isDimmed ? 'chart-dimmed' : ''}`}
+            data-mode={isSpotlighted ? chartMode : undefined}
             style={{
               gridColumn: isSpotlighted ? "1 / -1" : gridSpan,
               minWidth: 0,
@@ -1077,7 +1096,6 @@ function inferDatasetType(result, fileName) {
 }
 
 export default function DataPulse({ user, onLogout }) {
-  const [PlotComponent, setPlotComponent] = useState(null);
   const [phase, setPhase] = useState("upload");
   const [result, setResult] = useState(null);
   const [fileName, setFileName] = useState("");
@@ -1102,7 +1120,6 @@ export default function DataPulse({ user, onLogout }) {
   const chatContainerRef = useRef(null);
   const dragCounterRef = useRef(0);
   const stageTimersRef = useRef([]);
-  const plotlyPreloadRef = useRef(null);
 
   useEffect(() => {
     loadHistory();
@@ -1115,6 +1132,7 @@ export default function DataPulse({ user, onLogout }) {
     });
   }, []);
 
+  // PlotComponent is now statically imported
   useEffect(() => {
     if (chatContainerRef.current) {
       // Use requestAnimationFrame instead of setTimeout to guarantee browser paint cycle has completed
@@ -1125,23 +1143,6 @@ export default function DataPulse({ user, onLogout }) {
       });
     }
   }, [chatMsgs, chatLoading]);
-
-  useEffect(() => {
-    if (!result || PlotComponent || plotlyPreloadRef.current) return;
-
-    plotlyPreloadRef.current = Promise.all([
-      import("plotly.js-dist-min"),
-      import("react-plotly.js/factory"),
-    ])
-      .then(([PlotlyModule, factoryModule]) => {
-        const createPlotlyComponent = factoryModule.default;
-        const PlotlyLib = PlotlyModule.default;
-        setPlotComponent(() => createPlotlyComponent(PlotlyLib));
-      })
-      .catch(() => {
-        plotlyPreloadRef.current = null;
-      });
-  }, [result, PlotComponent]);
   const clearStageTimers = () => {
     stageTimersRef.current.forEach((timerId) => {
       // FIX 36: Explicitly clear both timeout and interval timer IDs.
@@ -1592,17 +1593,11 @@ export default function DataPulse({ user, onLogout }) {
     setChatLoading(true);
     try {
       const resp = await apiChat(q, chatContext || {}, history);
-      // #region agent log
-      fetch('http://127.0.0.1:7453/ingest/05241122-7592-426a-ba9c-df1222b6ac79',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'da5cdd'},body:JSON.stringify({sessionId:'da5cdd',runId:'pre-fix',hypothesisId:'H8',location:'frontend/src/pages/DataPulseDashboard.jsx:sendChat',message:'chat response received',data:{hasNewChart:!!resp?.new_chart?.fig,newChartId:resp?.new_chart?.id||null,layoutWidth:resp?.new_chart?.fig?.layout?.width??null,layoutHeight:resp?.new_chart?.fig?.layout?.height??null,titleType:typeof resp?.new_chart?.fig?.layout?.title,traceCount:Array.isArray(resp?.new_chart?.fig?.data)?resp.new_chart.fig.data.length:0},timestamp:Date.now()})}).catch(()=>{});
-      // #endregion
       if (resp?.new_chart?.id) {
         setGeneratedChartKeys((prev) => (prev.includes(resp.new_chart.id) ? prev : [...prev, resp.new_chart.id]));
       }
       const rawAnswer = (resp.answer || "").trim() || "No response generated.";
       const chartTagMatches = rawAnswer.match(/\[CHART:\s*[^\]]+\]/g) || [];
-      // #region agent log
-      fetch('http://127.0.0.1:7453/ingest/05241122-7592-426a-ba9c-df1222b6ac79',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'da5cdd'},body:JSON.stringify({sessionId:'da5cdd',runId:'post-fix',hypothesisId:'H9',location:'frontend/src/pages/DataPulseDashboard.jsx:sendChat',message:'chat answer chart tags counted',data:{chartTagCount:chartTagMatches.length,hasNewChart:!!resp?.new_chart?.fig},timestamp:Date.now()})}).catch(()=>{});
-      // #endregion
       // Strip all double stars (**) for a cleaner plain-text look
       const cleanAnswer = rawAnswer.replace(/\*\*/g, '');
 
@@ -2248,17 +2243,31 @@ export default function DataPulse({ user, onLogout }) {
               {historyLoading ? <div style={{ color: 'var(--primary-500)' }}>Syncing history...</div> : (
                 (Array.isArray(history) ? history.length : 0) === 0 ? <div style={{ color: 'var(--text-muted)' }}>No recorded sessions found.</div> : (
                   (Array.isArray(history) ? history : []).map(item => (
-                    <div key={item.analysis_id} className="card" style={{ padding: '16px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', cursor: 'pointer', border: historySelectLoading === item.analysis_id ? '1px solid var(--primary-500)' : '1px solid var(--border-subtle)' }} onClick={() => loadHistoryItem(item)}>
-                      <div className="flex-col gap-4">
-                        <strong style={{ fontSize: '14px', color: 'var(--text-main)', display: 'block' }}>{item.file_name}</strong>
+                    <div key={item.analysis_id} className="card" style={{ 
+                      padding: '16px', 
+                      display: 'flex', 
+                      justifyContent: 'space-between', 
+                      alignItems: 'center', 
+                      cursor: deleteLoading === item.analysis_id ? 'wait' : 'pointer', 
+                      border: historySelectLoading === item.analysis_id ? '1px solid var(--primary-500)' : '1px solid var(--border-subtle)',
+                      opacity: deleteLoading === item.analysis_id ? 0.5 : 1,
+                      pointerEvents: deleteLoading === item.analysis_id ? 'none' : 'auto',
+                      transition: 'opacity 0.2s ease, border-color 0.2s ease'
+                    }} onClick={() => loadHistoryItem(item)}>
+                      <div className="flex-col gap-4" style={{ flex: 1, minWidth: 0, paddingRight: '12px' }}>
+                        <strong style={{ fontSize: '14px', color: 'var(--text-main)', display: 'block', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{item.file_name}</strong>
                         <span className="caption">{new Date(item.analyzed_at).toLocaleDateString()} • {item.row_count} rows</span>
                       </div>
                       <button
                         onClick={(e) => { e.stopPropagation(); deleteItem(item.analysis_id); }}
                         disabled={deleteLoading === item.analysis_id}
-                        style={{ background: 'none', border: 'none', color: 'var(--text-muted)', cursor: 'pointer', padding: '8px', fontSize: '24px' }}
+                        style={{ background: 'none', border: 'none', color: 'var(--text-muted)', cursor: deleteLoading === item.analysis_id ? 'wait' : 'pointer', padding: '8px', fontSize: '24px', display: 'flex', alignItems: 'center', justifyContent: 'center' }}
                       >
-                        {deleteLoading === item.analysis_id ? "..." : "🗑"}
+                        {deleteLoading === item.analysis_id ? (
+                          <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ animation: 'spin 1s linear infinite' }}>
+                            <path d="M21 12a9 9 0 1 1-6.219-8.56"></path>
+                          </svg>
+                        ) : "🗑"}
                       </button>
                     </div>
                   ))

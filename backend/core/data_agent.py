@@ -13,9 +13,14 @@ STORAGE_DIR = os.path.join(_BACKEND_DIR, "storage", "data")
 
 def _load_df(file_hash: str):
     """Load the full Parquet dataset from disk."""
+    import re as _re
+    # FIX 19: Validate hash format before building any filesystem path.
+    # An invalid hash could be used to escape the storage directory (path traversal).
+    if not file_hash or not _re.match(r"^[a-f0-9]{64}$", file_hash):
+        return None, {"error": "Invalid file hash format."}
     path = os.path.join(STORAGE_DIR, f"{file_hash}.parquet")
     if not os.path.exists(path):
-        return None, {"error": f"Full dataset not cached yet for this session. Please re-upload the file."}
+        return None, {"error": "Full dataset not cached yet for this session. Please re-upload the file."}
     return pd.read_parquet(path), None
 
 
@@ -68,31 +73,39 @@ def _filter_df(df: pd.DataFrame, filters: list) -> pd.DataFrame:
             logger.warning("Filter column '%s' not found in %s, skipping.", col, list(df.columns))
             continue
         col = resolved
+        # FIX 20: Apply each filter into a temp variable and only commit on success.
+        # Previously, a failed filter left df in whatever partially-assigned state
+        # the exception interrupted, silently skipping the condition and continuing
+        # with an unfiltered (or partially-filtered) DataFrame.
         try:
             if op == "eq":
-                df = df[df[col].astype(str).str.lower() == str(val).lower()]
+                candidate = df[df[col].astype(str).str.lower() == str(val).lower()]
             elif op == "neq":
-                df = df[df[col].astype(str).str.lower() != str(val).lower()]
+                candidate = df[df[col].astype(str).str.lower() != str(val).lower()]
             elif op == "contains":
-                df = df[df[col].astype(str).str.lower().str.contains(str(val).lower(), na=False)]
+                candidate = df[df[col].astype(str).str.lower().str.contains(str(val).lower(), na=False)]
             elif op == "gt":
-                df = df[pd.to_numeric(df[col], errors="coerce") > float(val)]
+                candidate = df[pd.to_numeric(df[col], errors="coerce") > float(val)]
             elif op == "lt":
-                df = df[pd.to_numeric(df[col], errors="coerce") < float(val)]
+                candidate = df[pd.to_numeric(df[col], errors="coerce") < float(val)]
             elif op == "gte":
-                df = df[pd.to_numeric(df[col], errors="coerce") >= float(val)]
+                candidate = df[pd.to_numeric(df[col], errors="coerce") >= float(val)]
             elif op == "lte":
-                df = df[pd.to_numeric(df[col], errors="coerce") <= float(val)]
+                candidate = df[pd.to_numeric(df[col], errors="coerce") <= float(val)]
             elif op == "year":
-                df = df[pd.to_datetime(df[col], errors="coerce").dt.year == int(val)]
+                candidate = df[pd.to_datetime(df[col], errors="coerce").dt.year == int(val)]
             elif op == "month":
-                df = df[pd.to_datetime(df[col], errors="coerce").dt.month == int(val)]
+                candidate = df[pd.to_datetime(df[col], errors="coerce").dt.month == int(val)]
             elif op == "isnull":
-                df = df[df[col].isnull()]
+                candidate = df[df[col].isnull()]
             elif op == "notnull":
-                df = df[df[col].notnull()]
+                candidate = df[df[col].notnull()]
+            else:
+                logger.warning("Unknown filter op '%s', skipping.", op)
+                continue
+            df = candidate  # only commit once we know the filter succeeded
         except Exception as e:
-            logger.warning("Filter op '%s' on column '%s' failed: %s", op, col, e)
+            logger.warning("Filter op '%s' on column '%s' failed: %s — skipping this filter", op, col, e)
     return df
 
 
