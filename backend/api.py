@@ -1442,7 +1442,7 @@ async def chat_with_analysis(
         "• Keep answers short — 2 to 4 sentences max. The user can always ask follow-ups.\n"
         "\n"
         "RECOMMENDATION RULE:\n"
-        "Add '💡 Recommendation:' ONLY if the finding reveals something actionable (a trend, outlier, or pattern worth acting on). Skip it for simple lookups, greetings, or chart-view requests.\n"
+        "Add 'Recommendation:' ONLY if the finding reveals something actionable (a trend, outlier, or pattern worth acting on). Skip it for simple lookups, greetings, or chart-view requests.\n"
         "\n"
         "GROUNDING RULES:\n"
         f"1. If there is an 'ADDITIONAL DATA FROM FULL DATASET QUERY' block, use those exact values.\n"

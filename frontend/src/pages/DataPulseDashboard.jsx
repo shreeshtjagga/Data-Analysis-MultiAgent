@@ -883,6 +883,7 @@ const ChartPanel = memo(({ result, PlotComponent }) => {
           <div
             key={key}
             className={`chart-flip-wrapper ${flipped[key] ? 'flipped' : ''} ${isSpotlighted ? 'chart-spotlighted' : ''} ${isDimmed ? 'chart-dimmed' : ''}`}
+            data-mode={isSpotlighted ? chartMode : undefined}
             style={{
               gridColumn: isSpotlighted ? "1 / -1" : gridSpan,
               minWidth: 0,
