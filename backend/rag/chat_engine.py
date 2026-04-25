@@ -196,7 +196,8 @@ QUESTION: {question}
 Return ONLY the JSON object or the word NONE. No explanation whatsoever."""
 
     try:
-        resp = groq_client.chat.completions.create(
+        resp = await asyncio.to_thread(
+            groq_client.chat.completions.create,
             model=INTENT_MODEL,
             messages=[{"role": "user", "content": planner_prompt}],
             max_tokens=250,
@@ -506,11 +507,12 @@ async def answer_question(
     # Synthesize answer
     try:
         temp = 0.05 if data_result is not None else 0.1
-        completion = groq_client.chat.completions.create(
+        completion = await asyncio.to_thread(
+            groq_client.chat.completions.create,
             model=SYNTHESIS_MODEL,
             messages=messages,
             temperature=temp,
-            max_tokens=450,  # bumped from 300 — analytical answers need more room
+            max_tokens=450,
         )
         answer = (completion.choices[0].message.content or "").strip()
     except Exception as exc:
@@ -571,7 +573,8 @@ async def answer_chart_explanation(
     ]
 
     try:
-        completion = groq_client.chat.completions.create(
+        completion = await asyncio.to_thread(
+            groq_client.chat.completions.create,
             model=SYNTHESIS_MODEL,
             messages=messages,
             temperature=0.05,

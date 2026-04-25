@@ -15,6 +15,7 @@ import traceback
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy import select as _sa_select
 from pydantic import BaseModel, field_validator
 from typing import Any, Annotated
 
@@ -38,28 +39,6 @@ _INJECTION_PATTERNS = [
 _INJECTION_RE = _re.compile("|".join(_INJECTION_PATTERNS), _re.IGNORECASE)
 
 
-def _debug_log(run_id: str, hypothesis_id: str, location: str, message: str, data: dict) -> None:
-    # #region agent log
-    try:
-        with open("debug-da5cdd.log", "a", encoding="utf-8") as _fh:
-            _fh.write(
-                json.dumps(
-                    {
-                        "sessionId": "da5cdd",
-                        "runId": run_id,
-                        "hypothesisId": hypothesis_id,
-                        "location": location,
-                        "message": message,
-                        "data": data,
-                        "timestamp": int(datetime.now().timestamp() * 1000),
-                    },
-                    ensure_ascii=True,
-                )
-                + "\n"
-            )
-    except Exception:
-        pass
-    # #endregion
 
 def sanitize_chat_input(text: str) -> str:
     """Strip prompt injection patterns and null bytes from user input."""
@@ -68,6 +47,7 @@ def sanitize_chat_input(text: str) -> str:
     return text.strip()
 
 from .core import cache as redis_cache
+from .core.cache import _get_client as _get_cache_client
 from .analysis_history import (
     _serialize_charts,
     compute_file_hash,
@@ -101,7 +81,7 @@ from .rag.indexer import build_rag_index, retrieve_chunks
 from .rag.chat_engine import answer_question, answer_chart_explanation
 from .rag.pinecone_client import ping as pinecone_ping
 from .core.llm_client import get_groq_client
-from .db import get_db, init_db
+from .db import get_db, init_db, AnalysisHistory as _AnalysisHistory
 from .models.schemas import (
     AnalysisListResponse,
     AuthResponse,
@@ -149,13 +129,6 @@ origins = [o.strip() for o in _raw_origins.split(",") if o.strip()]
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    _debug_log(
-        "pre-fix",
-        "H7",
-        "backend/api.py:lifespan",
-        "backend lifespan started",
-        {"app_env": APP_ENV},
-    )
     logger.info("Starting DataPulse API v2 (pipeline %s)", PIPELINE_VERSION)
 
     if not os.getenv("GROQ_API_KEY"):
@@ -589,13 +562,7 @@ async def analyze(
     user_id: int = Depends(check_user_rate_limit), # check_user_rate_limit now returns user_id
     db: AsyncSession = Depends(get_db),
 ):
-    _debug_log(
-        "pre-fix",
-        "H7",
-        "backend/api.py:analyze",
-        "analyze endpoint invoked",
-        {"has_filename": bool(file.filename)},
-    )
+    logger.debug("analyze endpoint invoked, has_filename=%s", bool(file.filename))
 
     # FIX 41: Sanitize uploaded filename before hashing and downstream usage.
     filename = os.path.basename(file.filename or "upload").strip()
@@ -624,9 +591,7 @@ async def analyze(
     validate_upload_magic(parsed_ext, file_bytes)
 
     file_hash = compute_file_hash(file_bytes, filename)
-    # FIX 42: Enforce strict hash format before any filesystem usage.
-    assert _re.match(r"^[a-f0-9]{64}$", file_hash), "Invalid file hash"
-    # FIX 42: Enforce expected SHA256 hash format before path construction.
+    # Enforce strict hash format before any filesystem usage.
     assert _re.match(r"^[a-f0-9]{64}$", file_hash), "Invalid file hash"
 
 
@@ -798,8 +763,7 @@ async def analyze(
 
     async def _index_rag_background():
         try:
-            from .core.cache import _get_client as _rc
-            _redis = _rc()
+            _redis = _get_cache_client()
             n = await build_rag_index(
                 file_hash=_rag_hash,
                 stats=_rag_stats,
@@ -1161,38 +1125,10 @@ async def chat_with_analysis(
     if len(question.encode("utf-8")) > _MAX_QUESTION_BYTES:
         raise HTTPException(status_code=413, detail=f"Question too long. Max {MAX_QUESTION_CHARS} characters.")
 
-    # FIX: Measure actual total value size, not just the type name string length.
-    # Previous code used len(str(type(v))) which always returned ~14 chars (e.g.
-    # "<class 'dict'>") and therefore NEVER triggered, allowing oversized chart
-    # payloads to bypass the early guard entirely.
-    rough_context_bytes = 0
-    if isinstance(context, dict):
-        for k, v in context.items():
-            try:
-                rough_context_bytes += len(str(k).encode("utf-8")) + len(str(v).encode("utf-8"))
-            except Exception:
-                rough_context_bytes += 256  # conservative fallback per key
-    if rough_context_bytes > MAX_CONTEXT_BYTES:
-        raise HTTPException(status_code=413, detail=f"Context too large. Max {MAX_CONTEXT_BYTES // 1024} KB.")
-
     try:
         context_blob = json.dumps(context, default=str)
-        _debug_log(
-            "pre-fix",
-            "H2",
-            "backend/api.py:chat_with_analysis",
-            "context serialization succeeded",
-            {"context_type": type(context).__name__, "context_keys": len(context) if isinstance(context, dict) else -1},
-        )
-    except Exception as context_exc:
-        _debug_log(
-            "pre-fix",
-            "H2",
-            "backend/api.py:chat_with_analysis",
-            "context serialization failed",
-            {"error": str(context_exc)},
-        )
-        raise
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid context payload format.")
     if len(context_blob.encode("utf-8")) > MAX_CONTEXT_BYTES:
         raise HTTPException(status_code=413, detail=f"Context too large. Max {MAX_CONTEXT_BYTES // 1024} KB.")
 
@@ -1207,11 +1143,9 @@ async def chat_with_analysis(
     # Without this check, any authenticated user could pass someone else's
     # file_hash in the context payload and query their private data.
     if file_hash:
-        from sqlalchemy import select as _fh_select
-        from .db import AnalysisHistory as _AnalysisHistory
         try:
             _fh_row = await db.execute(
-                _fh_select(_AnalysisHistory.id).where(
+                _sa_select(_AnalysisHistory.id).where(
                     _AnalysisHistory.user_id == user_id,
                     _AnalysisHistory.file_hash == file_hash,
                 ).limit(1)
@@ -1276,13 +1210,6 @@ async def chat_with_analysis(
     # ── Classify intent ───────────────────────────────────────────────────────
     intent = _classify_chat_intent(question)
     logger.info("Chat intent classified as '%s' for question: %s", intent, question[:80])
-    _debug_log(
-        "post-fix",
-        "H9",
-        "backend/api.py:chat_with_analysis",
-        "chat intent classified",
-        {"question": question[:120], "intent": intent},
-    )
 
     # ══════════════════════════════════════════════════════════════════════════
     # BRANCH 0 — Greeting / small talk
@@ -1398,56 +1325,78 @@ async def chat_with_analysis(
                 if matched_key:
                     break
 
-        # Extract chart data for context
+        # Extract chart data for context.
+        # The frontend now sends only sentinel keys ({key: true}) to keep the
+        # HTTP payload small. Try to load the real fig from Redis first;
+        # fall back to whatever the context carries (legacy/full payload path).
         if matched_key and isinstance(charts_data, dict) and matched_key in charts_data:
-            try:
-                raw = charts_data[matched_key]
-                _debug_log(
-                    "pre-fix",
-                    "H3",
-                    "backend/api.py:chat_with_analysis",
-                    "matched chart parse attempt",
-                    {"raw_type": type(raw).__name__},
-                )
-                chart_fig = json.loads(raw) if isinstance(raw, str) else raw
-                # Build a readable summary of the chart's data
-                traces_info = []
-                for trace in chart_fig.get("data", [])[:3]:
-                    ttype = trace.get("type", "unknown")
-                    x_vals = list(trace.get("x") or [])[:8]
-                    y_vals = list(trace.get("y") or [])[:8]
-                    labels = list(trace.get("labels") or [])[:8]
-                    values = list(trace.get("values") or [])[:8]
-                    if labels and values:
-                        traces_info.append(f"{ttype}: labels={labels}, values={values}")
-                    elif x_vals or y_vals:
-                        traces_info.append(f"{ttype}: x={x_vals}, y={y_vals}")
+            _raw_from_context = charts_data[matched_key]
+            # Sentinel value from slim frontend: skip and load from cache
+            _needs_redis = (
+                _raw_from_context is True
+                or _raw_from_context is None
+                or isinstance(_raw_from_context, bool)
+            )
 
-                layout = chart_fig.get("layout", {})
-                title_raw = layout.get("title", {})
-                chart_title = (
-                    title_raw.get("text") if isinstance(title_raw, dict)
-                    else title_raw
-                ) or matched_key
+            if _needs_redis and file_hash:
+                try:
+                    _cache_key = redis_cache.analysis_key(user_id, file_hash)
+                    _cached_analysis = await redis_cache.get(_cache_key)
+                    if isinstance(_cached_analysis, dict):
+                        _raw_from_context = _cached_analysis.get("charts", {}).get(matched_key)
+                except Exception as _redis_exc:
+                    logger.warning("Could not load chart from Redis for explain_chart: %s", _redis_exc)
 
-                matched_chart_data = {
-                    "key": matched_key,
-                    "title": chart_title,
-                    "traces": traces_info,
-                }
-            except Exception as e:
-                logger.warning("Could not parse chart data for key %s: %s", matched_key, e)
+            if _raw_from_context and _raw_from_context is not True:
+                try:
+                    raw = _raw_from_context
+                    logger.debug("Parsing chart data for key '%s' (type=%s)", matched_key, type(raw).__name__)
+                    chart_fig = json.loads(raw) if isinstance(raw, str) else raw
+                    # Build a readable summary of the chart's data
+                    traces_info = []
+                    for trace in chart_fig.get("data", [])[:3]:
+                        ttype = trace.get("type", "unknown")
+                        x_vals = list(trace.get("x") or [])[:8]
+                        y_vals = list(trace.get("y") or [])[:8]
+                        labels = list(trace.get("labels") or [])[:8]
+                        values = list(trace.get("values") or [])[:8]
+                        if labels and values:
+                            traces_info.append(f"{ttype}: labels={labels}, values={values}")
+                        elif x_vals or y_vals:
+                            traces_info.append(f"{ttype}: x={x_vals}, y={y_vals}")
+
+                    layout = chart_fig.get("layout", {})
+                    title_raw = layout.get("title", {})
+                    chart_title = (
+                        title_raw.get("text") if isinstance(title_raw, dict)
+                        else title_raw
+                    ) or matched_key
+
+                    matched_chart_data = {
+                        "key": matched_key,
+                        "title": chart_title,
+                        "traces": traces_info,
+                    }
+                except Exception as e:
+                    logger.warning("Could not parse chart data for key %s: %s", matched_key, e)
 
         # ── RAG-grounded chart explanation ──────────────────────────────────
-        _chart_raw    = None
-        _explain_key  = matched_key or (existing_chart_keys[0] if existing_chart_keys else "")
-        if _explain_key and isinstance(charts_data, dict):
-            _chart_raw = charts_data.get(_explain_key)
+        _explain_key = matched_key or (existing_chart_keys[0] if existing_chart_keys else "")
+        _chart_raw = None
+
+        # Load the real chart fig from Redis (frontend sends only sentinel keys now).
+        if _explain_key and file_hash:
+            try:
+                _cache_key_expl = redis_cache.analysis_key(user_id, file_hash)
+                _cached_expl = await redis_cache.get(_cache_key_expl)
+                if isinstance(_cached_expl, dict):
+                    _chart_raw = _cached_expl.get("charts", {}).get(_explain_key)
+            except Exception as _expl_exc:
+                logger.warning("Redis lookup for _chart_raw failed: %s", _expl_exc)
 
         _explain_client = get_groq_client()
         if _explain_client and file_hash:
-            from .core.cache import _get_client as _expl_rc
-            _expl_redis = _expl_rc()
+            _expl_redis = _get_cache_client()
             explain_result = await answer_chart_explanation(
                 question=question,
                 chart_key=_explain_key,
@@ -1474,8 +1423,7 @@ async def chat_with_analysis(
     # ══════════════════════════════════════════════════════════════════════════
     _data_client = get_groq_client()
     if _data_client and file_hash:
-        from .core.cache import _get_client as _d_rc
-        _data_redis = _d_rc()
+        _data_redis = _get_cache_client()
         ans_result = await answer_question(
             question=question,
             file_hash=file_hash,
@@ -1499,5 +1447,4 @@ async def chat_with_analysis(
         "data_queried": False,
         "new_chart": None,
     }
-
-# (dead code removed — all branches above return explicitly)
+

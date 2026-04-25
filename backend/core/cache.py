@@ -2,6 +2,7 @@
 import json
 import logging
 import os
+import threading
 import orjson
 from typing import Any, Optional
 
@@ -18,24 +19,28 @@ CACHE_TTL_ANALYSIS: int = int(os.getenv("CACHE_TTL_ANALYSIS", str(3 * 24 * 3600)
 
 
 _redis_client: Optional[aioredis.Redis] = None
+_redis_lock = threading.Lock()
 
 
 def _get_client() -> aioredis.Redis:
     global _redis_client
-    if _redis_client is None:
-        redis_url = os.getenv("REDIS_URL", "redis://localhost:6379/0")
-        redis_url = rewrite_local_dev_host(redis_url, service_name="redis")
-        _redis_client = aioredis.from_url(
-            redis_url,
-            encoding="utf-8",
-            decode_responses=True,
-            health_check_interval=30,
-            socket_connect_timeout=3,      # fail fast if Upstash is unreachable
-            socket_keepalive=True,         # keeps idle connection alive; avoids reconnect cost
-            retry_on_timeout=True,
-            max_connections=10,            # cap connections; Upstash free tier has limits
-        )
-        logger.info("Redis client initialised (%s)", redis_url.split("@")[-1])
+    if _redis_client is not None:
+        return _redis_client
+    with _redis_lock:
+        if _redis_client is None:
+            redis_url = os.getenv("REDIS_URL", "redis://localhost:6379/0")
+            redis_url = rewrite_local_dev_host(redis_url, service_name="redis")
+            _redis_client = aioredis.from_url(
+                redis_url,
+                encoding="utf-8",
+                decode_responses=True,
+                health_check_interval=30,
+                socket_connect_timeout=3,
+                socket_keepalive=True,
+                retry_on_timeout=True,
+                max_connections=10,
+            )
+            logger.info("Redis client initialised (%s)", redis_url.split("@")[-1])
     return _redis_client
 
 

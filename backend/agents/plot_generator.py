@@ -16,7 +16,6 @@ import json
 import logging
 import os
 import re
-import time
 from typing import Optional
 
 import pandas as pd
@@ -39,22 +38,7 @@ from .visualizer import (
 logger = logging.getLogger(__name__)
 
 
-def _debug_log(run_id: str, hypothesis_id: str, location: str, message: str, data: dict) -> None:
-    # #region agent log
-    try:
-        with open("debug-da5cdd.log", "a", encoding="utf-8") as _fh:
-            _fh.write(json.dumps({
-                "sessionId": "da5cdd",
-                "runId": run_id,
-                "hypothesisId": hypothesis_id,
-                "location": location,
-                "message": message,
-                "data": data,
-                "timestamp": int(time.time() * 1000),
-            }, ensure_ascii=True) + "\n")
-    except Exception:
-        pass
-    # #endregion
+
 
 SUPPORTED_CHART_TYPES = frozenset({
     "scatter", "histogram", "ranked_bar", "grouped_bar", "bar",
@@ -594,12 +578,9 @@ def generate_on_demand_chart(
         chart = _build_freq_bar(df, col, title=title)
 
     if chart is None or not _chart_has_signal(chart):
-        _debug_log(
-            "post-fix",
-            "H10",
-            "backend/agents/plot_generator.py:generate_on_demand_chart",
-            "primary chart build failed, trying fallbacks",
-            {"chart_type": chart_type, "x": x, "y": y, "num_cols": len(num_cols), "cat_cols": len(cat_cols)},
+        logger.warning(
+            "Primary chart build failed (type=%s x=%s y=%s), trying fallbacks",
+            chart_type, x, y,
         )
         fallback_chart = None
         # Try robust defaults so generic "show me a chart" always returns at least one chart.
@@ -613,13 +594,7 @@ def generate_on_demand_chart(
             fallback_chart = _build_ranked_bar(df, cat_cols[0], num_cols[0], title=f"Top {cat_cols[0]} by {num_cols[0]}")
         if fallback_chart is not None and _chart_has_signal(fallback_chart):
             chart = fallback_chart
-            _debug_log(
-                "post-fix",
-                "H10",
-                "backend/agents/plot_generator.py:generate_on_demand_chart",
-                "fallback chart selected",
-                {"fallback_key": chart.key},
-            )
+            logger.info("Fallback chart selected: key=%s", chart.key)
 
     if chart is None or not _chart_has_signal(chart):
         n_num = len(num_cols)

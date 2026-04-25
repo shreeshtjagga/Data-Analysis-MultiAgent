@@ -9,7 +9,7 @@ const PALETTE = ["#6366f1", "#10b981", "#f59e0b", "#06b6d4", "#ef4444", "#a855f7
 const PLOTLY_DARK_LAYOUT = {
   paper_bgcolor: "rgba(0,0,0,0)",
   plot_bgcolor: "rgba(0,0,0,0)",
-  font: { color: "architect#FFFFFF", family: "'Inter', sans-serif", size: 12 },
+  font: { color: "#FFFFFF", family: "'Inter', sans-serif", size: 12 },
   title: { font: { color: "#FFFFFF", size: 14 } },
   xaxis: { gridcolor: "rgba(99,102,241,0.1)", zerolinecolor: "rgba(99,102,241,0.2)", tickfont: { color: "#FFFFFF" } },
   yaxis: { gridcolor: "rgba(99,102,241,0.1)", zerolinecolor: "rgba(99,102,241,0.2)", tickfont: { color: "#FFFFFF" } },
@@ -1573,8 +1573,11 @@ export default function DataPulse({ user, onLogout }) {
       outlierSummary,
       dataQuality: chatStats?.data_quality || {},
       correlations: chatStats?.strong_correlations?.slice(0, 5),
-      charts: result?.charts || {},
-      // Include the 100-row clean_df preview so the backend can generate new charts on demand
+      // Only send chart keys (not full fig data) to avoid bloating the context
+      // payload by 200-800 KB per request. The backend derives chart_keys from
+      // the object keys; full fig data is retrieved from Redis for explain_chart.
+      charts: Object.keys(result?.charts || {}).reduce((acc, k) => ({ ...acc, [k]: true }), {}),
+      // clean_df preview is needed by the backend for on-demand chart generation
       clean_df: result?.clean_df || [],
       file_hash: result?.file_hash || null,
       generated_chart_keys: generatedChartKeys,
@@ -1584,33 +1587,38 @@ export default function DataPulse({ user, onLogout }) {
   const sendChat = useCallback(async () => {
     const q = chatInput.trim();
     if (!q || chatLoading || !result) return;
-    
-    // FIX 35: Build history before appending current user message.
-    const history = chatMsgs.map(m => ({
+
+    // Build history before appending current user message.
+    // Strip [CHART:...] tags so the LLM doesn't see internal rendering tags.
+    const chatHistory = chatMsgs.map(m => ({
       role: m.role === 'ai' ? 'assistant' : 'user',
-      content: m.text
-    })).slice(-10); // Last 10 messages for context
+      content: (m.text || '').replace(/\[CHART:\s*[^\]]+\]/g, '').trim(),
+    })).filter(m => m.content).slice(-10);
 
     setChatInput("");
     setChatMsgs((p) => [...p, { role: "user", text: q }].slice(-MAX_CHAT_MESSAGES));
     setChatLoading(true);
     try {
-      const resp = await apiChat(q, chatContext || {}, history);
-      if (resp?.new_chart?.id) {
-        setGeneratedChartKeys((prev) => (prev.includes(resp.new_chart.id) ? prev : [...prev, resp.new_chart.id]));
+      const resp = await apiChat(q, chatContext || {}, chatHistory);
+      if (resp?.new_chart?.id && resp?.new_chart?.fig) {
+        const chartId = resp.new_chart.id;
+        // Track generated key so future requests don't duplicate it
+        setGeneratedChartKeys((prev) => (prev.includes(chartId) ? prev : [...prev, chartId]));
+        // Add chart fig to result.charts so [CHART: key] inline references work
+        setResult((prev) => prev ? ({
+          ...prev,
+          charts: { ...(prev.charts || {}), [chartId]: resp.new_chart.fig },
+        }) : prev);
       }
       const rawAnswer = (resp.answer || "").trim() || "No response generated.";
-      const chartTagMatches = rawAnswer.match(/\[CHART:\s*[^\]]+\]/g) || [];
-      // Strip all double stars (**) for a cleaner plain-text look
+      // Strip double stars (**) for a cleaner plain-text look
       const cleanAnswer = rawAnswer.replace(/\*\*/g, '');
 
-      const aiMessage = {
+      setChatMsgs((p) => [...p, {
         role: "ai",
         text: cleanAnswer,
-        // Attach on-demand generated chart from backend response.new_chart
         newChart: resp?.new_chart?.fig ? resp.new_chart : null,
-      };
-      setChatMsgs((p) => [...p, aiMessage].slice(-MAX_CHAT_MESSAGES));
+      }].slice(-MAX_CHAT_MESSAGES));
     } catch (err) {
       const detail = err?.message || "Unable to reach AI";
       setChatMsgs((p) => [...p, { role: "ai", text: `Chat error: ${detail}`, newChart: null }].slice(-MAX_CHAT_MESSAGES));
