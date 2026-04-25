@@ -301,21 +301,32 @@ async def get_analysis_by_hash(
     if row is None:
         return None
 
+    raw_data_str = row.raw_data
+    clean_data_str = row.clean_data
+    stats_summary_str = row.stats_summary
+    charts_str = row.charts
+    insights_str = row.insights
+    errors_str = row.errors
+    completed_agents_str = row.completed_agents
+    analysis_id = row.id
+    file_name = row.file_name
+    analysis_date_str = row.analysis_date.isoformat() if row.analysis_date else None
+
     def _parse_row():
         return {
-            "analysis_id": row.id,
-            "file_name": row.file_name,
+            "analysis_id": analysis_id,
+            "file_name": file_name,
             "file_hash": file_hash,
             "pipeline_version": PIPELINE_VERSION,
-            "raw_df": orjson.loads(row.raw_data) if row.raw_data else None,
-            "clean_df": orjson.loads(row.clean_data) if row.clean_data else None,
-            "stats_summary": orjson.loads(row.stats_summary) if row.stats_summary else {},
-            "charts": orjson.loads(row.charts) if row.charts else {},
-            "insights": orjson.loads(row.insights) if row.insights else {},
-            "errors": orjson.loads(row.errors) if row.errors else [],
-            "completed_agents": orjson.loads(row.completed_agents) if row.completed_agents else [],
-            "partial": bool(orjson.loads(row.errors)) if row.errors else False,
-            "analysis_date": row.analysis_date.isoformat() if row.analysis_date else None,
+            "raw_df": orjson.loads(raw_data_str) if raw_data_str else None,
+            "clean_df": orjson.loads(clean_data_str) if clean_data_str else None,
+            "stats_summary": orjson.loads(stats_summary_str) if stats_summary_str else {},
+            "charts": orjson.loads(charts_str) if charts_str else {},
+            "insights": orjson.loads(insights_str) if insights_str else {},
+            "errors": orjson.loads(errors_str) if errors_str else [],
+            "completed_agents": orjson.loads(completed_agents_str) if completed_agents_str else [],
+            "partial": bool(orjson.loads(errors_str)) if errors_str else False,
+            "analysis_date": analysis_date_str,
             "from_cache": True,
         }
 

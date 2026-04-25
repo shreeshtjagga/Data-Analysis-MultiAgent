@@ -2,11 +2,12 @@
 import json
 import logging
 import os
+import orjson
 from typing import Any, Optional
 
 import redis.asyncio as aioredis
 
-from .utils import json_default, rewrite_local_dev_host, sanitize_for_json
+from .utils import rewrite_local_dev_host, sanitize_for_json
 
 logger = logging.getLogger(__name__)
 
@@ -58,7 +59,7 @@ async def get(key: str) -> Optional[Any]:
         raw = await client.get(key)
         if raw is None:
             return None
-        return json.loads(raw)
+        return orjson.loads(raw)
     except Exception as exc:
         logger.warning("Cache GET failed for key '%s': %s", key, exc)
         return None
@@ -68,7 +69,7 @@ async def set(key: str, value: Any, ttl: int = CACHE_TTL_ANALYSIS) -> bool:
     try:
         client = _get_client()
         cleaned = sanitize_for_json(value)
-        serialised = json.dumps(cleaned, default=json_default, allow_nan=False)
+        serialised = orjson.dumps(cleaned, option=orjson.OPT_NON_STR_KEYS | orjson.OPT_SERIALIZE_NUMPY).decode('utf-8')
         if len(serialised) > 4 * 1024 * 1024:
             logger.warning("Cache payload too large (%d bytes), skipping Redis SET", len(serialised))
             return False

@@ -305,7 +305,7 @@ def _build_all_candidates(df: pd.DataFrame, existing_chart_keys: list[str]) -> l
     # stacked bar: two low-cardinality categoricals
     small_cats = [c for c in categorical if 2 <= df[c].nunique(dropna=True) <= 8]
     if len(small_cats) >= 2:
-        _add("stacked_bar", small_cats[0], small_cats[1], title=f"{small_cats[0]} vs {small_cats[1]}")
+        _add("stacked_bar", small_cats[0], None, color=small_cats[1], title=f"{small_cats[0]} vs {small_cats[1]}")
 
     return candidates
 

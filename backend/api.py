@@ -811,7 +811,7 @@ async def analyze(
         except Exception as _rag_exc:
             logger.warning("RAG indexing failed (non-fatal): %s", _rag_exc)
 
-    background_tasks.add_task(asyncio.ensure_future, _index_rag_background())
+    background_tasks.add_task(_index_rag_background)
 
     result["chat_context_pack"] = build_chat_context_pack(
         result.get("stats_summary", {}),
