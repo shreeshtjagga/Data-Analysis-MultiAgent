@@ -4,6 +4,8 @@ import json
 import logging
 from datetime import datetime, timezone, timedelta
 from typing import Optional
+import asyncio
+import orjson
 
 import pandas as pd
 from sqlalchemy import delete, select
@@ -27,7 +29,8 @@ def _to_json(value) -> Optional[str]:
     if value is None:
         return None
     cleaned = sanitize_for_json(value)
-    return json.dumps(cleaned, default=json_default, allow_nan=False)
+    # orjson.dumps returns bytes, so we decode it to str for the database TEXT column
+    return orjson.dumps(cleaned, default=json_default).decode('utf-8')
 
 
 def _serialize_charts(charts: dict) -> dict:
@@ -298,22 +301,25 @@ async def get_analysis_by_hash(
     if row is None:
         return None
 
-    analysis = {
-        "analysis_id": row.id,
-        "file_name": row.file_name,
-        "file_hash": file_hash,
-        "pipeline_version": PIPELINE_VERSION,
-        "raw_df": json.loads(row.raw_data) if row.raw_data else None,
-        "clean_df": json.loads(row.clean_data) if row.clean_data else None,
-        "stats_summary": json.loads(row.stats_summary) if row.stats_summary else {},
-        "charts": json.loads(row.charts) if row.charts else {},
-        "insights": json.loads(row.insights) if row.insights else {},
-        "errors": json.loads(row.errors) if row.errors else [],
-        "completed_agents": json.loads(row.completed_agents) if row.completed_agents else [],
-        "partial": bool(json.loads(row.errors)) if row.errors else False,
-        "analysis_date": row.analysis_date.isoformat() if row.analysis_date else None,
-        "from_cache": True,
-    }
+    def _parse_row():
+        return {
+            "analysis_id": row.id,
+            "file_name": row.file_name,
+            "file_hash": file_hash,
+            "pipeline_version": PIPELINE_VERSION,
+            "raw_df": orjson.loads(row.raw_data) if row.raw_data else None,
+            "clean_df": orjson.loads(row.clean_data) if row.clean_data else None,
+            "stats_summary": orjson.loads(row.stats_summary) if row.stats_summary else {},
+            "charts": orjson.loads(row.charts) if row.charts else {},
+            "insights": orjson.loads(row.insights) if row.insights else {},
+            "errors": orjson.loads(row.errors) if row.errors else [],
+            "completed_agents": orjson.loads(row.completed_agents) if row.completed_agents else [],
+            "partial": bool(orjson.loads(row.errors)) if row.errors else False,
+            "analysis_date": row.analysis_date.isoformat() if row.analysis_date else None,
+            "from_cache": True,
+        }
+
+    analysis = await asyncio.to_thread(_parse_row)
 
 
     if analysis.get("stats_summary") and analysis.get("insights") and not analysis.get("errors"):

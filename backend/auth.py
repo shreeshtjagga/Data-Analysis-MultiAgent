@@ -185,9 +185,12 @@ async def register_user(db: AsyncSession, email: str, password: str, name: Optio
     if not email or not password:
         return {"success": False, "message": "Email and password are required"}
 
-    normalized_email = normalize_email(email, check_deliverability=True)
+    # FIX: check_deliverability=False — True does blocking DNS lookups which stall
+    # the async event loop. Format validation is sufficient here; a deliverability
+    # check should be done via a background job or email confirmation link instead.
+    normalized_email = normalize_email(email, check_deliverability=False)
     if not normalized_email:
-        return {"success": False, "message": "Please enter a valid, deliverable email address"}
+        return {"success": False, "message": "Please enter a valid email address"}
 
     if len(password) < 6:
         return {"success": False, "message": "Password must be at least 6 characters"}
@@ -200,7 +203,7 @@ async def register_user(db: AsyncSession, email: str, password: str, name: Optio
     db.add(user)
     try:
         await db.flush()
-        await db.refresh(user)
+        await db.refresh(user)  # loads server-generated created_at / updated_at
         await db.commit()
     except IntegrityError:
         await db.rollback()
@@ -213,6 +216,9 @@ async def register_user(db: AsyncSession, email: str, password: str, name: Optio
         "user_id": user.id,
         "name": user.name,
         "email": user.email,
+        # FIX: return real DB timestamps so the API layer doesn't fabricate them
+        "created_at": user.created_at,
+        "updated_at": user.updated_at,
     }
 
 

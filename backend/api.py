@@ -4,7 +4,7 @@ import logging
 import os
 import json
 from contextlib import asynccontextmanager
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 import pandas as pd
 import orjson
@@ -97,6 +97,9 @@ from .core.logging_config import configure_logging
 from .core.upload_parsing import read_csv_with_fallback, validate_upload_magic
 from .core.utils import truncate_stats_for_llm, build_chat_context_pack
 from .core.data_agent import run_data_query
+from .rag.indexer import build_rag_index, retrieve_chunks
+from .rag.chat_engine import answer_question, answer_chart_explanation
+from .rag.pinecone_client import ping as pinecone_ping
 from .core.llm_client import get_groq_client
 from .db import get_db, init_db
 from .models.schemas import (
@@ -189,6 +192,13 @@ async def lifespan(app: FastAPI):
         logger.info("Redis warmed up (reachable=%s)", redis_ok)
     except Exception as exc:
         logger.warning("Redis warmup failed (non-fatal): %s", exc)
+
+    # Warm up Pinecone connection (lazy init, non-blocking if key missing)
+    try:
+        pc_ok = await asyncio.to_thread(pinecone_ping)
+        logger.info("Pinecone warmed up (reachable=%s)", pc_ok)
+    except Exception as exc:
+        logger.warning("Pinecone warmup failed (non-fatal): %s", exc)
     # ─────────────────────────────────────────────────────────────────────────
 
     yield
@@ -302,14 +312,13 @@ async def register(body: UserRegister, db: AsyncSession = Depends(get_db)):
     if not result["success"]:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=result["message"])
     
-    # Build the user response object
-    now = datetime.utcnow()
+    # FIX: Use real DB timestamps from register_user instead of fabricating utcnow()
     user_response = UserResponse(
         id=result["user_id"],
         name=result.get("name"),
         email=result["email"],
-        created_at=now,
-        updated_at=now
+        created_at=result.get("created_at") or datetime.now(tz=timezone.utc),
+        updated_at=result.get("updated_at") or datetime.now(tz=timezone.utc),
     )
     
     return AuthResponse(
@@ -781,6 +790,29 @@ async def analyze(
     else:
         result["analysis_id"] = save_result.get("analysis_id")
 
+    # ── Build RAG index in background ────────────────────────────────────────
+    _rag_stats    = result.get("stats_summary") or {}
+    _rag_insights = result.get("insights") or {}
+    _rag_charts   = serialized_charts or {}
+    _rag_hash     = file_hash
+
+    async def _index_rag_background():
+        try:
+            from .core.cache import _get_client as _rc
+            _redis = _rc()
+            n = await build_rag_index(
+                file_hash=_rag_hash,
+                stats=_rag_stats,
+                insights=_rag_insights,
+                charts=_rag_charts,
+                redis_client=_redis,
+            )
+            logger.info("RAG indexed %d chunks for %s", n, _rag_hash[:8])
+        except Exception as _rag_exc:
+            logger.warning("RAG indexing failed (non-fatal): %s", _rag_exc)
+
+    background_tasks.add_task(asyncio.ensure_future, _index_rag_background())
+
     result["chat_context_pack"] = build_chat_context_pack(
         result.get("stats_summary", {}),
         result.get("insights", {}),
@@ -944,46 +976,151 @@ def _is_result_plausible(data_result: dict, stats: dict) -> tuple[bool, str]:
 
 def _classify_chat_intent(question: str) -> str:
     """
-    Returns: "generate_chart" | "explain_chart" | "data_question"
-
-    Negative guards fire first — explain phrases override any chart noun.
-    Generate triggers only fire when the sentence is explicitly asking for new output.
+    Classify chat intent. Returns one of:
+      "generate_chart" - user wants a new chart built
+      "explain_chart"  - user wants an existing chart explained
+      "data_question"  - user wants factual data answer (RAG handles this)
     """
     q = question.lower().strip()
 
-    _EXPLAIN_OVERRIDES = (
-        "what does", "what do", "what is shown", "tell me about",
-        "explain", "interpret", "what can i", "why is", "why are",
-        "summarise", "summarize", "describe", "what patterns",
-        "what trends", "insight from", "insights from",
-        "what does the", "what does this", "what does that",
-        "analyse", "analyze", "understand", "what am i seeing",
+    # ---- Greeting / small talk (intercept before any data logic) --------
+    _PURE_GREETINGS = {
+        "hello", "hi", "hey", "howdy", "hiya", "yo",
+        "bye", "goodbye", "see you", "see ya", "later", "cya",
+        "thanks", "thank you", "thx", "ty", "thank",
+        "ok", "okay", "good", "cool", "great", "nice",
+        "good morning", "good afternoon", "good evening", "good night",
+        "how are you", "how r u", "what's up", "sup", "whats up",
+        "who are you", "what can you do", "what can you help",
+        "help", "hi there", "hey there", "hello there",
+    }
+    _DATA_INDICATOR = (
+        "chart", "graph", "plot", "column", "row", "data", "value",
+        "average", "mean", "max", "min", "count", "total", "sum",
+        "trend", "correlation", "distribution", "analysis",
+        "generate", "create", "show", "display", "visualize",
+        "what", "which", "how many", "how much", "when", "where", "why",
+        "does", "did", "is there",
+        "histogram", "scatter", "heatmap", "violin", "donut", "pie",
+        "bar", "line", "frequency",
     )
-    if any(p in q for p in _EXPLAIN_OVERRIDES):
+    if q in _PURE_GREETINGS:
+        return "greeting"
+    if len(q.split()) <= 4 and not any(dw in q for dw in _DATA_INDICATOR):
+        if any(g in q for g in ("hello", "hi", "bye", "hey", "thanks", "thank", "ok", "okay")):
+            return "greeting"
+
+    # ---- Explain triggers (highest priority) ----------------------------
+    _EXPLAIN = (
+        "explain", "what does this", "what do these",
+        "tell me about this chart", "tell me about the chart",
+        "interpret", "what can i see", "what am i looking at",
+        "why is", "why are", "what patterns", "what trends",
+        "describe this chart", "describe the chart",
+        "what does this chart", "what does the chart",
+        "analyse the chart", "analyze the chart",
+        "insight from the chart", "insight from this",
+        "what does this plot", "what does the plot",
+        "what does this graph", "what does the graph",
+        "what is shown in", "what is shown on",
+    )
+    if any(p in q for p in _EXPLAIN):
         return "explain_chart"
 
-    _GENERATE_TRIGGERS = (
-        "generate", "create", "make", "build", "draw",
-        "show me a new", "give me a", "another chart", "another plot",
-        "one more", "new chart", "new plot", "different chart",
-        "can you plot", "can you chart", "can you make",
-        "plot a", "chart a", "visualize", "visualise",
-        "show some", "show a ", "give some",
-        "show me chart", "show me a chart", "show chart",
-        "show me plot", "show me a plot", "show plot",
+    # ---- Generate triggers (wide net) -----------------------------------
+    _NEED_WANT = (
+        "i need graph", "i need a graph", "i need chart", "i need a chart",
+        "i need plot", "i need a plot", "i need visualization",
+        "i want graph", "i want a graph", "i want chart", "i want a chart",
+        "i want plot", "i want a plot",
+        "need graph", "need chart", "need plot",
+        "want graph", "want chart", "want plot",
+        "show graph", "show chart", "show plot",
+        "show a graph", "show a chart", "show a plot",
+        "new chart", "new plot", "new graph",
+        "another chart", "another plot", "another graph",
+        "different chart", "different plot",
+        "one more chart", "one more plot",
+        "more charts", "more plots",
+        "can you plot", "can you chart", "can you make a",
+        "can you generate", "can you create", "can you show me a",
+        "can you visualize", "can you visualise",
+        "generate chart", "generate graph", "generate plot",
+        "create chart", "create graph", "create plot",
+        "make chart", "make graph", "make plot",
+        "make a chart", "make a graph", "make a plot",
+        "draw chart", "draw graph", "draw plot",
+        "show me a new", "give me a chart", "give me a plot",
+        "give me a graph", "give me a scatter", "give me a pie",
+        "give me a bar", "give me a line", "give me a histogram",
+        "give me a donut", "give me a heatmap",
+        "show a pie", "show a bar", "show a scatter",
+        "show a line", "show a histogram", "show a donut",
+        "graph for", "graph of",
+        "chart for", "chart of", "plot for", "plot of",
+        "generate a", "create a", "build a", "draw a",
+        "visualize ", "visualise ",
     )
-    if any(t in q for t in _GENERATE_TRIGGERS):
+    if any(p in q for p in _NEED_WANT):
         return "generate_chart"
 
-    # Bare chart-type nouns without a generate verb → explain intent
-    _CHART_NOUNS = (
-        "the scatter", "the histogram", "the bar chart", "the heatmap",
-        "the line chart", "the box plot", "the violin", "the donut",
-        "this chart", "this plot", "this graph", "that chart",
+    # Action verb + chart noun
+    _GEN_VERBS = (
+        "generate", "create", "make", "build", "draw",
+        "visualize", "visualise",
     )
-    if any(n in q for n in _CHART_NOUNS):
-        return "explain_chart"
+    _CHART_NOUNS = (
+        "a chart", "a graph", "a plot", "a bar", "a line",
+        "a scatter", "a histogram", "a pie", "a donut",
+        "a heatmap", "a box plot", "a violin",
+        "scatter", "histogram", "heatmap", "violin",
+    )
+    for verb in _GEN_VERBS:
+        if verb in q:
+            if any(noun in q for noun in _CHART_NOUNS):
+                return "generate_chart"
+            # visualize/visualise alone with any column/dimension word is enough
+            if verb in ("visualize", "visualise"):
+                return "generate_chart"
 
+    # "plot X" or "graph X" used as a verb
+    words = q.split()
+    for i_w, w in enumerate(words):
+        if w in ("plot", "graph") and i_w + 1 < len(words):
+            return "generate_chart"
+
+    # Time/dimension breakdown + visual word implies chart
+    _BREAKDOWN = (
+        "by year", "by month", "by quarter", "by week", "by day",
+        "over time", "over the years", "over the months",
+        "trend of", "trend for", "with year", "with month",
+        "across years", "across months",
+        "breakdown of", "breakdown by", "comparison of",
+        "by brand", "by category", "by region", "by state",
+        "by type", "by model", "sales by", "revenue by",
+        "count by", "total by", "average by", "mean by",
+    )
+    _VISUAL_WORD = (
+        "graph", "chart", "plot", "visualization",
+        "bar", "line", "scatter", "histogram", "pie", "donut",
+    )
+    if any(bd in q for bd in _BREAKDOWN) and any(vw in q for vw in _VISUAL_WORD):
+        return "generate_chart"
+
+    # ---- Existing chart reference (explain) -----------------------------
+    _CHART_REFS = (
+        "the scatter", "the histogram", "the bar chart", "the bar",
+        "the heatmap", "the line chart", "the line graph",
+        "the box plot", "the violin", "the donut", "the pie",
+        "this chart", "this plot", "this graph",
+        "that chart", "that plot", "the chart", "the graph",
+    )
+    if any(n in q for n in _CHART_REFS):
+        _OVERRIDE = ("generate", "create", "make", "build", "draw", "another", "new", "different")
+        if not any(v in q for v in _OVERRIDE):
+            return "explain_chart"
+
+    # ---- Default: data question (RAG + Parquet) -------------------------
     return "data_question"
 
 
@@ -991,6 +1128,7 @@ def _classify_chat_intent(question: str) -> str:
 async def chat_with_analysis(
     body: ChatRequest,
     user_id: int = Depends(get_current_user_id),
+    db: AsyncSession = Depends(get_db),
 ):
     """Answer a user question about the current analysis context."""
 
@@ -1023,11 +1161,17 @@ async def chat_with_analysis(
     if len(question.encode("utf-8")) > _MAX_QUESTION_BYTES:
         raise HTTPException(status_code=413, detail=f"Question too long. Max {MAX_QUESTION_CHARS} characters.")
 
-    # FIX 39: Lightweight pre-check before full JSON serialization.
+    # FIX: Measure actual total value size, not just the type name string length.
+    # Previous code used len(str(type(v))) which always returned ~14 chars (e.g.
+    # "<class 'dict'>") and therefore NEVER triggered, allowing oversized chart
+    # payloads to bypass the early guard entirely.
     rough_context_bytes = 0
     if isinstance(context, dict):
         for k, v in context.items():
-            rough_context_bytes += len(str(k).encode("utf-8")) + len(str(type(v)).encode("utf-8"))
+            try:
+                rough_context_bytes += len(str(k).encode("utf-8")) + len(str(v).encode("utf-8"))
+            except Exception:
+                rough_context_bytes += 256  # conservative fallback per key
     if rough_context_bytes > MAX_CONTEXT_BYTES:
         raise HTTPException(status_code=413, detail=f"Context too large. Max {MAX_CONTEXT_BYTES // 1024} KB.")
 
@@ -1058,6 +1202,39 @@ async def chat_with_analysis(
     file_name = context.get("fileName") or "dataset"
     charts_data = context.get("charts", {})
     file_hash = context.get("file_hash")
+
+    # ── Security: verify the authenticated user owns this file_hash ───────────
+    # Without this check, any authenticated user could pass someone else's
+    # file_hash in the context payload and query their private data.
+    if file_hash:
+        from sqlalchemy import select as _fh_select
+        from .db import AnalysisHistory as _AnalysisHistory
+        try:
+            _fh_row = await db.execute(
+                _fh_select(_AnalysisHistory.id).where(
+                    _AnalysisHistory.user_id == user_id,
+                    _AnalysisHistory.file_hash == file_hash,
+                ).limit(1)
+            )
+            if _fh_row.scalar_one_or_none() is None:
+                logger.warning(
+                    "Unauthorized file_hash access: user_id=%s hash=%s",
+                    user_id, file_hash,
+                )
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail="You do not have access to this analysis.",
+                )
+        except HTTPException:
+            raise
+        except Exception as _fh_exc:
+            # DB error on ownership check — log and deny to be safe
+            logger.error("file_hash ownership check failed: %s", _fh_exc)
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="Could not verify dataset access. Please try again.",
+            )
+
 
     df_records = []
     using_preview_only = False
@@ -1108,6 +1285,26 @@ async def chat_with_analysis(
     )
 
     # ══════════════════════════════════════════════════════════════════════════
+    # BRANCH 0 — Greeting / small talk
+    # ══════════════════════════════════════════════════════════════════════════
+    if intent == "greeting":
+        _q = question.lower()
+        if any(t in _q for t in ("bye", "goodbye", "see you", "later", "cya")):
+            msg = f"Goodbye! Your analysis of {file_name} is saved in History. Come back anytime."
+        elif any(t in _q for t in ("thanks", "thank you", "thx", "ty", "thank")):
+            msg = f"Happy to help! Let me know if you have more questions about {file_name}."
+        elif any(t in _q for t in ("who are you",)):
+            msg = ("I'm your AI data analyst. I answer questions about your dataset, "
+                   "find correlations, and generate charts on demand.")
+        elif any(t in _q for t in ("how are you",)):
+            msg = "Running smoothly! Ready to dig into your data whenever you are."
+        else:
+            msg = (f"Hello! I'm your AI analyst for '{file_name}'. "
+                   "Ask me about statistics, relationships, trends — "
+                   "or say 'generate a chart' to create a new visualization.")
+        return {"answer": msg, "data_queried": False, "new_chart": None}
+
+    # ══════════════════════════════════════════════════════════════════════════
     # BRANCH A — Generate a new chart
     # ══════════════════════════════════════════════════════════════════════════
     if intent == "generate_chart":
@@ -1121,12 +1318,9 @@ async def chat_with_analysis(
         )
 
         if novel.get("cannot_plot"):
-            reason = novel.get("reason", "All useful column combinations are already visualized.")
+            reason = novel.get("reason", "I've already plotted all the most useful column combinations for this dataset.")
             return {
-                "answer": (
-                    f"I've reviewed all possible chart combinations for {file_name}. "
-                    f"{reason}"
-                ),
+                "answer": reason,
                 "data_queried": False,
                 "new_chart": None,
             }
@@ -1139,10 +1333,7 @@ async def chat_with_analysis(
 
         if chart_result.get("is_duplicate"):
             return {
-                "answer": (
-                    "That chart is already displayed on the dashboard. "
-                    "All remaining column combinations have been visualized."
-                ),
+                "answer": "You already have this chart on your dashboard! If you'd like to see something else, tell me which columns to plot.",
                 "data_queried": False,
                 "new_chart": None,
             }
@@ -1156,21 +1347,7 @@ async def chat_with_analysis(
 
         # Build a natural answer describing what was generated
         reasoning = novel.get("reasoning", "")
-        spec = novel["spec"]
-        ct = spec.get("chart_type", "chart")
-        x_col = spec.get("x") or ""
-        y_col = spec.get("y") or ""
-
-        if x_col and y_col:
-            col_desc = f" of {x_col} vs {y_col}"
-        elif x_col:
-            col_desc = f" of {x_col}"
-        else:
-            col_desc = ""
-
-        answer = f"Here's a new {_TYPE_DISPLAY.get(ct, ct)}{col_desc}."
-        if reasoning:
-            answer += f" {reasoning}"
+        answer = reasoning if reasoning else "Here is the chart you requested."
 
         return {
             "answer": answer,
@@ -1182,6 +1359,13 @@ async def chat_with_analysis(
     # BRANCH B — Explain an existing chart
     # ══════════════════════════════════════════════════════════════════════════
     if intent == "explain_chart":
+        if not existing_chart_keys:
+            return {
+                "answer": "There aren't any charts on the dashboard yet. If you'd like me to generate one, just ask!",
+                "data_queried": False,
+                "new_chart": None,
+            }
+
         # Find which chart they're talking about
         q_lower = question.lower()
 
@@ -1254,478 +1438,66 @@ async def chat_with_analysis(
             except Exception as e:
                 logger.warning("Could not parse chart data for key %s: %s", matched_key, e)
 
-        # Build explanation via LLM
-        client = get_groq_client()
-        if client:
-            try:
-                chart_context_str = ""
-                if matched_chart_data:
-                    chart_context_str = (
-                        f"\nChart being explained: '{matched_chart_data['title']}' (key: {matched_chart_data['key']})\n"
-                        f"Chart data sample: {matched_chart_data['traces']}\n"
-                    )
-                elif existing_chart_keys:
-                    chart_context_str = f"\nAvailable charts: {existing_chart_keys}\n"
+        # ── RAG-grounded chart explanation ──────────────────────────────────
+        _chart_raw    = None
+        _explain_key  = matched_key or (existing_chart_keys[0] if existing_chart_keys else "")
+        if _explain_key and isinstance(charts_data, dict):
+            _chart_raw = charts_data.get(_explain_key)
 
-                slim_stats = truncate_stats_for_llm(stats)
+        _explain_client = get_groq_client()
+        if _explain_client and file_hash:
+            from .core.cache import _get_client as _expl_rc
+            _expl_redis = _expl_rc()
+            explain_result = await answer_chart_explanation(
+                question=question,
+                chart_key=_explain_key,
+                chart_data=_chart_raw,
+                file_name=file_name,
+                file_hash=file_hash,
+                chart_keys=existing_chart_keys,
+                conversation_history=body.history or [],
+                groq_client=_explain_client,
+                redis_client=_expl_redis,
+            )
+            return explain_result
 
-                explain_messages = [
-                    {
-                        "role": "system",
-                        "content": (
-                            "You are a friendly data analyst. Explain charts in plain everyday English.\n"
-                            "BANNED WORDS: skew, variance, modal, heterogeneous, homogeneous, multicollinear, "
-                            "kurtosis, distribution (say 'spread'), coefficient, indicate, exhibit, demonstrate, represent.\n"
-                            "RULES:\n"
-                            "- Use actual values from the chart data provided.\n"
-                            "- Keep it to 2 short sentences total. Be direct.\n"
-                            "- CRITICAL: Do NOT include [CHART: ...] in your response, it is appended automatically."
-                        )
-                    },
-                    {
-                        "role": "system",
-                        "content": (
-                            f"Dataset: {file_name}\n"
-                            f"Stats summary: {json.dumps(slim_stats, default=str)[:1000]}\n"
-                            f"{chart_context_str}"
-                        )
-                    },
-                    {"role": "user", "content": question}
-                ]
-
-                completion = client.chat.completions.create(
-                    model=SYNTHESIS_MODEL,
-                    messages=explain_messages,
-                    temperature=0.2,
-                    max_tokens=300,
-                )
-                answer = (completion.choices[0].message.content or "").strip()
-                if answer:
-                    # Always inject the chart tag so the frontend renders it
-                    chart_tag = f"\n[CHART: {matched_key}]" if matched_key else ""
-                    return {"answer": answer + chart_tag, "data_queried": False, "new_chart": None}
-            except Exception as exc:
-                logger.warning("LLM chart explanation failed: %s", exc)
-
-        # Fallback explanation if LLM fails
-        if matched_key:
-            return {
-                "answer": (
-                    f"Here's the chart. Look for patterns, peaks, or gaps in the data — "
-                    f"those usually tell the most interesting story."
-                    f"\n[CHART: {matched_key}]"
-                ),
-                "data_queried": False,
-                "new_chart": None,
-            }
+        # Fallback: no LLM
+        _tag = f"\n[CHART: {_explain_key}]" if _explain_key else ""
         return {
-            "answer": (
-                "I can see the charts on your dashboard. Could you specify which chart "
-                "you'd like me to explain? For example: 'explain the scatter plot' or "
-                "'explain the bar chart'."
-            ),
+            "answer": f"Here is the chart from {file_name}.{_tag}",
             "data_queried": False,
             "new_chart": None,
         }
 
     # ══════════════════════════════════════════════════════════════════════════
-    # BRANCH C — Data question (original logic, preserved exactly)
+    # BRANCH C — Data question (RAG + Parquet Query)
     # ══════════════════════════════════════════════════════════════════════════
-    slim_stats = truncate_stats_for_llm(stats)
-    profile = slim_stats.get("dataset_profile") or {}
-    outlier_counts = slim_stats.get("outlier_counts") or {}
-    if not outlier_counts:
-        outlier_counts = {
-            k: int((v or {}).get("count", 0))
-            for k, v in (stats.get("outliers") or {}).items()
-        }
-    top_outliers = sorted(outlier_counts.items(), key=lambda kv: kv[1], reverse=True)[:10]
-    correlations = context.get("correlations") or slim_stats.get("strong_correlations") or []
-    quality = context.get("dataQuality") or slim_stats.get("data_quality") or {}
+    _data_client = get_groq_client()
+    if _data_client and file_hash:
+        from .core.cache import _get_client as _d_rc
+        _data_redis = _d_rc()
+        ans_result = await answer_question(
+            question=question,
+            file_hash=file_hash,
+            file_name=file_name,
+            stats=stats,
+            insights=insights,
+            chart_keys=existing_chart_keys,
+            conversation_history=body.history or [],
+            groq_client=_data_client,
+            redis_client=_data_redis,
+        )
+        return ans_result
 
-    # Build charts summary for LLM context
-    charts_summary = {}
-    if isinstance(charts_data, dict):
-        for k, v in charts_data.items():
-            try:
-                _debug_log(
-                    "pre-fix",
-                    "H3",
-                    "backend/api.py:chat_with_analysis",
-                    "charts_summary parse attempt",
-                    {"chart_key": str(k), "raw_type": type(v).__name__},
-                )
-                c = json.loads(v) if isinstance(v, str) else v
-                details = []
-                for trace in c.get("data", []):
-                    ttype = trace.get("type", "unknown")
-                    if ttype in ("pie", "funnelarea"):
-                        labels = trace.get("labels") or trace.get("x") or []
-                        values = trace.get("values") or trace.get("y") or []
-                        if isinstance(labels, list) and isinstance(values, list):
-                            pairs = [f"{l}: {val}" for l, val in zip(labels[:10], values[:10])]
-                            details.append(f"Pie/Donut: {', '.join(pairs)}")
-                        else:
-                            details.append("Pie/Donut chart")
-                    elif ttype in ("bar", "scatter", "violin", "box"):
-                        # Sample more values (16 instead of 8) for better LLM grounding
-                        xv = (trace.get("x") or [])[:16]
-                        yv = (trace.get("y") or [])[:16]
-                        details.append(f"{ttype.capitalize()}: X={xv}, Y={yv}")
-                    elif ttype == "histogram":
-                        xv = (trace.get("x") or [])[:24]
-                        details.append(f"Histogram of: {xv}")
-                    else:
-                        details.append(f"{ttype} chart")
-                layout_title = c.get("layout", {}).get("title", {})
-                if isinstance(layout_title, dict):
-                    title_text = layout_title.get("text") or k
-                elif isinstance(layout_title, str) and layout_title:
-                    title_text = layout_title
-                else:
-                    title_text = k
-                charts_summary[k] = f"[key='{k}'] Title '{title_text}' — " + (" | ".join(details) if details else "chart")
-            except Exception:
-                charts_summary[k] = f"[key='{k}'] Visual chart"
+    # Fallback if no LLM configured
+    return {
+        "answer": (
+            f"The dataset '{file_name}' has {stats.get('row_count', '?')} rows "
+            f"and {stats.get('column_count', '?')} columns. I need a valid Groq "
+            f"API key to answer specific questions about it."
+        ),
+        "data_queried": False,
+        "new_chart": None,
+    }
 
-    exact_chart_keys = list(charts_summary.keys()) if isinstance(charts_summary, dict) else []
-    outlier_summary = context.get("outlierSummary") or [
-        {"column": col, "count": count} for col, count in top_outliers
-    ]
-
-    def _extract_recent_entity(history: list):
-        import re
-        _STOP = {"the", "a", "an", "is", "are", "was", "were", "has", "have", "had",
-                 "in", "on", "at", "of", "for", "and", "or", "but", "with", "by",
-                 "according", "to", "data", "dataset", "fetched", "per", "as"}
-        for m in reversed(history or []):
-            content = m.get("content", "")
-            tokens = re.findall(r"[A-Z][a-z]+(?:\s[A-Z][a-z]+)*", content)
-            for tok in reversed(tokens):
-                if tok.lower() not in _STOP and len(tok) > 2:
-                    return tok
-        return None
-
-    data_coverage_note = (
-        "\nNOTE: Only a 500-row preview is available for data queries. "
-        "For questions about exact counts, totals, or specific rows beyond the preview, "
-        "say 'I can only see a preview of this dataset.'"
-        if using_preview_only else ""
-    )
-
-    system_prompt = (
-        "You are a friendly, conversational data analyst. Talk to the user like a helpful colleague — clear, direct, and easy to understand.\n"
-        "\n"
-        "BANNED WORDS (never use these):\n"
-        "skewness, variance, modal, heterogeneous, homogeneous, multicollinear, bivariate, univariate, "
-        "quartile, percentile, kurtosis, distribution (say 'spread' instead), coefficient, "
-        "statistically significant, exhibit, demonstrate, indicate (say 'show' or 'suggest'), "
-        "represent (say 'make up'), parameter, metric (say 'number' or 'value').\n"
-        "\n"
-        "LANGUAGE RULES:\n"
-        "• Say 'average' not 'mean'. Say 'most common' not 'modal'. Say 'spread' not 'variance/std dev'. Say 'skewed' → say 'most values are clustered at one end'.\n"
-        "• Keep every sentence under 20 words. Be direct.\n"
-        "• No markdown bold (**text**). No dash bullet lists. No jargon.\n"
-        "• Use conversation history: if the user says 'show me another' or 'what about that' — refer to the previous topic.\n"
-        "\n"
-        "CHART RULES (CRITICAL — READ CAREFULLY):\n"
-        f"Available chart keys: {exact_chart_keys}\n"
-        "• ONLY include a [CHART: key] tag when the user EXPLICITLY asks to see or show a chart. Example triggers: 'show me a chart', 'show the scatter plot', 'display the bar chart'.\n"
-        "• For ALL other questions (facts, insights, comparisons, 'any more', 'tell me', 'what about', 'explain') — give TEXT ONLY. NO [CHART:] tag.\n"
-        "• If the user says 'no chart', 'not chart', 'without chart', 'only text' — give TEXT ONLY, absolutely no [CHART:] tag.\n"
-        "• When you do show a chart: 1-2 sentences max, then `[CHART: exact_key]` on its own line.\n"
-        "• Use ONLY the exact keys listed above. Do not guess or invent keys.\n"
-        "\n"
-        "CONVERSATION CONTEXT:\n"
-        "• Read the full conversation history to understand what the user is referring to.\n"
-        "• If they say 'that chart', 'this one', 'the last one' — figure it out from history.\n"
-        "• Keep answers short — 2 to 4 sentences max. The user can always ask follow-ups.\n"
-        "\n"
-        "RECOMMENDATION RULE:\n"
-        "Add 'Recommendation:' ONLY if the finding reveals something actionable (a trend, outlier, or pattern worth acting on). Skip it for simple lookups, greetings, or chart-view requests.\n"
-        "\n"
-        "GROUNDING RULES:\n"
-        f"1. If there is an 'ADDITIONAL DATA FROM FULL DATASET QUERY' block, use those exact values.\n"
-        "2. For top_n/bottom_n: state the name and value from 'top_entry' directly.\n"
-        "3. For group_aggregate: 'result' is {entity: value} — pick the highest/lowest as needed.\n"
-        "4. NEVER say 'I don't have that data' if data is in the context.\n"
-        "5. If no data: say 'I couldn't find that in the dataset.'\n"
-        "6. Never invent values. If unsure: 'That information isn't in the dataset.'\n"
-        f"{data_coverage_note}"
-    )
-
-    chat_pack  = context.get("chat_context_pack") or {}
-
-    data_context = (
-        f"Dataset: {file_name} | "
-        f"{chat_pack.get('row_count') or stats.get('row_count')} rows, "
-        f"{chat_pack.get('column_count') or stats.get('column_count')} columns\n"
-        f"Profile: {chat_pack.get('profile') or slim_stats.get('dataset_profile', {})}\n"
-        f"Quality: {chat_pack.get('quality') or slim_stats.get('data_quality', {})}\n"
-        f"Column details:\n"
-        f"{json.dumps(chat_pack.get('columns', {}), default=str)[:3000]}\n"
-        f"Top correlations: {chat_pack.get('correlations') or slim_stats.get('strong_correlations', [])}\n"
-        f"Key findings: {chat_pack.get('key_findings') or insights.get('findings', [])[:3]}\n"
-        f"Charts on dashboard: {list(charts_data.keys()) if isinstance(charts_data, dict) else []}\n"
-    )
-
-    MAX_HISTORY_TURNS = 6  # last 6 turns = 12 messages, enough for continuity
-
-    history_msgs = []
-    if body.history:
-        recent = body.history[-MAX_HISTORY_TURNS:]  # sliding window
-        for m in recent:
-            role = "assistant" if m.get("role") in ["assistant", "ai"] else "user"
-            history_msgs.append({"role": role, "content": m.get("content", "")})
-
-    messages = [
-        {"role": "system", "content": system_prompt},          # instructions only
-        {"role": "system", "content": f"DATASET CONTEXT:\n{data_context}"},  # data only
-    ]
-    messages.extend(history_msgs)
-    messages.append({"role": "user", "content": question})
-
-    client = get_groq_client()
-    if client:
-        try:
-            col_types = {}
-            for c in stats.get("numeric_columns", {}).keys():
-                col_types[c] = "numeric"
-            for c in stats.get("categorical_columns", {}).keys():
-                col_types[c] = "categorical"
-            for c in (stats.get("columns") or []):
-                if c not in col_types:
-                    col_types[c] = "unknown"
-
-            data_result = None
-            is_greeting = any(g in question.lower() for g in ["hello", "hi", "hey", "thanks", "thank you"])
-
-            if file_hash and not is_greeting:
-                try:
-                    import re as _re
-                    recent_history = ""
-                    if body.history:
-                        recent_turns = body.history[-8:]
-                        recent_history = "\n".join(
-                            f"{m.get('role','user').upper()}: {m.get('content','')}"
-                            for m in recent_turns
-                        )
-
-                    _PRONOUNS = {"his", "her", "their", "its", "he", "she", "they",
-                                 "him", "hers", "theirs", "this person", "that person"}
-                    q_tokens = set(question.lower().split())
-                    has_pronoun = bool(q_tokens & _PRONOUNS)
-                    resolved_subject = _extract_recent_entity(body.history) if body.history else None
-                    
-                    planner_question = question
-                    if resolved_subject and has_pronoun:
-                        planner_question = f"{question} [Note: pronoun refers to '{resolved_subject}']"
-
-                    intent_prompt = (
-                        "You are a Data Query Planner. Analyze the user's question and decide if querying the FULL dataset is needed.\n"
-                        "If YES, return ONLY a single valid JSON object. If NO, return exactly 'NONE'.\n\n"
-                        "CRITICAL RULES:\n"
-                        "- ALWAYS query for attribute questions: age, birthday, score, rank, salary, stats of a named person/item.\n"
-                        "- Prefer 'search' when looking up a named entity's full row.\n"
-                        "- Prefer 'filter_lookup' when mapping one column's value to another.\n"
-                        "- NEVER return NONE for questions about a specific named person or item's attributes.\n\n"
-                        "SUPPORTED QUERY TYPES:\n"
-                        "0. filter_lookup — look up one column by matching another\n"
-                        '   Example: {"type":"filter_lookup","params":{"filter_col":"name","filter_val":"John","result_col":"age"}}\n'
-                        "1. top_n — highest N rows by numeric column\n"
-                        '   Example: {"type":"top_n","params":{"column":"Price","n":1}}\n'
-                        "2. bottom_n — lowest N rows\n"
-                        '   Example: {"type":"bottom_n","params":{"column":"Price","n":1}}\n'
-                        "3. group_aggregate — group by, aggregate numeric\n"
-                        '   Example: {"type":"group_aggregate","params":{"group_by":"Brand","column":"Revenue","func":"sum","n":10}}\n'
-                        "4. filter_group — filter then group+aggregate\n"
-                        '   Example: {"type":"filter_group","params":{"group_by":"Brand","func":"count","n":5,"filters":[{"column":"Year","op":"year","value":2021}]}}\n'
-                        "5. value_counts — count each unique category\n"
-                        '   Example: {"type":"value_counts","params":{"column":"Category","n":15}}\n'
-                        "6. aggregate — single stat\n"
-                        '   Example: {"type":"aggregate","params":{"column":"Price","func":"mean"}}\n'
-                        "7. distinct — list unique values\n"
-                        '   Example: {"type":"distinct","params":{"column":"Brand"}}\n'
-                        "8. row_count — count matching rows\n"
-                        '   Example: {"type":"row_count","params":{"filters":[{"column":"Status","op":"eq","value":"Active"}]}}\n'
-                        "9. search — text search\n"
-                        '   Example: {"type":"search","params":{"value":"John","n":3}}\n'
-                        "10. correlation — between two numeric columns\n"
-                        '    Example: {"type":"correlation","params":{"column":"Price","column2":"Mileage"}}\n'
-                        "11. percentile\n"
-                        '    Example: {"type":"percentile","params":{"column":"Price","percentile":90}}\n\n'
-                        f"Dataset columns: {col_types}\n\n"
-                        + (f"Recent conversation:\n{recent_history}\n\n" if recent_history else "")
-                        + f"Current question: {planner_question}\n\n"
-                        "Return ONLY JSON or 'NONE'."
-                    )
-
-                    intent_resp = client.chat.completions.create(
-                        model=INTENT_MODEL,
-                        messages=[{"role": "user", "content": intent_prompt}],
-                        max_tokens=350,
-                        temperature=0,
-                    )
-                    intent_text = (intent_resp.choices[0].message.content or "").strip()
-                    logger.info("Intent LLM response: %s", intent_text)
-
-                    try:
-                        if "{" in intent_text and "}" in intent_text:
-                            # FIX 21: Parse planner JSON once inside a single guarded block.
-                            raw_json = intent_text[intent_text.find("{"):intent_text.rfind("}")+1]
-                            raw_plan = json.loads(raw_json)
-                            query_plan = QueryPlan(**raw_plan)  # validate before running
-                            
-                            # Pre-check: verify columns exist before running
-                            requested_cols = [
-                                query_plan.params.get("column"),
-                                query_plan.params.get("group_by"),
-                                query_plan.params.get("filter_col"),
-                                query_plan.params.get("result_col"),
-                            ]
-                            if df_records:
-                                available_cols = set(df_records[0].keys()) if df_records else set()
-                                for c in requested_cols:
-                                    if c and c not in available_cols:
-                                        logger.info("Intent plan col '%s' will need fuzzy resolve", c)
-                            
-                            data_result = await asyncio.to_thread(
-                                run_data_query, file_hash, query_plan.type, query_plan.params
-                            )
-                            logger.info("Data Agent result: %s", str(data_result)[:500])
-                            result_is_empty = (
-                                not data_result
-                                or "error" in data_result
-                                or (isinstance(data_result.get("result"), list) and len(data_result["result"]) == 0)
-                                or data_result.get("result") == "No rows found."
-                            )
-                            if result_is_empty and resolved_subject:
-                                data_result = await asyncio.to_thread(
-                                    run_data_query, file_hash, "search", {"value": resolved_subject, "n": 3}
-                                )
-                    except (json.JSONDecodeError, ValueError) as e:
-                        logger.warning("Intent plan invalid (%s), skipping data query", e)
-                        data_result = None
-
-                    if not ("{" in intent_text and "}" in intent_text):
-                        _LOOKUP_SIGNALS = {
-                            "birthday", "born", "dob", "date of birth", "age", "address",
-                            "nationality", "country", "team", "salary", "height", "weight",
-                        }
-                        q_lower_check = question.lower()
-                        is_lookup = any(sig in q_lower_check for sig in _LOOKUP_SIGNALS)
-                        if (is_lookup or has_pronoun) and resolved_subject:
-                            data_result = await asyncio.to_thread(run_data_query, file_hash, "search", {"value": resolved_subject, "n": 3})
-                        elif is_lookup:
-                            fallback_entity = _extract_recent_entity([{"content": question, "role": "user"}])
-                            if fallback_entity:
-                                data_result = await asyncio.to_thread(run_data_query, file_hash, "search", {"value": fallback_entity, "n": 3})
-
-                except Exception as e:
-                    logger.warning("Intent pass failed: %s", e)
-
-            if data_result and "error" not in data_result:
-                plausible, reason = _is_result_plausible(data_result, stats)
-                if plausible:
-                    subject_note = f" (subject: {resolved_subject})" if resolved_subject else ""
-                    messages.append({
-                        "role": "system",
-                        "content": (
-                            f"ADDITIONAL DATA FROM FULL DATASET QUERY{subject_note}:\n{data_result}\n"
-                            "IMPORTANT: Use these exact values. Do NOT say 'I don't have that data'."
-                        )
-                    })
-                else:
-                    logger.warning("Rejecting implausible query result (%s): %s", reason, data_result)
-            elif data_result:
-                # If there's an error, don't label it as authoritative data
-                logger.warning("Omitting query error from system prompt to avoid hallucination: %s", data_result.get("error"))
-
-            synthesis_temp = 0.05 if (data_result and "error" not in data_result) else 0.15
-            completion = client.chat.completions.create(
-                model=SYNTHESIS_MODEL,
-                messages=messages,
-                temperature=synthesis_temp,
-                max_tokens=200,  # Keep answers short, reduce hallucination risk
-            )
-            answer = (completion.choices[0].message.content or "").strip()
-            if answer:
-                q_lower_str = question.lower()
-                # Detect if user explicitly does NOT want charts
-                _no_chart_phrases = ["not chart", "no chart", "without chart", "only text",
-                                     "not a chart", "don't show chart", "dont show chart"]
-                _user_rejects_chart = any(p in q_lower_str for p in _no_chart_phrases)
-
-                if _user_rejects_chart:
-                    # Strip any [CHART:] tag the LLM may have injected
-                    import re as _re2
-                    answer = _re2.sub(r'\[CHART:[^\]]*\]', '', answer).strip()
-                else:
-                    # If the user asked to see/show a chart but the LLM forgot [CHART: key],
-                    # detect and inject it automatically.
-                    _show_words = ["show me", "see the", "view the", "display the",
-                                   "show chart", "show a chart", "give me a chart",
-                                   "show plot", "show me a"]
-                    _user_wants_chart = any(w in q_lower_str for w in _show_words)
-                    if _user_wants_chart and "[CHART:" not in answer and existing_chart_keys:
-                        answer_lower = answer.lower()
-                        best_key = None
-                        best_score = 0
-                        for ck in existing_chart_keys:
-                            words = ck.replace("_", " ").lower().split()
-                            score = sum(1 for w in words if w in answer_lower and len(w) > 3)
-                            if score > best_score:
-                                best_score = score
-                                best_key = ck
-                        if not best_key:
-                            best_key = existing_chart_keys[0]
-                        answer = answer + f"\n[CHART: {best_key}]"
-                    elif not _user_wants_chart and "[CHART:" in answer:
-                        # LLM injected a chart the user didn't ask for — strip it
-                        import re as _re3
-                        answer = _re3.sub(r'\[CHART:[^\]]*\]', '', answer).strip()
-                return {"answer": answer, "data_queried": bool(data_result), "new_chart": None}
-
-        except Exception as exc:
-            logger.warning("Groq chat failed: %s", exc)
-
-    # ── Rule-based fallback ────────────────────────────────────────────────────
-    q_lower = question.lower()
-    row_count = stats.get("row_count", "unknown")
-    col_count = stats.get("column_count", "unknown")
-    completeness = quality.get("completeness")
-    missing_cells = quality.get("missing_cells")
-    duplicate_rows = quality.get("duplicate_rows")
-    findings = insights.get("findings") or []
-
-    if "outlier" in q_lower:
-        if top_outliers and top_outliers[0][1] > 0:
-            summary = ", ".join([f"{col}: {cnt}" for col, cnt in top_outliers[:5]])
-            return {"answer": f"Top outlier columns in {file_name}: {summary}.", "data_queried": False, "new_chart": None}
-        return {"answer": f"No significant outliers detected in {file_name}.", "data_queried": False, "new_chart": None}
-
-    if any(k in q_lower for k in ["quality", "missing", "duplicate", "completeness"]):
-        parts = [f"{file_name} has {missing_cells or 0} missing cells and {duplicate_rows or 0} duplicate rows."]
-        if completeness is not None:
-            parts.append(f"Completeness: {float(completeness):.2f}%.")
-        return {"answer": " ".join(parts), "data_queried": False, "new_chart": None}
-
-    if "correlation" in q_lower:
-        if correlations:
-            top = correlations[0]
-            return {
-                "answer": f"Strongest correlation: {top.get('col1')} and {top.get('col2')} (r={float(top.get('correlation', 0)):.3f}).",
-                "data_queried": False, "new_chart": None,
-            }
-        return {"answer": "No strong correlations found in the analysis.", "data_queried": False, "new_chart": None}
-
-    is_greeting = any(g in q_lower for g in ["hello", "hi", "hey", "thanks", "thank you"])
-    if is_greeting:
-        return {"answer": "Hello! I'm your data analyst. Ask me anything about your dataset.", "data_queried": False, "new_chart": None}
-
-    parts = [f"I analyzed {file_name} with {row_count} rows and {col_count} columns."]
-    if completeness is not None:
-        parts.append(f"Data completeness: {float(completeness):.2f}%.")
-    if findings:
-        parts.append(f"Key finding: {findings[0]}")
-    return {"answer": " ".join(parts), "data_queried": False, "new_chart": None}
+# (dead code removed — all branches above return explicitly)

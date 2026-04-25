@@ -1292,6 +1292,9 @@ export default function DataPulse({ user, onLogout }) {
       setShowHistory(false);
       setTab("overview");
       setGeneratedChartKeys([]);
+      // ✅ Reset chat so it starts fresh for the newly selected file
+      setChatMsgs([]);
+      setChatInput("");
     } catch (err) {
       setHistoryActionError("Failed to restore session. Please try again.");
     } finally {

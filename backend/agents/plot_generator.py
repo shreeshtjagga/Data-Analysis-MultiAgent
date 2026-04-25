@@ -156,24 +156,41 @@ def _predict_chart_key(chart_type: str, x: Optional[str], y: Optional[str]) -> s
 
 
 def _is_duplicate(candidate_key: str, existing_keys: list[str]) -> bool:
-    def _norm(k: str) -> str:
-        k = k.lower()
-        for prefix in [
-            "scatter_", "ranked_bar_", "grouped_bar_", "histogram_", "box_",
-            "violin_", "donut_", "freq_bar_", "line_", "heatmap_",
-            "stacked_", "freq_bar_loose_", "gen_",
-        ]:
-            if k.startswith(prefix):
-                return k[len(prefix):]
-        return k
+    """
+    Return True only if candidate_key is the SAME chart type + same columns
+    as an existing key.  Different chart types of the same columns are NOT
+    duplicates — a scatter of price vs sales is not a duplicate of a bar chart
+    of price vs sales.
+    """
+    _PREFIXES = [
+        "scatter_", "ranked_bar_", "grouped_bar_", "histogram_",
+        "box_", "violin_", "donut_", "freq_bar_", "line_",
+        "heatmap_", "stacked_", "freq_bar_loose_", "gen_",
+    ]
 
-    norm_c = _norm(candidate_key)
+    def _parse(k: str) -> tuple[str, str]:
+        """Return (chart_type_prefix, normalized_column_string)."""
+        k = k.lower()
+        for prefix in _PREFIXES:
+            if k.startswith(prefix):
+                return prefix.rstrip("_"), k[len(prefix):]
+        return "", k
+
+    ctype_c, cols_c = _parse(candidate_key)
     for ek in existing_keys:
-        norm_e = _norm(ek)
-        if norm_c == norm_e:
+        # 1. Exact key match (fastest)
+        if candidate_key.lower() == ek.lower():
             return True
-        parts_c = set(p for p in norm_c.split("_") if len(p) > 2)
-        parts_e = set(p for p in norm_e.split("_") if len(p) > 2)
+        ctype_e, cols_e = _parse(ek)
+        # 2. Same chart type is required before any further comparison
+        if not ctype_c or ctype_c != ctype_e:
+            continue
+        # 3. Exact column string match
+        if cols_c == cols_e:
+            return True
+        # 4. Same set of column-name tokens (order-independent, e.g. x/y swapped)
+        parts_c = {p for p in cols_c.split("_") if len(p) > 2}
+        parts_e = {p for p in cols_e.split("_") if len(p) > 2}
         if parts_c and parts_e and parts_c == parts_e:
             return True
     return False
@@ -399,23 +416,27 @@ def suggest_novel_chart(
         if col_matched:
             spec = col_matched[0]
             spec_clean = {k: v for k, v in spec.items() if k != "_key"}
+            x = spec.get("x") or ""
+            y = spec.get("y") or ""
+            ct = spec["chart_type"]
+            col_phrase = f"{y} by {x}" if x and y else (x or y or "the dataset")
             return {
                 "cannot_plot": False,
                 "spec": spec_clean,
-                "reasoning": f"Showing a chart using the columns you mentioned.",
+                "reasoning": f"Showing {col_phrase} as a {_TYPE_DISPLAY.get(ct, ct)}.",
             }
 
     # Pick the first available (highest priority from _build_all_candidates ordering)
     spec = all_candidates[0]
     spec_clean = {k: v for k, v in spec.items() if k != "_key"}
     ct = spec["chart_type"]
-    x = spec.get("x") or ""
-    y = spec.get("y") or ""
-    col_desc = f" of **{x}**" + (f" vs **{y}**" if y else "") if x else ""
+    x  = spec.get("x") or ""
+    y  = spec.get("y") or ""
+    col_phrase = f"{y} by {x}" if x and y else (x or y or "the dataset")
     return {
         "cannot_plot": False,
         "spec": spec_clean,
-        "reasoning": f"Showing a new {_TYPE_DISPLAY.get(ct, ct)}{col_desc} not yet on the dashboard.",
+        "reasoning": f"Here is a {_TYPE_DISPLAY.get(ct, ct)} of {col_phrase} that hasn't been shown yet.",
     }
 
 
