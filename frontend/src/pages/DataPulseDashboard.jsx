@@ -543,6 +543,8 @@ const ChatBubble = memo(({ m, PlotComponent, result, stopPageZoomOnCtrlWheel }) 
             const key = tagM[1].trim();
             if (result?.charts?.[key]) {
               const figRaw = result.charts[key];
+              // Skip sentinel values (true) — real fig must be an object or JSON string
+              if (figRaw === true || figRaw == null || typeof figRaw === 'boolean') break;
               let parsedFig = figRaw;
               if (typeof figRaw === 'string') {
                 try { parsedFig = JSON.parse(figRaw); }
@@ -1561,6 +1563,19 @@ export default function DataPulse({ user, onLogout }) {
 
   const chatContext = useMemo(() => {
     if (!chatStats) return null;
+
+    // If backend provided an optimized pack, use it
+    if (result?.chat_context_pack) {
+      return {
+        chat_context_pack: result.chat_context_pack,
+        file_hash: result?.file_hash || null,
+        generated_chart_keys: generatedChartKeys,
+        // Send sentinel chart keys so backend knows which charts exist (for explain_chart intent)
+        charts: Object.keys(result?.charts || {}).reduce((acc, k) => ({ ...acc, [k]: true }), {}),
+      };
+    }
+    
+    // Fallback for older analyses
     const outlierSummary = Object.entries(chatStats?.outliers || {})
       .map(([column, info]) => ({ column, count: Number(info?.count || 0), percentage: Number(info?.percentage || 0) }))
       .sort((a, b) => b.count - a.count).slice(0, 10);
@@ -1573,16 +1588,11 @@ export default function DataPulse({ user, onLogout }) {
       outlierSummary,
       dataQuality: chatStats?.data_quality || {},
       correlations: chatStats?.strong_correlations?.slice(0, 5),
-      // Only send chart keys (not full fig data) to avoid bloating the context
-      // payload by 200-800 KB per request. The backend derives chart_keys from
-      // the object keys; full fig data is retrieved from Redis for explain_chart.
       charts: Object.keys(result?.charts || {}).reduce((acc, k) => ({ ...acc, [k]: true }), {}),
-      // clean_df preview is needed by the backend for on-demand chart generation
-      clean_df: result?.clean_df || [],
       file_hash: result?.file_hash || null,
       generated_chart_keys: generatedChartKeys,
     };
-  }, [chatStats, chatInsights, fileName, result?.charts, result?.clean_df, result?.file_hash, datasetTypeLabel, generatedChartKeys]);
+  }, [chatStats, chatInsights, fileName, result?.charts, result?.file_hash, result?.chat_context_pack, datasetTypeLabel, generatedChartKeys]);
 
   const sendChat = useCallback(async () => {
     const q = chatInput.trim();
@@ -1596,7 +1606,9 @@ export default function DataPulse({ user, onLogout }) {
     })).filter(m => m.content).slice(-10);
 
     setChatInput("");
-    setChatMsgs((p) => [...p, { role: "user", text: q }].slice(-MAX_CHAT_MESSAGES));
+    // Give each message a stable unique ID to avoid React key drift when messages are sliced
+    const userMsgId = `msg-${Date.now()}-u`;
+    setChatMsgs((p) => [...p, { id: userMsgId, role: "user", text: q }].slice(-MAX_CHAT_MESSAGES));
     setChatLoading(true);
     try {
       const resp = await apiChat(q, chatContext || {}, chatHistory);
@@ -1613,17 +1625,21 @@ export default function DataPulse({ user, onLogout }) {
       const rawAnswer = (resp.answer || "").trim() || "No response generated.";
       // Strip double stars (**) for a cleaner plain-text look
       const cleanAnswer = rawAnswer.replace(/\*\*/g, '');
-
+      const aiMsgId = `msg-${Date.now()}-a`;
       setChatMsgs((p) => [...p, {
+        id: aiMsgId,
         role: "ai",
         text: cleanAnswer,
         newChart: resp?.new_chart?.fig ? resp.new_chart : null,
       }].slice(-MAX_CHAT_MESSAGES));
     } catch (err) {
       const detail = err?.message || "Unable to reach AI";
-      setChatMsgs((p) => [...p, { role: "ai", text: `Chat error: ${detail}`, newChart: null }].slice(-MAX_CHAT_MESSAGES));
+      const errMsgId = `msg-${Date.now()}-e`;
+      setChatMsgs((p) => [...p, { id: errMsgId, role: "ai", text: `Chat error: ${detail}`, newChart: null }].slice(-MAX_CHAT_MESSAGES));
+    } finally {
+      // Always clear loading — even if catch itself throws
+      setChatLoading(false);
     }
-    setChatLoading(false);
   }, [chatInput, chatLoading, result, chatContext, chatMsgs]);
 
   const stats = result?.stats_summary || {};
@@ -1911,7 +1927,7 @@ export default function DataPulse({ user, onLogout }) {
                       </div>
                     ) : chatMsgs.map((m, i) => (
                       <ChatBubble
-                        key={i}
+                        key={m.id || i}
                         m={m}
                         PlotComponent={PlotComponent}
                         result={result}

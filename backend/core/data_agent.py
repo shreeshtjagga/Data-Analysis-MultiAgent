@@ -1,6 +1,7 @@
 import logging
-import pandas as pd
 import os
+import numpy as np
+import pandas as pd
 from typing import Any, Dict
 
 logger = logging.getLogger(__name__)
@@ -100,6 +101,7 @@ def _filter_df(df: pd.DataFrame, filters: list) -> pd.DataFrame:
                 candidate = df[df[col].isnull()]
             elif op == "notnull":
                 candidate = df[df[col].notnull()]
+    
             else:
                 logger.warning("Unknown filter op '%s', skipping.", op)
                 continue
@@ -171,6 +173,8 @@ def run_data_query(file_hash: str, query_type: str, params: Dict[str, Any]) -> D
     - search               : full-text search across all string columns
     - correlation          : compute correlation between two numeric columns
     - percentile           : compute a percentile for a numeric column
+    - trend                : compute linear slope/trend over time
+    - year_summary         : aggregate numeric column by year
     """
     df, err = _load_df(file_hash)
     if err:
@@ -391,6 +395,80 @@ def run_data_query(file_hash: str, query_type: str, params: Dict[str, Any]) -> D
                 "result": float(result) if pd.notna(result) else "N/A"
             }
 
+        # ── trend (linear slope) ─────────────────────────────────────────────
+        elif query_type == "trend":
+            time_col_raw = params.get("time_col")
+            val_col_raw = params.get("val_col")
+            
+            time_col = _resolve_column(time_col_raw, df)
+            val_col = _resolve_column(val_col_raw, df)
+            
+            if not time_col or not val_col:
+                return {"error": f"Missing or invalid columns: '{time_col_raw}', '{val_col_raw}'"}
+            
+            df_trend = df[[time_col, val_col]].dropna()
+            if len(df_trend) < 2:
+                return {"error": "Not enough valid data points to compute trend."}
+                
+            # If time_col is string/object, try to parse year/date
+            if df_trend[time_col].dtype == 'object':
+                try:
+                    df_trend[time_col] = pd.to_numeric(df_trend[time_col].str.extract(r'(\d{4})')[0])
+                except:
+                    return {"error": f"Could not parse '{time_col}' into numeric time values."}
+                    
+            df_trend = df_trend.dropna()
+            if len(df_trend) < 2:
+                return {"error": "Not enough valid numeric time points."}
+                
+            x = df_trend[time_col].values
+            y = df_trend[val_col].values
+            
+            try:
+                slope, intercept = np.polyfit(x, y, 1)
+                correlation_matrix = np.corrcoef(x, y)
+                r_squared = correlation_matrix[0, 1]**2
+                
+                direction = "increasing" if slope > 0 else "decreasing"
+                return {
+                    "query": f"Linear trend of '{val_col}' over '{time_col}'",
+                    "result": f"Trend is {direction}. Slope: {slope:.4f}. R-squared: {r_squared:.4f}",
+                    "slope": float(slope),
+                    "r_squared": float(r_squared)
+                }
+            except Exception as e:
+                return {"error": f"Trend calculation failed: {str(e)}"}
+
+        # ── year_summary ─────────────────────────────────────────────────────
+        elif query_type == "year_summary":
+            time_col_raw = params.get("time_col")
+            val_col_raw = params.get("val_col")
+            
+            time_col = _resolve_column(time_col_raw, df)
+            val_col = _resolve_column(val_col_raw, df)
+            
+            if not time_col or not val_col:
+                return {"error": f"Missing or invalid columns: '{time_col_raw}', '{val_col_raw}'"}
+                
+            df_time = df[[time_col, val_col]].copy()
+            # Extract year
+            if df_time[time_col].dtype == 'object':
+                df_time['year'] = df_time[time_col].astype(str).str.extract(r'(\d{4})')[0]
+            else:
+                df_time['year'] = df_time[time_col]
+                
+            df_time['year'] = df_time['year'].astype(str)
+            df_time = df_time[df_time['year'].str.match(r'^\d{4}$', na=False)]
+            
+            if df_time.empty:
+                return {"error": "Could not extract valid years."}
+                
+            result = df_time.groupby('year')[val_col].agg(func).to_dict()
+            return {
+                "query": f"Yearly '{func}' of '{val_col}'",
+                "result": result
+            }
+
         return {
             "error": (
                 f"Unknown query type: '{query_type}'. "
@@ -399,6 +477,7 @@ def run_data_query(file_hash: str, query_type: str, params: Dict[str, Any]) -> D
                 "distinct, search, correlation, percentile"
             )
         }
+
 
     except Exception as exc:
         logger.error("Data query failed (type=%s): %s", query_type, exc, exc_info=True)

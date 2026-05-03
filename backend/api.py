@@ -35,6 +35,10 @@ _INJECTION_PATTERNS = [
     r"forget\s+(all\s+)?previous",
     r"new\s+persona",
     r"pretend\s+(you\s+are|to\s+be)",
+    r"bypassing",
+    r"jailbreak",
+    r"from\s+now\s+on",
+    r"do\s+not\s+obey",
 ]
 _INJECTION_RE = _re.compile("|".join(_INJECTION_PATTERNS), _re.IGNORECASE)
 
@@ -947,6 +951,18 @@ def _classify_chat_intent(question: str) -> str:
     """
     q = question.lower().strip()
 
+    # ---- Off-Topic Guardrail --------------------------------------------
+    _OFF_TOPIC = (
+        "write code", "write python", "write javascript", "write java",
+        "how to program", "how to code", "write a function", "help me code",
+        "write a script", "write an app", "build an app", "build a website",
+        "recipe", "how to cook", "how to bake", "how to make a cake",
+        "who is the president", "capital of", "weather in", "sports",
+        "tell me a joke", "tell me a story", "write a poem", "write a song",
+    )
+    if any(ot in q for ot in _OFF_TOPIC):
+        return "off_topic"
+
     # ---- Greeting / small talk (intercept before any data logic) --------
     _PURE_GREETINGS = {
         "hello", "hi", "hey", "howdy", "hiya", "yo",
@@ -1133,11 +1149,20 @@ async def chat_with_analysis(
         raise HTTPException(status_code=413, detail=f"Context too large. Max {MAX_CONTEXT_BYTES // 1024} KB.")
 
     # ── Extract context fields ────────────────────────────────────────────────
-    stats = context.get("stats") or context.get("stats_summary") or {}
-    insights = context.get("insights") or {}
-    file_name = context.get("fileName") or "dataset"
-    charts_data = context.get("charts", {})
-    file_hash = context.get("file_hash")
+    # Check if frontend passed the optimized chat_context_pack directly
+    chat_context_pack = context.get("chat_context_pack")
+    if chat_context_pack:
+        stats = chat_context_pack.get("stats") or {}
+        insights = chat_context_pack.get("insights") or {}
+        file_name = chat_context_pack.get("fileName") or "dataset"
+        charts_data = chat_context_pack.get("charts") or {}
+        file_hash = chat_context_pack.get("file_hash") or context.get("file_hash")
+    else:
+        stats = context.get("stats") or context.get("stats_summary") or {}
+        insights = context.get("insights") or {}
+        file_name = context.get("fileName") or "dataset"
+        charts_data = context.get("charts", {})
+        file_hash = context.get("file_hash")
 
     # ── Security: verify the authenticated user owns this file_hash ───────────
     # Without this check, any authenticated user could pass someone else's
@@ -1210,6 +1235,20 @@ async def chat_with_analysis(
     # ── Classify intent ───────────────────────────────────────────────────────
     intent = _classify_chat_intent(question)
     logger.info("Chat intent classified as '%s' for question: %s", intent, question[:80])
+
+    # ══════════════════════════════════════════════════════════════════════════
+    # BRANCH -1 — Off-topic (non-analytical questions)
+    # ══════════════════════════════════════════════════════════════════════════
+    if intent == "off_topic":
+        return {
+            "answer": (
+                "I'm a data analysis assistant focused on your dataset. "
+                "I can help you analyze trends, summarize data, and build charts, "
+                "but I can't answer off-topic questions or write general code."
+            ),
+            "data_queried": False,
+            "new_chart": None,
+        }
 
     # ══════════════════════════════════════════════════════════════════════════
     # BRANCH 0 — Greeting / small talk
@@ -1447,4 +1486,4 @@ async def chat_with_analysis(
         "data_queried": False,
         "new_chart": None,
     }
-
+
