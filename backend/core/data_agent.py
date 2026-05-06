@@ -430,11 +430,20 @@ def run_data_query(file_hash: str, query_type: str, params: Dict[str, Any]) -> D
                 r_squared = correlation_matrix[0, 1]**2
                 
                 direction = "increasing" if slope > 0 else "decreasing"
+                last_year = float(x.max())
+                last_value = float(y[x.argmax()])
                 return {
                     "query": f"Linear trend of '{val_col}' over '{time_col}'",
-                    "result": f"Trend is {direction}. Slope: {slope:.4f}. R-squared: {r_squared:.4f}",
+                    "result": (
+                        f"Trend is {direction}. Slope: {slope:.4f} per year. R-squared: {r_squared:.4f}. "
+                        f"Last data point: {val_col}={last_value:.2f} at {time_col}={last_year:.0f}. "
+                        f"Intercept: {intercept:.4f}."
+                    ),
                     "slope": float(slope),
-                    "r_squared": float(r_squared)
+                    "intercept": float(intercept),
+                    "r_squared": float(r_squared),
+                    "last_year": last_year,
+                    "last_value": last_value,
                 }
             except Exception as e:
                 return {"error": f"Trend calculation failed: {str(e)}"}

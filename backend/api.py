@@ -62,18 +62,14 @@ from .analysis_history import (
     save_analysis,
 )
 from .auth import (
-    create_access_token,
     get_user_by_id,
     login_user,
     register_user,
     request_password_reset,
     reset_password_with_token,
     verify_access_token,
-    verify_google_token,
     login_google_user,
-    create_refresh_token,
-    verify_refresh_token,
-    REFRESH_EXPIRE_DAYS,
+    refresh_session,
 )
 from .core.constants import APP_VERSION, PIPELINE_VERSION
 from .core.graph import run_pipeline
@@ -106,11 +102,8 @@ configure_logging()
 logger = logging.getLogger(__name__)
 
 APP_ENV = os.getenv("APP_ENV", "production")
-GOOGLE_CLIENT_ID = os.getenv("GOOGLE_CLIENT_ID", "").strip()
-FRONTEND_GOOGLE_CLIENT_ID = (
-    os.getenv("FRONTEND_GOOGLE_CLIENT_ID", "").strip()
-    or os.getenv("VITE_GOOGLE_CLIENT_ID", "").strip()
-)
+# REMOVED: GOOGLE_CLIENT_ID env var — Google OAuth moved to Supabase Dashboard
+# Auth → Providers → Google. The backend no longer verifies Google tokens directly.
 MAX_UPLOAD_BYTES = int(os.getenv("MAX_UPLOAD_BYTES", str(10 * 1024 * 1024))) # 10 MB limit for strict RAM bounds
 MAX_ANALYZE_ROWS = int(os.getenv("MAX_ANALYZE_ROWS", "15000")) # Lowered to 15K rows for 500MB Render memory limit
 MAX_ANALYZE_COLUMNS = int(os.getenv("MAX_ANALYZE_COLUMNS", "150"))
@@ -145,13 +138,18 @@ async def lifespan(app: FastAPI):
     if APP_ENV == "production" and "*" in origins:
         raise RuntimeError("CORS_ORIGINS cannot contain '*' in production")
 
-    if GOOGLE_CLIENT_ID and FRONTEND_GOOGLE_CLIENT_ID and GOOGLE_CLIENT_ID != FRONTEND_GOOGLE_CLIENT_ID:
-        raise RuntimeError(
-            "Google OAuth Client ID mismatch between backend and frontend configuration"
-        )
+    # NOTE: Google OAuth Client ID check removed — Google auth is now managed
+    # entirely by Supabase (Auth → Providers → Google). No local env var needed.
 
     # ── Eagerly warm up connections so first request is instant ──────────────
-    await init_db()
+    try:
+        await init_db()
+        logger.info("Database tables ready")
+    except Exception as exc:
+        logger.error(
+            "DATABASE CONNECTION FAILED — server is starting without DB. "
+            "Fix DATABASE_URL / DB password in .env and restart. Error: %s", exc
+        )
 
     # Warm DB pool: open one real connection now so asyncpg doesn't cold-start
     try:
@@ -224,16 +222,29 @@ security = HTTPBearer()
 
 async def get_current_user_id(
     credentials: Annotated[HTTPAuthorizationCredentials, Depends(security)],
+    db: AsyncSession = Depends(get_db),
 ) -> int:
     token = credentials.credentials
-    payload = verify_access_token(token)
+    # verify_access_token now calls Supabase Admin API — must be awaited
+    payload = await verify_access_token(token)
     if payload is None:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid or expired token",
             headers={"WWW-Authenticate": "Bearer"},
         )
-    return int(payload["sub"])
+    # payload["sub"] is the Supabase UUID — look up local numeric user id
+    from .db import User
+    from sqlalchemy import select as _sel
+    result = await db.execute(_sel(User).where(User.supabase_id == payload["sub"]))
+    user = result.scalar_one_or_none()
+    if user is None:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="User not found",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+    return user.id
 
 
 async def check_ip_rate_limit(request: Request):
@@ -307,6 +318,10 @@ async def register(body: UserRegister, db: AsyncSession = Depends(get_db)):
 
 @app.post("/auth/login", response_model=TokenResponse, tags=["auth"], dependencies=[Depends(check_ip_rate_limit)])
 async def login(body: UserLogin, db: AsyncSession = Depends(get_db), response: Response = None):
+    """
+    CHANGED: Uses Supabase sign_in_with_password — no custom JWT creation.
+    REMOVED: create_refresh_token() — Supabase returns its own refresh token.
+    """
     result = await login_user(db, body.email, body.password)
     if not result["success"]:
         raise HTTPException(
@@ -315,22 +330,17 @@ async def login(body: UserLogin, db: AsyncSession = Depends(get_db), response: R
             headers={"WWW-Authenticate": "Bearer"},
         )
     user_obj = result["user"]
-    # create an HttpOnly refresh cookie and return the short-lived access token
-    try:
-        refresh_token = create_refresh_token(user_obj["id"], user_obj["email"])
-
-        if response is not None:
-            response.set_cookie(
-                key="datapulse_refresh",
-                value=refresh_token,
-                httponly=True,
-                secure=(APP_ENV == "production"),
-                samesite="lax",
-                max_age=REFRESH_EXPIRE_DAYS * 24 * 3600,
-                path="/",
-            )
-    except Exception:
-        logger.exception("Failed to create refresh token")
+    # Store Supabase refresh token in HttpOnly cookie
+    if response is not None and result.get("refresh_token"):
+        response.set_cookie(
+            key="datapulse_refresh",
+            value=result["refresh_token"],
+            httponly=True,
+            secure=(APP_ENV == "production"),
+            samesite="lax",
+            max_age=7 * 24 * 3600,  # 7 days — matches Supabase default
+            path="/",
+        )
     return TokenResponse(
         access_token=result["access_token"],
         token_type="bearer",
@@ -364,49 +374,34 @@ async def reset_password(body: ResetPasswordRequest, db: AsyncSession = Depends(
 
 @app.post("/auth/google", response_model=TokenResponse, tags=["auth"])
 async def login_with_google(body: GoogleLoginRequest, db: AsyncSession = Depends(get_db), response: Response = None):
+    """
+    Google OAuth via Supabase.
+    REMOVED: Manual google.oauth2.id_token verification — Supabase validates the
+    Google ID token against the client configured in Dashboard → Auth → Providers → Google.
+    """
     credential = body.credential
     if not credential:
         raise HTTPException(status_code=400, detail="Missing Google credential")
 
-    frontend_client_id = (body.client_id or "").strip()
-    if frontend_client_id and GOOGLE_CLIENT_ID and frontend_client_id != GOOGLE_CLIENT_ID:
-        raise HTTPException(status_code=400, detail="Google client ID mismatch")
-
-    # FIX 43: Move blocking Google token verification off the async event loop
-    idinfo = await asyncio.to_thread(verify_google_token, credential)
-    if not idinfo:
-        raise HTTPException(status_code=401, detail="Invalid Google token")
-    if GOOGLE_CLIENT_ID and idinfo.get("aud") != GOOGLE_CLIENT_ID:
-        raise HTTPException(status_code=401, detail="Invalid Google token audience")
-
-    email = idinfo.get("email")
-    google_id = idinfo.get("sub")
-    name = idinfo.get("name")
-    if not email:
-        raise HTTPException(status_code=400, detail="No email provided by Google")
-
-    result = await login_google_user(db, email, google_id, name)
+    result = await login_google_user(db, google_id_token=credential)
     if not result["success"]:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail=result["message"],
         )
-    
+
     user_obj = result["user"]
-    try:
-        refresh_token = create_refresh_token(user_obj["id"], user_obj["email"])
-        if response is not None:
-            response.set_cookie(
-                key="datapulse_refresh",
-                value=refresh_token,
-                httponly=True,
-                secure=(APP_ENV == "production"),
-                samesite="lax",
-                max_age=REFRESH_EXPIRE_DAYS * 24 * 3600,
-                path="/",
-            )
-    except Exception:
-        logger.exception("Failed to create refresh token for google login")
+    # Store Supabase refresh token in HttpOnly cookie
+    if response is not None and result.get("refresh_token"):
+        response.set_cookie(
+            key="datapulse_refresh",
+            value=result["refresh_token"],
+            httponly=True,
+            secure=(APP_ENV == "production"),
+            samesite="lax",
+            max_age=7 * 24 * 3600,  # 7 days
+            path="/",
+        )
 
     return TokenResponse(
         access_token=result["access_token"],
@@ -423,35 +418,46 @@ async def login_with_google(body: GoogleLoginRequest, db: AsyncSession = Depends
 
 
 @app.post("/auth/refresh", response_model=TokenResponse, tags=["auth"])
-async def refresh_token(request: Request, response: Response, db: AsyncSession = Depends(get_db)):
+async def refresh_token_route(request: Request, response: Response, db: AsyncSession = Depends(get_db)):
+    """
+    CHANGED: Uses Supabase refresh_session() instead of custom verify_refresh_token().
+    REMOVED: create_access_token(), create_refresh_token(), verify_refresh_token() — dead.
+    Supabase manages the full token rotation lifecycle.
+    """
     token = request.cookies.get("datapulse_refresh")
     if not token:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Missing refresh token")
-    payload = verify_refresh_token(token)
-    if payload is None:
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid or expired refresh token")
-    user_id = int(payload["sub"])
-    user = await get_user_by_id(db, user_id)
-    if user is None:
-        raise HTTPException(status_code=404, detail="User not found")
 
-    access_token = create_access_token(user.id, user.email)
-    try:
-        new_refresh = create_refresh_token(user.id, user.email)
+    new_session = await refresh_session(token)
+    if new_session is None:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid or expired refresh token")
+
+    # Rotate cookie with new Supabase refresh token
+    if new_session.get("refresh_token") and response is not None:
         response.set_cookie(
             key="datapulse_refresh",
-            value=new_refresh,
+            value=new_session["refresh_token"],
             httponly=True,
             secure=(APP_ENV == "production"),
             samesite="lax",
-            max_age=REFRESH_EXPIRE_DAYS * 24 * 3600,
+            max_age=7 * 24 * 3600,
             path="/",
         )
-    except Exception:
-        logger.exception("Failed to rotate refresh token")
+
+    # Verify new token and find local user
+    payload = await verify_access_token(new_session["access_token"])
+    if payload is None:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Token verification failed after refresh")
+
+    from .db import User
+    from sqlalchemy import select as _sel
+    result = await db.execute(_sel(User).where(User.supabase_id == payload["sub"]))
+    user = result.scalar_one_or_none()
+    if user is None:
+        raise HTTPException(status_code=404, detail="User not found")
 
     return TokenResponse(
-        access_token=access_token,
+        access_token=new_session["access_token"],
         token_type="bearer",
         user=UserResponse(
             id=user.id,
@@ -1084,7 +1090,9 @@ def _classify_chat_intent(question: str) -> str:
         "graph", "chart", "plot", "visualization",
         "bar", "line", "scatter", "histogram", "pie", "donut",
     )
-    if any(bd in q for bd in _BREAKDOWN) and any(vw in q for vw in _VISUAL_WORD):
+    # Use word-boundary matching to avoid false positives (e.g. "bar" in "barista")
+    _visual_re = _re.compile(r'\b(' + '|'.join(_re.escape(w) for w in _VISUAL_WORD) + r')\b')
+    if any(bd in q for bd in _BREAKDOWN) and _visual_re.search(q):
         return "generate_chart"
 
     # ---- Existing chart reference (explain) -----------------------------
@@ -1152,11 +1160,50 @@ async def chat_with_analysis(
     # Check if frontend passed the optimized chat_context_pack directly
     chat_context_pack = context.get("chat_context_pack")
     if chat_context_pack:
-        stats = chat_context_pack.get("stats") or {}
-        insights = chat_context_pack.get("insights") or {}
-        file_name = chat_context_pack.get("fileName") or "dataset"
-        charts_data = chat_context_pack.get("charts") or {}
-        file_hash = chat_context_pack.get("file_hash") or context.get("file_hash")
+        # FIX: The pack uses compact keys (profile, quality, columns, correlations,
+        # key_findings, headline) — NOT stats/insights/fileName/charts.
+        # Reconstruct the expected dicts so _build_static_context and the query
+        # planner receive properly shaped data.
+        _pack_columns = chat_context_pack.get("columns") or {}
+        _pack_numeric = {}
+        _pack_categorical = {}
+        for _col_name, _col_info in _pack_columns.items():
+            _col_type = (_col_info.get("type") or "") if isinstance(_col_info, dict) else ""
+            if _col_type == "numeric":
+                _pack_numeric[_col_name] = {
+                    "mean": _col_info.get("mean"),
+                    "median": _col_info.get("median"),
+                    "min": _col_info.get("min"),
+                    "max": _col_info.get("max"),
+                    "std": _col_info.get("std"),
+                    "skewness": _col_info.get("skew"),
+                    "count": None,
+                }
+            elif _col_type == "categorical":
+                _pack_categorical[_col_name] = {
+                    "unique_values": _col_info.get("unique_count"),
+                    "most_common": _col_info.get("top_value"),
+                    "top_5_values": _col_info.get("top_5") or {},
+                    "least_common": _col_info.get("least_common"),
+                }
+
+        stats = {
+            "row_count": chat_context_pack.get("row_count"),
+            "column_count": chat_context_pack.get("column_count"),
+            "numeric_columns": _pack_numeric,
+            "categorical_columns": _pack_categorical,
+            "dataset_profile": chat_context_pack.get("profile"),
+            "data_quality": chat_context_pack.get("quality"),
+            "strong_correlations": chat_context_pack.get("correlations") or [],
+        }
+        insights = {
+            "findings": chat_context_pack.get("key_findings") or [],
+            "headline": chat_context_pack.get("headline") or "",
+        }
+        # fileName and charts live at the top-level context, not inside the pack
+        file_name = context.get("fileName") or "dataset"
+        charts_data = context.get("charts") or {}
+        file_hash = context.get("file_hash")
     else:
         stats = context.get("stats") or context.get("stats_summary") or {}
         insights = context.get("insights") or {}
@@ -1276,8 +1323,70 @@ async def chat_with_analysis(
     if intent == "generate_chart":
         from .agents.plot_generator import generate_on_demand_chart, suggest_novel_chart
 
+        # ── Pre-filter: extract filter conditions from the user's request ──
+        # e.g. "chart of sales in year 2022 only" → filter year col to 2022
+        # e.g. "pie chart for Kawasaki" → filter Brand to Kawasaki
+        chart_df_records = df_records
+        filter_label = ""
+        if df_records:
+            q_lower = question.lower()
+            import pandas as _pd_chart
+            _chart_df = _pd_chart.DataFrame(df_records)
+
+            # Year filter: "in year 2022", "year 2020 only", "for 2023"
+            _year_match = _re.search(r'(?:in\s+)?(?:year|yr)\s*(\d{4})', q_lower)
+            if not _year_match:
+                _year_match = _re.search(r'(?:for|of|from)\s+(\d{4})\s*(?:only)?', q_lower)
+            if _year_match:
+                _target_year = int(_year_match.group(1))
+                # Find the most likely year column
+                _year_col = None
+                for _col in _chart_df.columns:
+                    if _chart_df[_col].dtype in ('int64', 'float64', 'int32'):
+                        _col_vals = _chart_df[_col].dropna()
+                        if len(_col_vals) > 0:
+                            _mn, _mx = _col_vals.min(), _col_vals.max()
+                            if 1900 <= _mn <= 2100 and 1900 <= _mx <= 2100:
+                                _year_col = _col
+                                break
+                    if 'date' in str(_chart_df[_col].dtype).lower():
+                        _year_col = _col
+                        break
+                if _year_col is not None:
+                    try:
+                        if _chart_df[_year_col].dtype in ('int64', 'float64', 'int32'):
+                            _filtered = _chart_df[_chart_df[_year_col] == _target_year]
+                        else:
+                            _chart_df[_year_col] = _pd_chart.to_datetime(_chart_df[_year_col], errors='coerce')
+                            _filtered = _chart_df[_chart_df[_year_col].dt.year == _target_year]
+                        if len(_filtered) > 0:
+                            chart_df_records = _filtered.to_dict("records")
+                            filter_label = f" (filtered to year {_target_year})"
+                            logger.info("Chart filter: %d rows for year %d from column '%s'", len(_filtered), _target_year, _year_col)
+                    except Exception as _filt_exc:
+                        logger.warning("Year filter failed: %s", _filt_exc)
+
+            # Entity filter: "for Kawasaki", "of Honda bikes"
+            if not filter_label:
+                _cat_cols = stats.get("categorical_columns") or {}
+                for _cat_name, _cat_info in _cat_cols.items():
+                    _top_vals = _cat_info.get("top_5_values") or _cat_info.get("top_values") or {}
+                    for _val_name in _top_vals:
+                        if str(_val_name).lower() in q_lower and len(str(_val_name)) > 2:
+                            try:
+                                _filtered = _chart_df[_chart_df[_cat_name].astype(str).str.lower() == str(_val_name).lower()]
+                                if len(_filtered) > 5:
+                                    chart_df_records = _filtered.to_dict("records")
+                                    filter_label = f" (filtered to {_val_name})"
+                                    logger.info("Chart filter: %d rows for %s='%s'", len(_filtered), _cat_name, _val_name)
+                                    break
+                            except Exception:
+                                pass
+                    if filter_label:
+                        break
+
         novel = suggest_novel_chart(
-            df_records=df_records,
+            df_records=chart_df_records,
             existing_chart_keys=existing_chart_keys,
             user_request=question,
             stats_summary=stats,
@@ -1293,7 +1402,7 @@ async def chat_with_analysis(
 
         chart_result = generate_on_demand_chart(
             spec=novel["spec"],
-            df_records=df_records,
+            df_records=chart_df_records,
             existing_chart_keys=existing_chart_keys,
         )
 
@@ -1313,7 +1422,7 @@ async def chat_with_analysis(
 
         # Build a natural answer describing what was generated
         reasoning = novel.get("reasoning", "")
-        answer = reasoning if reasoning else "Here is the chart you requested."
+        answer = (reasoning + filter_label) if reasoning else f"Here is the chart you requested{filter_label}."
 
         return {
             "answer": answer,

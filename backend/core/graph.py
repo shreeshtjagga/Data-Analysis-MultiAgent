@@ -186,7 +186,12 @@ def run_pipeline(df) -> AnalysisState:
             stat_state_out = stat_future.result(timeout=_AGENT_TIMEOUT_SECONDS + 5)
             # Merge statistician results
             state.stats_summary = stat_state_out.stats_summary
-            state.errors.extend(stat_state_out.errors)
+            # FIX: Only take errors that the statistician *added* (beyond the
+            # baseline it inherited from the deep copy), matching the dedup
+            # pattern used for viz/insights in _run_parallel_agents.
+            _stat_baseline = len(state.errors)
+            new_stat_errors = stat_state_out.errors[_stat_baseline:]
+            state.errors.extend(new_stat_errors)
             state.completed_agents.extend(
                 a for a in stat_state_out.completed_agents if a not in state.completed_agents
             )

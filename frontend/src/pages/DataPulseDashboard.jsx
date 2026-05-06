@@ -1568,6 +1568,7 @@ export default function DataPulse({ user, onLogout }) {
     if (result?.chat_context_pack) {
       return {
         chat_context_pack: result.chat_context_pack,
+        fileName,
         file_hash: result?.file_hash || null,
         generated_chart_keys: generatedChartKeys,
         // Send sentinel chart keys so backend knows which charts exist (for explain_chart intent)

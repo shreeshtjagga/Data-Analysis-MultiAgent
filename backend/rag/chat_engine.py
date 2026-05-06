@@ -28,83 +28,71 @@ _MAX_CONTEXT_CHARS = 12000
 _TOP_K_CHUNKS      = 8
 
 def _data_system_prompt(file_name: str, chart_keys: list[str]) -> str:
-    return f"""You are a sharp, senior data analyst for the dataset "{file_name}".
-You talk like a knowledgeable colleague - confident, precise, and human.
-==== GROUNDING CONTRACT - THIS IS MANDATORY ====
-You receive a CONTEXT block with pre-computed facts, correlation data, live
-query results, data quality info, and dataset profile. These are the ONLY
-facts you may use. NEVER use your training knowledge to fill gaps.
-RULE 1 (EXACT NUMBERS): If CONTEXT contains the answer, state the EXACT
-  number or value. BAD: "Revenue is quite high". GOOD: "Average revenue is
-  45,230, with a maximum of 98,000".
-RULE 2 (ADMIT GAPS): If CONTEXT does not contain the answer, say exactly:
-  "I don't have [specific thing] in the current analysis, but I can tell you
-  [related thing from context]." Then pivot to the most relevant thing you
-  DO have. NEVER fabricate, estimate, or guess numbers.
-RULE 3 (NO VAGUENESS): NEVER say "the data shows various trends" or "values
-  vary significantly". Be specific with numbers or use RULE 2.
-RULE 4 (NO TRAINING KNOWLEDGE): NEVER use training knowledge to fill gaps.
-  If a fact is not in CONTEXT, it does not exist for this conversation.
-  NEVER say "typically", "usually", "in general" about data values.
-RULE 5 (RANKINGS): For "who/which has the highest/lowest X", name the
-  entity and its exact value. Use the Parquet query result if available.
-RULE 6 (PREDICTIONS / FUTURE): For "will sales increase" or "future of X",
-  base answer ONLY on trends visible in CONTEXT. If CONTEXT has TREND DATA
-  or EXACT QUERY RESULT with slope/R-squared, cite those values. If no
-  trend data exists, say: "I don't have enough time-series data to project,
-  but here is what the current data shows: [cite relevant stats]."
-RULE 7 (CORRELATIONS / RELATIONSHIPS): For "relationship between X and Y",
-  look for correlation data in CONTEXT. State the r value, direction, and
-  meaning. If none exists, say: "I don't have a correlation analysis for
-  those columns, but I can tell you about [related columns]."
-RULE 8 (GREETINGS): If a greeting reaches you, respond warmly in one
-  sentence: "Hi! Ask me anything about {file_name}."
-RULE 9 (DATA QUALITY / SOURCE / RELIABILITY): For questions about where
-  data came from, reliability, missing values, biases, or data cleaning,
-  use DATA QUALITY, DATA CLEANING, and DATASET PROFILE sections. Cite
-  completeness %, missing counts, imputation strategies. If not available,
-  say "Data quality metrics are not available for that aspect."
-RULE 10 (METHODOLOGY): For questions about analysis method or validation,
-  explain: statistical summaries (count, mean, median, std, min, max),
-  Pearson correlation, IQR outlier detection, automated visualizations.
-  Do NOT claim ML, regression, or neural networks unless TREND DATA with
-  slope/R-squared is explicitly in CONTEXT.
-RULE 11 (DECISIONS / RISKS / IMPACT): For "what action should we take" or
-  "what are the risks", base recommendations ONLY on CONTEXT patterns:
-  outliers, dominant categories, correlations, quality issues. Always say
-  "Based on this dataset..." Never claim universal business truths.
-RULE 12 (SCENARIO / WHAT-IF): For "what happens if X changes", use
-  correlation or trend data involving X if available. Otherwise say:
-  "I can't simulate beyond what the data shows, but here is what I see."
-RULE 13 (CHART DISPLAY): For "show me the chart" or "display the graph",
-  include [CHART: exact_key] for an EXISTING chart. For a NEW chart,
-  do NOT include [CHART:] - the system generates it separately.
-RULE 14 (SPIKES AND DROPS): For "why is there a spike/drop", cite the
-  exact values at that point from CONTEXT. If the cause is not in the data,
-  say: "The data shows [values] at that point, but the dataset does not
-  contain information about the underlying cause."
-RULE 15 (DRILL DOWN): For "can we drill down" or "what does this mean",
-  describe the column data (type, range, unique values) from CONTEXT.
-  Suggest they ask a specific question like "What are the top 5 by [metric]?"
-RULE 16 (BUSINESS OBJECTIVE): For "what is the key objective", use DATASET
-  PROFILE and KEY FINDINGS to describe what the data covers and what
-  patterns emerged. Never invent a business objective not evident from data.
+    return f"""You are Alex, a sharp senior data analyst with 10 years experience,
+working with the dataset "{file_name}". You talk like a real analyst in a
+conversation — confident, precise, and human.
+
+==== YOUR PERSONALITY ====
+- Confident. You ran the numbers, you trust them.
+- Concise. Lead with the answer, then explain.
+- Insightful. Always add one observation beyond what was asked.
+- Honest. If data doesn't have something, say it in one short line and pivot.
+
+==== ANSWER STRUCTURE (follow this always) ====
+1. Direct answer first — the number or fact, immediately
+2. One supporting detail — what drives that number
+3. One insight — something interesting they didn't ask but should know
+4. "Recommendation:" ONLY when data reveals something clearly actionable
+
+==== GROUNDING CONTRACT — MANDATORY ====
+You receive a CONTEXT block with pre-computed facts, live query results,
+and correlation data. Also a PANDAS RESULT block with exact numbers
+computed from the real data. These are the ONLY facts you may use.
+RULE 1 (EXACT NUMBERS): If CONTEXT or PANDAS RESULT has the answer, use
+  the EXACT number. BAD: "Revenue is quite high". GOOD: "Average revenue
+  is 45,230, with a max of 98,000."
+RULE 2 (ADMIT GAPS): If CONTEXT does not contain the answer, say ONE
+  short sentence: "That's not in this dataset." Then pivot to the most
+  relevant thing you DO have. NEVER fabricate numbers.
+RULE 3 (NO VAGUENESS): NEVER say "the data shows various trends" or
+  "values vary significantly." Be specific or use RULE 2.
+RULE 4 (NO TRAINING KNOWLEDGE): NEVER fill gaps from training data.
+  If a fact is not in CONTEXT, it does not exist.
+RULE 5 (RANKINGS): Name the entity AND its exact value.
+RULE 6 (PREDICTIONS / FUTURE): If CONTEXT has TREND DATA with slope
+  and R-squared: compute the projection and present it with confidence
+  caveat based on R². If no trend data: say "I don't have enough
+  time-series data to project" and cite what you DO have.
+RULE 7 (CORRELATIONS): State the r value, direction, and meaning.
+RULE 8 (GREETINGS): "Hi! Ask me anything about {file_name}."
+RULE 9 (DATA QUALITY): Use DATA QUALITY and DATASET PROFILE sections.
+RULE 10 (METHODOLOGY): Statistical summaries, Pearson correlation, IQR
+  outlier detection, automated visualizations.
+RULE 11 (DECISIONS / RISKS): Base on CONTEXT patterns only. Always say
+  "Based on this dataset..."
+RULE 12 (SCENARIO / WHAT-IF): Use correlation or trend data if available.
+RULE 13 (CHART DISPLAY): Include [CHART: exact_key] for EXISTING charts
+  only. For NEW charts, do NOT include [CHART:].
+RULE 14 (SPIKES AND DROPS): Cite exact values from CONTEXT.
+RULE 15 (DRILL DOWN): Describe column data and suggest specific questions.
+RULE 16 (BUSINESS OBJECTIVE): Use DATASET PROFILE and KEY FINDINGS.
+
 ==== STYLE ====
-* 2-6 sentences. Direct. No waffle. No filler phrases.
+* 2-5 sentences. Direct. No waffle. No filler.
 * Plain English: "average" not "mean", "spread" not "variance"
-* Every factual sentence must contain at least one specific number
+* Every factual sentence must have at least one specific number
 * No markdown bold (**), no bullet lists, no numbered lists
-* Conversational - like texting a smart colleague, not writing a report
+* Conversational — like texting a smart colleague
 * Never mention "CONTEXT", "RULE", "system prompt", "grounding contract"
+* Never say "in the current analysis" — sounds robotic
+* Never repeat the user's question back to them
+* Never give disclaimers BEFORE the answer — lead with the number
+
 ==== CHART DISPLAY RULES ====
 Available chart keys on dashboard: {chart_keys}
 * Do NOT render charts unless the user explicitly asks to display/show one.
 * Do NOT instruct the user to "say show" or "say plot".
-* Use ONLY exact keys listed above - never guess a key name
-==== RECOMMENDATION ====
-Add "Recommendation:" at the end ONLY when data reveals something clearly
-actionable (a spike, a dominant group, a data quality issue). Always
-qualify with "Based on this dataset...". Skip for simple lookups."""
+* Use ONLY exact keys listed above — never guess a key name"""
 
 def _chart_system_prompt(file_name: str) -> str:
     return f"""You are explaining a specific chart from the dataset "{file_name}".
@@ -130,6 +118,7 @@ async def _plan_and_run_query(
     file_hash:  str,
     col_types:  dict,
     groq_client,
+    col_metadata: dict = None,
 ) -> Optional[dict]:
 
     """
@@ -154,11 +143,29 @@ async def _plan_and_run_query(
     if question.lower().strip() in _SKIP_TRIGGERS:
         return None
 
+    # Build enriched column info for the planner prompt
+    if col_metadata:
+        col_info_str = json.dumps(col_metadata, ensure_ascii=True, default=str)
+    else:
+        col_info_str = json.dumps(col_types, ensure_ascii=True)
+
     planner_prompt = f"""You are a data query planner. Decide if a structured query
 
 is needed to answer this question precisely with exact numbers from the full dataset.
 If YES -> return ONE JSON object (no explanation, no markdown).
-If NO (opinion, greeting, general trend/pattern summary, predictive question) -> return: NONE
+If NO (opinion, greeting) -> return: NONE
+
+IMPORTANT PLANNING RULES:
+- When the user mentions a SPECIFIC entity (brand, name, category), use filter_group or filter_lookup to filter by that entity.
+  Example: "Kawasaki bikes" → filter by the column whose top_values includes "Kawasaki".
+- When the user mentions a SPECIFIC year/period, use filters with op "eq" on the year/date column.
+  Example: "in year 2020" → filter the year column by value 2020.
+- For "report" or "summary" of a filtered entity, use filter_group with group_by on a descriptive column.
+- For PREDICTION/FORECAST questions ("what will X be in 2030?", "predict future sales"), use "trend" query to get the slope and R-squared. This gives the data needed for extrapolation.
+  Example: "predict sales in 2030" → {{"type":"trend","params":{{"time_col":"Year","val_col":"Sales"}}}}
+- For questions about growth/change over time, use "year_summary" to get yearly aggregates.
+- Use the column metadata below to identify which column contains a mentioned value.
+
 AVAILABLE QUERY TYPES:
 filter_lookup   -> look up a column value by filtering another
   example: {{"type":"filter_lookup","params":{{"filter_col":"name","filter_val":"Alice","result_col":"salary"}}}}
@@ -190,8 +197,8 @@ correlation     -> correlation between two numeric columns
 percentile      -> compute percentile of a numeric column
   example: {{"type":"percentile","params":{{"column":"Age","percentile":90}}}}
 FILTER OPS: eq, neq, gt, lt, gte, lte, contains, year, month, isnull, notnull
-DATASET COLUMNS:
-{json.dumps(col_types, ensure_ascii=True)}
+DATASET COLUMNS (with sample values and ranges):
+{col_info_str}
 QUESTION: {question}
 
 Return ONLY the JSON object or the word NONE. No explanation whatsoever."""
@@ -538,8 +545,6 @@ def _sanitize_llm_output(text: str) -> str:
     return text.strip()
 
 # ────────────────────────────────────────────────
-# Public API
-
 # ────────────────────────────────────────────────
 async def answer_question(
 
@@ -556,38 +561,182 @@ async def answer_question(
 
     """
 
-    Answer a data question using RAG retrieval + Parquet query (in parallel).
+    Two-layer answer pipeline:
+      Layer 1 (Analytical): Generate pandas code → execute on full Parquet → answer from REAL result
+      Layer 2 (Reasoning):  RAG retrieval + static context → grounded synthesis
     Returns: {"answer": str, "data_queried": bool, "new_chart": None}
 
     """
 
     from .indexer import retrieve_chunks
+    from .pandas_executor import (
+        classify_question,
+        generate_pandas_code,
+        safe_execute,
+        format_result,
+        build_rich_context,
+        is_challenge,
+    )
+    from ..core.data_agent import _load_df
 
-    # Build column type map for the query planner
+    # ── Challenge detection: "are you sure?" → re-run last code ──────────
+    if is_challenge(question) and conversation_history:
+        # Find the last assistant answer to confirm it
+        last_answer = ""
+        for msg in reversed(conversation_history):
+            if str(msg.get("role", "")).lower() in ("assistant", "ai"):
+                last_answer = str(msg.get("content", ""))
+                break
+        if last_answer:
+            # Re-verify by running the analytical path again
+            df, load_err = _load_df(file_hash)
+            if df is not None and not df.empty:
+                try:
+                    code = await generate_pandas_code(question=conversation_history[-2].get("content", question) if len(conversation_history) >= 2 else question, df=df, groq_client=groq_client)
+                    exec_result = safe_execute(code, df)
+                    if exec_result["error"] is None:
+                        formatted = format_result(exec_result["result"])
+                        confirm_msg = [
+                            {"role": "system", "content": _data_system_prompt(file_name, chart_keys)},
+                            {"role": "system", "content": (
+                                f"The user is asking you to confirm a previous answer. "
+                                f"You re-ran the query and got this result:\n"
+                                f"PANDAS RESULT (re-verified):\n{formatted}\n\n"
+                                f"Previous answer was: {last_answer[:300]}\n\n"
+                                f"Confirm the result confidently. Say 'Yes, confirmed — ' "
+                                f"then restate the key number. Do NOT change the answer."
+                            )},
+                            {"role": "user", "content": question},
+                        ]
+                        completion = await asyncio.to_thread(
+                            groq_client.chat.completions.create,
+                            model=SYNTHESIS_MODEL,
+                            messages=confirm_msg,
+                            temperature=0,
+                            max_tokens=300,
+                        )
+                        answer = _sanitize_llm_output(
+                            (completion.choices[0].message.content or "").strip()
+                        )
+                        return {"answer": answer, "data_queried": True, "new_chart": None}
+                except Exception as exc:
+                    logger.warning("Challenge re-verification failed: %s", exc)
 
+    # ── Classify question type ───────────────────────────────────────────
+    q_type = await classify_question(question, groq_client)
+    logger.info("Question classified as: %s — '%s'", q_type, question[:80])
+
+    # ── Build static context (used by both paths) ────────────────────────
+    static_ctx = _build_static_context(stats, insights)
+
+    # ══════════════════════════════════════════════════════════════════════
+    # LAYER 1 — Analytical Path (pandas code execution)
+    # ══════════════════════════════════════════════════════════════════════
+    if q_type == "analytical":
+        df, load_err = _load_df(file_hash)
+
+        if df is not None and not df.empty:
+            try:
+                # Step 1: Generate pandas code
+                code = await generate_pandas_code(
+                    question=question,
+                    df=df,
+                    groq_client=groq_client,
+                )
+                logger.info("Generated pandas code:\n%s", code)
+
+                # Step 2: Execute safely
+                exec_result = safe_execute(code, df)
+
+                if exec_result["error"] is None:
+                    # Step 3: Format result and build rich context
+                    formatted = format_result(exec_result["result"])
+                    rich_ctx = build_rich_context(exec_result["result"], df, question)
+
+                    # Step 4: Synthesize human answer from REAL result
+                    messages = [
+                        {"role": "system", "content": _data_system_prompt(file_name, chart_keys)},
+                        {
+                            "role": "system",
+                            "content": (
+                                f"PANDAS RESULT (computed from the REAL dataset — trust these numbers 100%):\n"
+                                f"{formatted}\n\n"
+                                f"ADDITIONAL CONTEXT:\n{json.dumps(rich_ctx, default=str)}\n\n"
+                                f"DATASET OVERVIEW:\n{static_ctx[:3000]}"
+                            ),
+                        },
+                    ]
+
+                    # Include conversation history (last 4 turns)
+                    _SAFE_ROLES = {"assistant", "ai", "user", "human"}
+                    for msg in (conversation_history or [])[-4:]:
+                        raw_role = str(msg.get("role", "")).lower()
+                        if raw_role not in _SAFE_ROLES:
+                            continue
+                        role = "assistant" if raw_role in ("assistant", "ai") else "user"
+                        messages.append({"role": role, "content": str(msg.get("content", ""))[:800]})
+
+                    messages.append({"role": "user", "content": question})
+
+                    completion = await asyncio.to_thread(
+                        groq_client.chat.completions.create,
+                        model=SYNTHESIS_MODEL,
+                        messages=messages,
+                        temperature=0.05,
+                        max_tokens=500,
+                    )
+                    answer = _sanitize_llm_output(
+                        (completion.choices[0].message.content or "").strip()
+                    )
+                    return {"answer": answer, "data_queried": True, "new_chart": None}
+
+                else:
+                    # Code execution failed — log and fall through to reasoning path
+                    logger.warning(
+                        "Pandas execution failed, falling back to reasoning: %s",
+                        exec_result["error"],
+                    )
+
+            except Exception as exc:
+                logger.warning("Analytical path failed, falling back to reasoning: %s", exc)
+
+        else:
+            if load_err:
+                logger.warning("Parquet load failed: %s", load_err)
+
+    # ══════════════════════════════════════════════════════════════════════
+    # LAYER 2 — Reasoning Path (RAG + static context + optional query)
+    # ══════════════════════════════════════════════════════════════════════
+
+    # Build column metadata for the query planner fallback
     col_types: dict[str, str] = {}
-    for c in (stats.get("numeric_columns") or {}).keys():
-        col_types[c] = "numeric"
-    for c in (stats.get("categorical_columns") or {}).keys():
-        col_types[c] = "categorical"
+    col_metadata: dict[str, dict] = {}
 
-    # Include datetime columns so the planner knows which cols support year/month filters
+    for c, info in (stats.get("numeric_columns") or {}).items():
+        col_types[c] = "numeric"
+        col_metadata[c] = {
+            "type": "numeric",
+            "min": info.get("min"),
+            "max": info.get("max"),
+            "mean": info.get("mean"),
+        }
+
+    for c, info in (stats.get("categorical_columns") or {}).items():
+        col_types[c] = "categorical"
+        top_vals = info.get("top_5_values") or info.get("top_values") or {}
+        col_metadata[c] = {
+            "type": "categorical",
+            "unique_count": info.get("unique_values") or info.get("nunique"),
+            "top_values": list(top_vals.keys())[:5] if isinstance(top_vals, dict) else [],
+        }
 
     for c in (stats.get("datetime_columns") or stats.get("date_columns") or []):
         col_name = c if isinstance(c, str) else str(c)
         if col_name not in col_types:
             col_types[col_name] = "datetime"
+            col_metadata[col_name] = {"type": "datetime"}
 
-    # Run Pinecone retrieval and Parquet query planner in parallel.
-
-    # FIX: Skip the query planner entirely when col_types is empty - it means
-
-    # no stats were passed in the context (e.g. first message, context omission).
-
-    # An empty col_types causes the planner to emit invalid column names, wasting
-
-    # a Groq API call and potentially poisoning the LLM context with noise.
-
+    # Run RAG retrieval + query planner in parallel
     retrieval_coro = retrieve_chunks(
         file_hash=file_hash,
         question=question,
@@ -599,70 +748,46 @@ async def answer_question(
             question=question,
             file_hash=file_hash,
             col_types=col_types,
+            col_metadata=col_metadata,
             groq_client=groq_client,
         )
     else:
-        logger.info("Skipping query planner: no column type info in stats context")
-
         async def _null_query() -> None:
-
             return None
         query_coro = _null_query()
+
     chunks, data_result = await asyncio.gather(retrieval_coro, query_coro)
-
-    # Build static context from pre-computed stats/insights
-
-    # This gives the LLM exact correlation values, column summaries, and key
-
-    # findings so relationship and summary questions are grounded, not hallucinated.
-
-    static_ctx = _build_static_context(stats, insights)
-    context    = _assemble_context(chunks, data_result, static_ctx)
+    context = _assemble_context(chunks, data_result, static_ctx)
 
     # Assemble message list
-
     messages = [
         {"role": "system", "content": _data_system_prompt(file_name, chart_keys)},
         {"role": "system", "content": f"CONTEXT:\n{context}"},
     ]
 
-    # Append conversation history (last 6 turns, capped per message).
-
-    # FIX: Only allow "user" and "assistant" roles. A "system" role passed in
-
-    # conversation history would inject an extra system prompt into the Groq
-
-    # message list, allowing prompt injection via manipulated history payloads.
-
     _SAFE_ROLES = {"assistant", "ai", "user", "human"}
     for msg in (conversation_history or [])[-6:]:
         raw_role = str(msg.get("role", "")).lower()
         if raw_role not in _SAFE_ROLES:
-            logger.warning("Skipping unsupported history role '%s' to prevent injection", raw_role)
             continue
         role = "assistant" if raw_role in ("assistant", "ai") else "user"
         messages.append({"role": role, "content": str(msg.get("content", ""))[:1000]})
     messages.append({"role": "user", "content": question})
 
-    # Anti-hallucination safeguard: if BOTH chunks and query are empty,
-
-    # inject a directive so the LLM doesn't invent data.
-
+    # Anti-hallucination safeguard
     has_chunks = bool(chunks)
-    has_query  = data_result is not None
+    has_query = data_result is not None
     if not has_chunks and not has_query and not static_ctx.strip():
         messages.append({
             "role": "system",
             "content": (
                 "WARNING: No relevant data was found for this question. "
-                "You MUST respond with: 'I don't have data to answer that "
-                "specific question from this dataset.' Then suggest what "
-                "the user CAN ask about based on available columns."
+                "You MUST respond with: 'That's not in this dataset.' "
+                "Then suggest what the user CAN ask about."
             ),
         })
 
     # Synthesize answer
-
     try:
         temp = 0.05 if data_result is not None else 0.1
         completion = await asyncio.to_thread(
@@ -731,8 +856,19 @@ async def answer_chart_explanation(
                 f"ADDITIONAL DATASET CONTEXT:\n{extra_context}"
             ),
         },
-        {"role": "user", "content": question},
     ]
+
+    # Include conversation history so follow-up questions maintain context
+    # (e.g. "what about the outliers in it?" keeps the "it" reference)
+    _SAFE_ROLES = {"assistant", "ai", "user", "human"}
+    for msg in (conversation_history or [])[-4:]:
+        raw_role = str(msg.get("role", "")).lower()
+        if raw_role not in _SAFE_ROLES:
+            continue
+        role = "assistant" if raw_role in ("assistant", "ai") else "user"
+        messages.append({"role": role, "content": str(msg.get("content", ""))[:800]})
+
+    messages.append({"role": "user", "content": question})
     try:
         completion = await asyncio.to_thread(
             groq_client.chat.completions.create,

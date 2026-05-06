@@ -10,7 +10,7 @@ const GOOGLE_CLIENT_ID = import.meta.env.VITE_GOOGLE_CLIENT_ID;
  * Login.jsx — DataPulse auth page (Premium Dark SaaS System)
  */
 
-function PasswordInput({ id, placeholder, value, onChange, onKeyDown, disabled }) {
+function PasswordInput({ id, placeholder, value, onChange, onKeyDown, disabled, autoComplete }) {
   const [show, setShow] = useState(false);
   return (
     <div style={{ position: "relative", opacity: disabled ? 0.6 : 1 }}>
@@ -24,6 +24,7 @@ function PasswordInput({ id, placeholder, value, onChange, onKeyDown, disabled }
         onChange={onChange}
         onKeyDown={onKeyDown}
         disabled={disabled}
+        autoComplete={autoComplete}
       />
       <button
         type="button"
@@ -138,6 +139,7 @@ function LoginForm({ onLogin, onForgot }) {
           onChange={(e) => setEmail(e.target.value)}
           onKeyDown={(e) => e.key === "Enter" && submit()}
           disabled={loading}
+          autoComplete="username"
         />
       </div>
 
@@ -150,6 +152,7 @@ function LoginForm({ onLogin, onForgot }) {
           onChange={(e) => setPassword(e.target.value)}
           onKeyDown={(e) => e.key === "Enter" && submit()}
           disabled={loading}
+          autoComplete="current-password"
         />
       </div>
 
@@ -324,22 +327,22 @@ function RegisterForm({ onLogin, setTab }) {
       
       <div className="flex-col gap-8">
         <label style={{ fontSize: '13px', fontWeight: 600, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Username</label>
-        <input id="reg-name" className="input-field" style={{ width: "100%", backgroundColor: '#f1f5f9', color: '#0f172a', opacity: loading ? 0.6 : 1 }} type="text" placeholder="johndoe123" value={name} onChange={(e) => setName(e.target.value)} disabled={loading} />
+        <input id="reg-name" className="input-field" style={{ width: "100%", backgroundColor: '#f1f5f9', color: '#0f172a', opacity: loading ? 0.6 : 1 }} type="text" placeholder="johndoe123" value={name} onChange={(e) => setName(e.target.value)} disabled={loading} autoComplete="off" />
       </div>
 
       <div className="flex-col gap-8">
         <label style={{ fontSize: '13px', fontWeight: 600, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Email address</label>
-        <input id="reg-email" className="input-field" style={{ width: "100%", backgroundColor: '#f1f5f9', color: '#0f172a', opacity: loading ? 0.6 : 1 }} type="email" placeholder="you@example.com" value={email} onChange={(e) => setEmail(e.target.value)} disabled={loading} />
+        <input id="reg-email" className="input-field" style={{ width: "100%", backgroundColor: '#f1f5f9', color: '#0f172a', opacity: loading ? 0.6 : 1 }} type="email" placeholder="you@example.com" value={email} onChange={(e) => setEmail(e.target.value)} disabled={loading} autoComplete="off" />
       </div>
 
       <div className="flex-col gap-8">
         <label style={{ fontSize: '13px', fontWeight: 600, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Secure Password</label>
-        <PasswordInput id="reg-password" placeholder="••••••••" value={password} onChange={(e) => setPassword(e.target.value)} disabled={loading} />
+        <PasswordInput id="reg-password" placeholder="••••••••" value={password} onChange={(e) => setPassword(e.target.value)} disabled={loading} autoComplete="new-password" />
       </div>
 
       <div className="flex-col gap-8">
         <label style={{ fontSize: '13px', fontWeight: 600, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Confirm Password</label>
-        <PasswordInput id="reg-confirm" placeholder="••••••••" value={confirm} onChange={(e) => setConfirm(e.target.value)} onKeyDown={(e) => e.key === "Enter" && submit()} disabled={loading} />
+        <PasswordInput id="reg-confirm" placeholder="••••••••" value={confirm} onChange={(e) => setConfirm(e.target.value)} onKeyDown={(e) => e.key === "Enter" && submit()} disabled={loading} autoComplete="new-password" />
       </div>
 
       <button id="reg-submit" className="btn-primary" style={{ width: "100%", marginTop: '16px' }} onClick={submit} disabled={loading}>

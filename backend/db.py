@@ -1,3 +1,16 @@
+"""
+DataPulse Database — Supabase PostgreSQL
+==========================================
+REMOVED (dead after migration):
+  - _strip_unsupported_params_from_url() — Supabase connection string is clean
+  - Neon-specific pool comments — replaced with Supabase pooler settings
+
+CHANGED:
+  - DATABASE_URL now points to Supabase PostgreSQL
+  - User model: added supabase_id (UUID from auth.users), password_hash made nullable
+    because Supabase manages auth — we no longer store hashed passwords locally
+"""
+
 import logging
 import os
 import ssl
@@ -5,7 +18,6 @@ from datetime import datetime
 from urllib.parse import urlparse, urlunparse, parse_qs, urlencode
 
 from dotenv import load_dotenv
-
 
 load_dotenv()
 
@@ -19,28 +31,6 @@ from sqlalchemy.orm import DeclarativeBase, relationship
 from .core.utils import rewrite_local_dev_host
 
 logger = logging.getLogger(__name__)
-
-
-def _strip_unsupported_params_from_url(database_url: str) -> str:
-    """Remove asyncpg-incompatible parameters from database URL."""
-    parsed = urlparse(database_url)
-    if not parsed.query:
-        return database_url
-    
-    # Parse query parameters
-    params = parse_qs(parsed.query, keep_blank_values=True)
-    
-    # Remove parameters that asyncpg doesn't support
-    unsupported_params = {'sslmode', 'channel_binding', 'gssencmode'}
-    for param in unsupported_params:
-        params.pop(param, None)
-    
-    # Reconstruct query string
-    new_query = urlencode(params, doseq=True)
-    
-    # Reconstruct URL
-    new_parsed = parsed._replace(query=new_query)
-    return urlunparse(new_parsed)
 
 
 def _running_in_container() -> bool:
@@ -78,23 +68,45 @@ def _rewrite_local_dev_db_host(database_url: str) -> str:
     return rewritten
 
 
+# ── Connection setup ───────────────────────────────────────────────────────────
 
 DATABASE_URL = os.getenv(
     "DATABASE_URL",
-    "postgresql+asyncpg://datapulse:datapulse_secret@localhost:5432/datapulse",
+    "postgresql+asyncpg://postgres:postgres@localhost:5432/postgres",
 )
 
-if DATABASE_URL.startswith("postgresql://") or DATABASE_URL.startswith("postgres://"):
+# Normalise scheme — Supabase connection strings use postgresql://
+if DATABASE_URL.startswith("postgres://"):
     DATABASE_URL = DATABASE_URL.replace("postgres://", "postgresql+asyncpg://", 1)
+elif DATABASE_URL.startswith("postgresql://"):
     DATABASE_URL = DATABASE_URL.replace("postgresql://", "postgresql+asyncpg://", 1)
 
 DATABASE_URL = _rewrite_local_dev_db_host(DATABASE_URL)
-DATABASE_URL = _strip_unsupported_params_from_url(DATABASE_URL)
 
+# Strip asyncpg-incompatible params (sslmode, channel_binding, gssencmode)
+# that Supabase pooler URLs sometimes include
+def _strip_url_params(url: str) -> str:
+    parsed = urlparse(url)
+    if not parsed.query:
+        return url
+    params = parse_qs(parsed.query, keep_blank_values=True)
+    for p in ("sslmode", "channel_binding", "gssencmode"):
+        params.pop(p, None)
+    new_query = urlencode(params, doseq=True)
+    return urlunparse(parsed._replace(query=new_query))
 
-_db_ssl = os.getenv("DB_SSL", "false").lower() == "true"
-_connect_args: dict = {}
-if _db_ssl:
+DATABASE_URL = _strip_url_params(DATABASE_URL)
+
+_db_ssl_mode = os.getenv("DB_SSL", "false").lower()
+_connect_args: dict = {
+    # Disables asyncpg prepared statement cache — required for Supabase pgbouncer
+    "statement_cache_size": 0,
+}
+if _db_ssl_mode == "require":
+    # Supabase direct connection — asyncpg accepts the plain string "require"
+    _connect_args["ssl"] = "require"
+elif _db_ssl_mode == "true":
+    # Self-signed / local TLS — skip certificate verification
     _ssl_ctx = ssl.create_default_context()
     _ssl_ctx.check_hostname = False
     _ssl_ctx.verify_mode = ssl.CERT_NONE
@@ -103,12 +115,12 @@ if _db_ssl:
 engine = create_async_engine(
     DATABASE_URL,
     echo=os.getenv("APP_ENV", "production") == "development",
-    # Neon pgbouncer pooler works best with a small pool.
-    pool_pre_ping=True,        # Must be True for Neon serverless to catch aggressively dropped idle connections
+    # Supabase pgbouncer (transaction mode) — keep pool small
+    pool_pre_ping=True,
     pool_size=3,
     max_overflow=5,
-    pool_recycle=300,          # recycle connections every 5 min to avoid stale sockets
-    pool_timeout=30,           # raise immediately if no connection available in 30 s
+    pool_recycle=300,
+    pool_timeout=30,
     connect_args=_connect_args,
 )
 
@@ -121,19 +133,28 @@ AsyncSessionLocal = async_sessionmaker(
 )
 
 
+# ── Models ─────────────────────────────────────────────────────────────────────
 
 class Base(DeclarativeBase):
     pass
 
 
-
 class User(Base):
+    """
+    Local user profile — synced from Supabase auth.users on first login.
+    
+    CHANGED: Added supabase_id (UUID string) — links to Supabase auth.users.id.
+    CHANGED: password_hash is now nullable — Supabase manages passwords, not us.
+    """
     __tablename__ = "users"
 
     id = Column(BigInteger, primary_key=True, autoincrement=True)
+    # Supabase auth.users UUID — set on first login, used for identity linking
+    supabase_id = Column(String(64), unique=True, nullable=True, index=True)
     email = Column(String(255), unique=True, nullable=False, index=True)
     name = Column(String(255), nullable=True)
-    password_hash = Column(String(255), nullable=False)
+    # nullable=True: Supabase manages password hashing, we do NOT store it
+    password_hash = Column(String(255), nullable=True)
     is_active = Column(Boolean, default=True, nullable=False)
     created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
     updated_at = Column(
@@ -204,6 +225,7 @@ class AnalysisMetadata(Base):
     analysis = relationship("AnalysisHistory", back_populates="metadata_row")
 
 
+# ── Session helpers ────────────────────────────────────────────────────────────
 
 async def get_db() -> AsyncSession:
     session = AsyncSessionLocal()
@@ -211,19 +233,17 @@ async def get_db() -> AsyncSession:
         yield session
         await session.commit()
     except Exception:
-        # FIX 44: Roll back on any session error before propagating.
         await session.rollback()
         raise
     finally:
         await session.close()
 
 
-
 async def init_db() -> None:
     """Create all tables if they do not exist. Called once at application startup."""
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
-    logger.info("Database tables initialised (PostgreSQL)")
+    logger.info("Database tables initialised (Supabase PostgreSQL)")
 
 
 async def drop_all() -> None:

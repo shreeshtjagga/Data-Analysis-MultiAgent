@@ -71,9 +71,9 @@ def _build_llm_prompt(slim_stats: dict) -> str:
         "Respond with ONLY valid JSON (no markdown, no explanation):",
         "{",
         '  "headline": "One plain-English conclusion from the data in one short sentence.",',
-        '  "data_info": ["3-5 simple sentences about WHAT this dataset contains: its size, columns, and topic. No analysis here, just facts."],',
-        '  "findings": ["5-8 plain-English findings, each with a specific number. Example: The average age is 34 years. No vague phrases like values vary."],',
-        '  "recommendations": ["ONLY include items here if a finding is genuinely actionable. Examples: a dominant group worth focusing on, an outlier to investigate, a data quality issue, or a pattern with business implications. If nothing is clearly actionable, return an empty array []. Start each item with a verb."]',
+        '  "data_info": ["3-5 simple sentences about WHAT this dataset contains: its size, columns, and topic. No analysis here, just facts. EACH sentence is a SEPARATE array element."],',
+        '  "findings": ["Put EACH finding in its OWN array element. 5-8 findings total. One sentence per element. Each must include a specific number. WRONG: one long string with all findings. RIGHT: [\"Finding 1.\", \"Finding 2.\", \"Finding 3.\"]"],',
+        '  "recommendations": ["ONLY include items here if a finding is genuinely actionable. Each recommendation is a SEPARATE array element. Examples: a dominant group worth focusing on, an outlier to investigate, a data quality issue, or a pattern with business implications. If nothing is clearly actionable, return an empty array []. Start each item with a verb."]',
         "}",
     ])
 
@@ -252,10 +252,30 @@ def insights_agent(state: AnalysisState) -> AnalysisState:
 
         llm_result = _llm_insights(slim_stats)
         if llm_result:
+            raw_findings = llm_result.get("findings", [])
+            # Post-processing: LLM sometimes returns all findings concatenated
+            # into one or two strings.  Split them into separate items if needed.
+            if isinstance(raw_findings, list) and len(raw_findings) <= 2:
+                split_findings = []
+                for item in raw_findings:
+                    if not isinstance(item, str):
+                        split_findings.append(str(item))
+                        continue
+                    # Split on ". " sentence boundaries when a single item is long
+                    if len(item) > 120 and ". " in item:
+                        parts = [s.strip() + "." for s in item.split(". ") if s.strip()]
+                        # Clean up double periods
+                        parts = [p.replace("..", ".") for p in parts]
+                        split_findings.extend(parts)
+                    else:
+                        split_findings.append(item)
+                raw_findings = split_findings
+
             insights = {
                 "headline": llm_result.get("headline"),
                 "data_info": llm_result.get("data_info", []),
-                "findings": llm_result.get("findings", []),
+                "findings": raw_findings,
+                "recommendations": llm_result.get("recommendations", []),
             }
         else:
             insights = _rule_based_insights(stats)
