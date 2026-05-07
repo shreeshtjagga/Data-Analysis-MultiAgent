@@ -14,7 +14,6 @@ export default class ErrorBoundary extends React.Component {
   }
 
   componentDidCatch(error, info) {
-    // Keep a console trail for debugging dataset-specific crashes.
     console.error("Dashboard render error:", error, info);
   }
 

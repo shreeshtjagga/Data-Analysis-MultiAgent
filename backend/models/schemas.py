@@ -55,9 +55,9 @@ class UserLogin(BaseModel):
             raise ValueError(str(exc)) from exc
 
 
-class GoogleLoginRequest(BaseModel):
-    credential: str = Field(..., min_length=1)
-    client_id: Optional[str] = None
+class SyncSessionRequest(BaseModel):
+    access_token: str = Field(..., min_length=1)
+    refresh_token: str = Field(..., min_length=1)
 
 
 class ForgotPasswordRequest(BaseModel):

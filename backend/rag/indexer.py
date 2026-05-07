@@ -1,26 +1,4 @@
-"""
-DataPulse RAG Indexer
-=====================
-Converts analysis results into semantic text chunks stored in Pinecone.
-
-Called once after /analyze completes (as a background task).
-All subsequent /chat queries retrieve from Pinecone.
-
-Chunk text format: plain factual English with exact numbers.
-Every number that could answer a user question must appear in a chunk.
-
-Chunk types built:
-  overview         — dataset size, domain, label, completeness, headline
-  column_stat      — exact stats for every numeric column
-  distribution     — distribution shape description for every numeric column
-  categorical_freq — top values + exact percentages for every categorical column
-  correlation      — every pair where |r| > 0.4, with direction meaning
-  outlier          — exact counts, bounds for every column with outliers
-  data_quality     — missing cells, duplicates, completeness detail
-  insight_finding  — every finding from insights agent, verbatim
-  recommendation   — every recommendation from insights agent, verbatim
-  chart_summary    — what each chart actually shows (highest, lowest, avg values)
-"""
+   
 from __future__ import annotations
 
 import json
@@ -30,17 +8,17 @@ from typing import Any, Optional
 
 logger = logging.getLogger(__name__)
 
-# Redis key template for chunk text backup (keyword fallback)
+                                                             
 _REDIS_CHUNKS_KEY = "rag:texts:{}"
-_REDIS_TTL        = 259200  # 3 days
+_REDIS_TTL        = 259200          
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# Number / text formatting helpers
-# ─────────────────────────────────────────────────────────────────────────────
+                                                                               
+                                  
+                                                                               
 
 def _f(v: Any, decimals: int = 2) -> str:
-    """Format a number cleanly. Returns 'N/A' for None / NaN / Inf."""
+                                                                      
     try:
         x = float(v)
         if math.isnan(x) or math.isinf(x):
@@ -86,9 +64,9 @@ def _skew_to_english(skew: Any) -> str:
         return "shape unknown"
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# Individual chunk builders
-# ─────────────────────────────────────────────────────────────────────────────
+                                                                               
+                           
+                                                                               
 
 def _build_overview(stats: dict, insights: dict) -> dict:
     profile      = stats.get("dataset_profile") or {}
@@ -299,10 +277,7 @@ def _build_recommendation(idx: int, rec: str) -> dict:
 
 
 def _build_chart_chunk(key: str, fig_data: Any) -> Optional[dict]:
-    """
-    Extract real data from a Plotly figure dict/JSON and write it as a
-    factual text chunk.  This is what makes chart explanations grounded.
-    """
+       
     try:
         fig = json.loads(fig_data) if isinstance(fig_data, str) else fig_data
         if not isinstance(fig, dict):
@@ -367,9 +342,9 @@ def _build_chart_chunk(key: str, fig_data: Any) -> Optional[dict]:
         return None
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# Main public functions
-# ─────────────────────────────────────────────────────────────────────────────
+                                                                               
+                       
+                                                                               
 
 async def build_rag_index(
     file_hash:    str,
@@ -378,23 +353,11 @@ async def build_rag_index(
     charts:       dict,
     redis_client,
 ) -> int:
-    """
-    Build and store the complete RAG index for one analysis.
-
-    Args:
-        file_hash:    SHA-256 of the uploaded file (used as Pinecone namespace)
-        stats:        stats_summary from AnalysisState
-        insights:     insights dict from insights_agent
-        charts:       serialized charts {key: plotly_json_dict_or_str}
-        redis_client: aioredis client from backend/core/cache._get_client()
-
-    Returns:
-        Number of chunks indexed (0 on failure)
-    """
+       
     import asyncio
     from .pinecone_client import embed_texts, upsert_chunks, delete_namespace
 
-    # ── Build all raw text chunks ─────────────────────────────────────────
+                                                                            
     raw_chunks: list[dict] = []
 
     raw_chunks.append(_build_overview(stats, insights))
@@ -403,17 +366,17 @@ async def build_rag_index(
     row_count       = max(stats.get("row_count", 1), 1)
     missing_pct_map = stats.get("missing_percentage") or {}
 
-    # Numeric columns → stats chunk + distribution chunk
+                                                        
     for col, d in (stats.get("numeric_columns") or {}).items():
         pct = missing_pct_map.get(col, 0.0)
         raw_chunks.append(_build_column_stat(col, d, pct, row_count))
         raw_chunks.append(_build_distribution(col, d))
 
-    # Categorical columns
+                         
     for col, d in (stats.get("categorical_columns") or {}).items():
         raw_chunks.append(_build_categorical(col, d, row_count))
 
-    # Correlations (only |r| > 0.4)
+                                   
     for corr in (stats.get("strong_correlations") or []):
         c1 = corr.get("col1", "")
         c2 = corr.get("col2", "")
@@ -421,22 +384,22 @@ async def build_rag_index(
         if c1 and c2 and abs(r) > 0.4:
             raw_chunks.append(_build_correlation(c1, c2, r))
 
-    # Outliers
+              
     for col, d in (stats.get("outliers") or {}).items():
         if d.get("count", 0) > 0:
             raw_chunks.append(_build_outlier(col, d, row_count))
 
-    # Insight findings (verbatim — every finding)
+                                                 
     for i, finding in enumerate(insights.get("findings") or []):
         if finding and isinstance(finding, str):
             raw_chunks.append(_build_finding(i, finding))
 
-    # Recommendations (verbatim)
+                                
     for i, rec in enumerate(insights.get("recommendations") or []):
         if rec and isinstance(rec, str):
             raw_chunks.append(_build_recommendation(i, rec))
 
-    # Chart summaries (extract actual Plotly values)
+                                                    
     for key, fig_data in (charts or {}).items():
         chunk = _build_chart_chunk(key, fig_data)
         if chunk:
@@ -446,7 +409,7 @@ async def build_rag_index(
         logger.warning("RAG indexer: 0 chunks built for %s", file_hash[:8])
         return 0
 
-    # ── Embed all chunks via Pinecone Inference API (sync call → thread) ──
+                                                                            
     texts      = [c["text"] for c in raw_chunks]
     embeddings = await asyncio.to_thread(embed_texts, texts)
 
@@ -457,11 +420,11 @@ async def build_rag_index(
     for i, chunk in enumerate(raw_chunks):
         chunk["embedding"] = embeddings[i] if i < len(embeddings) else None
 
-    # ── Upsert to Pinecone (delete old namespace first for clean re-index) ─
+                                                                             
     await asyncio.to_thread(delete_namespace, file_hash)
     count = await asyncio.to_thread(upsert_chunks, file_hash, raw_chunks)
 
-    # ── Back up chunk texts to Redis (keyword fallback) ───────────────────
+                                                                            
     try:
         texts_backup = [
             {
@@ -495,21 +458,14 @@ async def retrieve_chunks(
     k:            int = 8,
     redis_client  = None,
 ) -> list[dict]:
-    """
-    Retrieve the top-k most relevant chunks for a question.
-
-    Primary:  Pinecone vector search (semantic — best quality)
-    Fallback: Redis keyword search (if Pinecone is unreachable)
-
-    Returns list of chunk dicts sorted by relevance (best first).
-    """
+       
     import asyncio
     from .pinecone_client import embed_query, query_chunks
 
     if not file_hash:
         return []
 
-    # Primary: Pinecone semantic search
+                                       
     q_vec = await asyncio.to_thread(embed_query, question)
     if q_vec is not None:
         results = await asyncio.to_thread(query_chunks, file_hash, q_vec, k)
@@ -521,7 +477,7 @@ async def retrieve_chunks(
             )
             return results
 
-    # Fallback: Redis keyword search
+                                    
     logger.warning("RAG: Pinecone unavailable, falling back to Redis keyword search")
     if redis_client is None:
         return []

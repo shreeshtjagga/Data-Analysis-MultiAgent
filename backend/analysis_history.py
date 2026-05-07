@@ -1,4 +1,3 @@
-
 import hashlib
 import json
 import logging
@@ -29,7 +28,6 @@ def _to_json(value) -> Optional[str]:
     if value is None:
         return None
     cleaned = sanitize_for_json(value)
-    # orjson.dumps returns bytes, so we decode it to str for the database TEXT column
     return orjson.dumps(cleaned, default=json_default).decode('utf-8')
 
 
@@ -39,7 +37,6 @@ def _serialize_charts(charts: dict) -> dict:
     out = {}
     for key, fig in charts.items():
         try:
-            # FIX 26: Accept both Plotly figure objects and already-serialized dicts.
             if hasattr(fig, "to_plotly_json"):
                 fig_json = fig.to_plotly_json()
                 fig_json.pop("uid", None)
@@ -61,20 +58,7 @@ def compute_file_hash(file_bytes: bytes, file_name: Optional[str] = None) -> str
 
 
 async def _enforce_cache_policy(user_id: int, db: AsyncSession) -> None:
-    """
-    Enforce two eviction policies:
-      1. Time-based: delete analyses older than CACHE_TTL_DAYS.
-      2. Count-based: keep only the newest MAX_CACHE_FILES_PER_USER analyses.
-
-    IMPORTANT: SQLAlchemy Core delete() does NOT trigger ORM cascade='all,
-    delete-orphan'. We must manually delete AnalysisMetadata rows (child) before
-    deleting AnalysisHistory rows (parent) to avoid FK violations and orphaned
-    metadata rows that ghost on the history page.
-    """
-    # ── 1. Time-based eviction ────────────────────────────────────────────────
     cutoff = datetime.now(tz=timezone.utc) - timedelta(days=CACHE_TTL_DAYS)
-
-    # Collect IDs of expired analyses first (so we can clean metadata + Redis)
     expired_result = await db.execute(
         select(AnalysisHistory.id, AnalysisHistory.file_hash)
         .where(AnalysisHistory.user_id == user_id)
@@ -85,7 +69,6 @@ async def _enforce_cache_policy(user_id: int, db: AsyncSession) -> None:
     expired_hashes = [r[1] for r in expired_rows]
 
     if expired_ids:
-        # Delete child metadata first, then parent history
         await db.execute(
             delete(AnalysisMetadata).where(AnalysisMetadata.analysis_id.in_(expired_ids))
         )
@@ -96,14 +79,11 @@ async def _enforce_cache_policy(user_id: int, db: AsyncSession) -> None:
             "Evicted %d expired analyses for user %d (older than %d days)",
             len(expired_ids), user_id, CACHE_TTL_DAYS,
         )
-        # Purge Redis so stale cache hits don't resurrect evicted analyses
         for file_hash in expired_hashes:
             try:
                 await redis_cache.delete(redis_cache.analysis_key(user_id, file_hash))
             except Exception:
                 pass
-
-    # ── 2. Count-based eviction ───────────────────────────────────────────────
     result = await db.execute(
         select(AnalysisHistory.id, AnalysisHistory.file_hash)
         .where(AnalysisHistory.user_id == user_id)
@@ -115,7 +95,6 @@ async def _enforce_cache_policy(user_id: int, db: AsyncSession) -> None:
     overflow_hashes = [r[1] for r in overflow_rows]
 
     if overflow_ids:
-        # Delete child metadata first, then parent history
         await db.execute(
             delete(AnalysisMetadata).where(AnalysisMetadata.analysis_id.in_(overflow_ids))
         )
@@ -123,7 +102,6 @@ async def _enforce_cache_policy(user_id: int, db: AsyncSession) -> None:
             delete(AnalysisHistory).where(AnalysisHistory.id.in_(overflow_ids))
         )
         logger.info("Evicted %d overflow analyses for user %d", len(overflow_ids), user_id)
-        # Purge Redis for evicted analyses
         for file_hash in overflow_hashes:
             try:
                 await redis_cache.delete(redis_cache.analysis_key(user_id, file_hash))
@@ -194,7 +172,6 @@ async def save_analysis(
                 errors=_to_json(errors),
                 completed_agents=_to_json(analysis_result.get("completed_agents", [])),
             )
-            # FIX 29: Ensure analysis_id is assigned on duplicate-hash IntegrityError paths.
             try:
                 db.add(row)
                 await db.flush()
@@ -343,7 +320,6 @@ async def get_analysis_by_hash(
 async def get_user_analysis_history(
     db: AsyncSession, user_id: int, limit: int = 20
 ) -> list[dict]:
-    """Return lightweight metadata records for the user's analyses."""
     result = await db.execute(
         select(AnalysisMetadata, AnalysisHistory.id, AnalysisHistory.file_hash)
         .join(AnalysisHistory, AnalysisMetadata.analysis_id == AnalysisHistory.id)
@@ -373,7 +349,6 @@ async def get_user_analysis_history(
 async def get_analysis_by_id(
     db: AsyncSession, user_id: int, analysis_id: int
 ) -> Optional[dict]:
-    """Return full analysis payload for one analysis id owned by the user."""
     result = await db.execute(
         select(AnalysisHistory.file_hash).where(
             AnalysisHistory.id == analysis_id,
@@ -390,8 +365,6 @@ async def get_analysis_by_id(
 async def delete_analysis(
     db: AsyncSession, user_id: int, analysis_id: int
 ) -> dict:
-    # First, fetch the file_hash we need for Redis + Parquet cleanup,
-    # and confirm this analysis belongs to the user.
     fetch_result = await db.execute(
         select(AnalysisHistory.file_hash).where(
             AnalysisHistory.id == analysis_id,
@@ -402,9 +375,6 @@ async def delete_analysis(
 
     if file_hash is None:
         return {"success": False, "message": "Analysis not found or access denied"}
-
-    # FIX: SQLAlchemy Core delete() does NOT trigger ORM cascade='all, delete-orphan'.
-    # Delete AnalysisMetadata (child) first, then AnalysisHistory (parent).
     await db.execute(
         delete(AnalysisMetadata).where(AnalysisMetadata.analysis_id == analysis_id)
     )
@@ -415,8 +385,6 @@ async def delete_analysis(
         )
     )
     await db.commit()
-
-    # Purge Redis cache entry
     cache_key = redis_cache.analysis_key(user_id, file_hash)
     await redis_cache.delete(cache_key)
 

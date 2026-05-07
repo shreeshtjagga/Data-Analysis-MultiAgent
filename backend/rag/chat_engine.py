@@ -1,19 +1,4 @@
-"""
-
-DataPulse RAG Chat Engine
-=========================
-Answers every user question using:
-  1. Pinecone semantic retrieval (top-8 relevant chunks)
-  2. Parquet query for exact numbers (when structured query fits)
-  3. Groq llama-3.3-70b-versatile for synthesis
-The synthesis LLM operates under a strict grounding contract:
-  - Context has the answer   -> cite exact numbers
-  - Context does not         -> admit it clearly, pivot to related data
-  - Never invent facts
-  - Never escape with vague answers ("the data shows various trends")
-Also handles chart explanations with extracted Plotly values.
-
-"""
+   
 
 from __future__ import annotations
 import asyncio
@@ -121,21 +106,15 @@ async def _plan_and_run_query(
     col_metadata: dict = None,
 ) -> Optional[dict]:
 
-    """
-
-    Use llama-3.1-8b-instant to decide what Parquet query to run.
-    Run it via data_agent.run_data_query.
-    Returns query result dict or None.
-
-    """
+       
 
     from ..core.data_agent import run_data_query
 
-    # Questions that never need a structured query
+                                                  
 
-    # Keep this list VERY tight - overly broad triggers cause the planner to skip
+                                                                                 
 
-    # legitimate data questions (e.g. "what can you tell me about revenue" was being skipped)
+                                                                                             
 
     _SKIP_TRIGGERS = {
         "hello", "hi", "hey", "thanks", "thank you", "goodbye", "good morning",
@@ -143,7 +122,7 @@ async def _plan_and_run_query(
     if question.lower().strip() in _SKIP_TRIGGERS:
         return None
 
-    # Build enriched column info for the planner prompt
+                                                       
     if col_metadata:
         col_info_str = json.dumps(col_metadata, ensure_ascii=True, default=str)
     else:
@@ -230,11 +209,11 @@ Return ONLY the JSON object or the word NONE. No explanation whatsoever."""
             return None
         result = await asyncio.to_thread(run_data_query, file_hash, qtype, params)
 
-        # If primary query came back empty/error, try a search fallback
+                                                                       
 
-        # but SKIP the fallback for correlation/relationship questions - a text
+                                                                               
 
-        # search on those returns random rows which pollutes the LLM context.
+                                                                             
 
         is_empty = (
             not result
@@ -246,7 +225,7 @@ Return ONLY the JSON object or the word NONE. No explanation whatsoever."""
         is_relationship_q = any(w in question.lower() for w in _RELATIONSHIP_WORDS)
         if is_empty and not is_relationship_q:
 
-            # Extract meaningful nouns from the question for search
+                                                                   
 
             stop = {
                 "what", "when", "where", "which", "does", "have", "many", "much",
@@ -272,23 +251,17 @@ Return ONLY the JSON object or the word NONE. No explanation whatsoever."""
         logger.warning("Query planner failed: %s", exc)
         return None
 
-# ────────────────────────────────────────────────
-# Context assembly
+                                                  
+                  
 
-# ────────────────────────────────────────────────
+                                                  
 def _build_static_context(stats: dict, insights: dict) -> str:
 
-    """
-
-    Build a compact, structured context block from pre-computed stats and insights.
-    This grounds the LLM for relationship, summary, trend, quality, and methodology
-    questions without needing a live Parquet query or RAG chunk.
-
-    """
+       
 
     parts: list[str] = []
 
-    # Dataset overview
+                      
 
     row_count = stats.get("row_count")
     col_count = stats.get("column_count")
@@ -296,7 +269,7 @@ def _build_static_context(stats: dict, insights: dict) -> str:
         parts.append("=== DATASET OVERVIEW ===")
         parts.append(f"  Rows: {row_count or '?'}, Columns: {col_count or '?'}")
 
-    # All column names (so LLM knows what exists in the dataset)
+                                                                
 
     all_cols = []
     all_cols.extend(list((stats.get("numeric_columns") or {}).keys()))
@@ -308,13 +281,13 @@ def _build_static_context(stats: dict, insights: dict) -> str:
     if all_cols:
         parts.append(f"  All columns: {all_cols}")
 
-    # Date range (if available)
+                               
 
     date_range = stats.get("date_range") or {}
     if date_range:
         parts.append(f"  Date range: {date_range.get('min', '?')} to {date_range.get('max', '?')}")
 
-    # Dataset profile
+                     
 
     profile = stats.get("dataset_profile") or {}
     if profile:
@@ -325,7 +298,7 @@ def _build_static_context(stats: dict, insights: dict) -> str:
         if desc:
             parts.append(f"  Description: {desc}")
 
-    # Data quality
+                  
 
     quality = stats.get("data_quality") or {}
     if quality:
@@ -340,7 +313,7 @@ def _build_static_context(stats: dict, insights: dict) -> str:
         if dupes is not None:
             parts.append(f"  Duplicate rows removed: {dupes}")
 
-    # Imputations
+                 
 
     imputations = stats.get("imputations") or []
     if imputations:
@@ -348,9 +321,9 @@ def _build_static_context(stats: dict, insights: dict) -> str:
         for imp in imputations[:8]:
             parts.append(f"  {imp.get('column','?')}: filled {imp.get('count','?')} missing with {imp.get('strategy','?')} ({imp.get('fill_value','?')})")
 
-    # Correlations - critical for "relationship between X and Y" questions
+                                                                          
 
-    # Try both key names used across different pipeline versions
+                                                                
 
     correlations = (
         stats.get("strong_correlations")
@@ -370,7 +343,7 @@ def _build_static_context(stats: dict, insights: dict) -> str:
             except (TypeError, ValueError):
                 parts.append(f"  {c1} <-> {c2}: r={corr.get('correlation')}")
 
-    # Numeric column summaries
+                              
 
     num_cols = stats.get("numeric_columns") or {}
     if num_cols:
@@ -381,9 +354,9 @@ def _build_static_context(stats: dict, insights: dict) -> str:
                 f"median={cs.get('median','?')}, min={cs.get('min','?')}, max={cs.get('max','?')}, std={cs.get('std','?')}"
             )
 
-    # Categorical column summaries
+                                  
 
-    # Use top_5_values (primary key from stats pipeline) with top_values as fallback
+                                                                                    
 
     cat_cols = stats.get("categorical_columns") or {}
     if cat_cols:
@@ -392,12 +365,12 @@ def _build_static_context(stats: dict, insights: dict) -> str:
             top_vals = cs.get("top_5_values") or cs.get("top_values") or {}
             top_str  = ", ".join(f"{k}:{v}" for k, v in list(top_vals.items())[:5]) if top_vals else "?"
 
-            # unique_values is the key used by stats pipeline; nunique is a fallback
+                                                                                    
 
             nunique  = cs.get("unique_values") or cs.get("nunique") or "?"
             parts.append(f"  {col}: {nunique} unique values. Top: {top_str}")
 
-    # Key findings - try both key names used across pipeline versions
+                                                                     
 
     findings = (
         (insights.get("key_findings") or [])
@@ -409,14 +382,14 @@ def _build_static_context(stats: dict, insights: dict) -> str:
             parts.append(f"  * {f}")
     
 
-    # Headline insight
+                      
 
     headline = insights.get("headline") or ""
     if headline:
         parts.append("=== HEADLINE INSIGHT ===")
         parts.append(f"  {headline}")
 
-    # Outlier summary
+                     
 
     outliers = stats.get("outliers") or {}
     if outliers:
@@ -453,18 +426,13 @@ def _assemble_context(
         parts.append("")
     return "\n".join(parts)[:_MAX_CONTEXT_CHARS]
 
-# ────────────────────────────────────────────────
-# Chart fact extractor
+                                                  
+                      
 
-# ────────────────────────────────────────────────
+                                                  
 def _extract_chart_facts(fig_data: Any, chart_key: str) -> str:
 
-    """
-
-    Pull every readable number from a Plotly chart JSON.
-    This is what the LLM uses to explain charts without hallucinating.
-
-    """
+       
 
     try:
         fig = json.loads(fig_data) if isinstance(fig_data, str) else fig_data
@@ -511,41 +479,41 @@ def _extract_chart_facts(fig_data: Any, chart_key: str) -> str:
 
 def _sanitize_llm_output(text: str) -> str:
 
-    """Strip any leaked system prompt fragments from LLM output."""
+                                                                   
 
     import re as _re
 
-    # Remove leaked grounding contract markers
+                                              
 
     text = _re.sub(r'[=]{3,}[^=\n]*[=]{3,}', '', text)
 
-    # Remove RULE N: references
+                               
 
     text = _re.sub(r'RULE \d+\s*\([^)]*\)[^.]*\.', '', text)
     text = _re.sub(r'RULE \d+:', '', text)
 
-    # Remove CONTEXT: blocks
+                            
 
     text = _re.sub(r'CONTEXT:\s*', '', text, flags=_re.IGNORECASE)
 
-    # Remove any "As an AI" or "As a data analyst" meta-disclaimers
+                                                                   
 
     text = _re.sub(r'As an AI[^.]*\.\s*', '', text, flags=_re.IGNORECASE)
     text = _re.sub(r'As a (language|AI|data)[^.]*\.\s*', '', text, flags=_re.IGNORECASE)
 
-    # Remove internal prompt references
+                                       
 
     text = _re.sub(r'(?:GROUNDING CONTRACT|CHART DISPLAY RULES|MANDATORY)[^.]*\.?', '', text, flags=_re.IGNORECASE)
     text = _re.sub(r'\[?(NUMERIC|CATEGORICAL|DATASET|CORRELATION|DATA QUALITY)\s*\w*\s*\w*\]?', '', text)
 
-    # Clean up extra whitespace
+                               
 
     text = _re.sub(r'\n{3,}', '\n\n', text)
     text = _re.sub(r'  +', ' ', text)
     return text.strip()
 
-# ────────────────────────────────────────────────
-# ────────────────────────────────────────────────
+                                                  
+                                                  
 async def answer_question(
 
     question:             str,
@@ -559,14 +527,7 @@ async def answer_question(
     redis_client,
 ) -> dict:
 
-    """
-
-    Two-layer answer pipeline:
-      Layer 1 (Analytical): Generate pandas code → execute on full Parquet → answer from REAL result
-      Layer 2 (Reasoning):  RAG retrieval + static context → grounded synthesis
-    Returns: {"answer": str, "data_queried": bool, "new_chart": None}
-
-    """
+       
 
     from .indexer import retrieve_chunks
     from .pandas_executor import (
@@ -579,16 +540,16 @@ async def answer_question(
     )
     from ..core.data_agent import _load_df
 
-    # ── Challenge detection: "are you sure?" → re-run last code ──────────
+                                                                           
     if is_challenge(question) and conversation_history:
-        # Find the last assistant answer to confirm it
+                                                      
         last_answer = ""
         for msg in reversed(conversation_history):
             if str(msg.get("role", "")).lower() in ("assistant", "ai"):
                 last_answer = str(msg.get("content", ""))
                 break
         if last_answer:
-            # Re-verify by running the analytical path again
+                                                            
             df, load_err = _load_df(file_hash)
             if df is not None and not df.empty:
                 try:
@@ -622,22 +583,22 @@ async def answer_question(
                 except Exception as exc:
                     logger.warning("Challenge re-verification failed: %s", exc)
 
-    # ── Classify question type ───────────────────────────────────────────
+                                                                           
     q_type = await classify_question(question, groq_client)
     logger.info("Question classified as: %s — '%s'", q_type, question[:80])
 
-    # ── Build static context (used by both paths) ────────────────────────
+                                                                           
     static_ctx = _build_static_context(stats, insights)
 
-    # ══════════════════════════════════════════════════════════════════════
-    # LAYER 1 — Analytical Path (pandas code execution)
-    # ══════════════════════════════════════════════════════════════════════
+                                                                            
+                                                       
+                                                                            
     if q_type == "analytical":
         df, load_err = _load_df(file_hash)
 
         if df is not None and not df.empty:
             try:
-                # Step 1: Generate pandas code
+                                              
                 code = await generate_pandas_code(
                     question=question,
                     df=df,
@@ -645,15 +606,15 @@ async def answer_question(
                 )
                 logger.info("Generated pandas code:\n%s", code)
 
-                # Step 2: Execute safely
+                                        
                 exec_result = safe_execute(code, df)
 
                 if exec_result["error"] is None:
-                    # Step 3: Format result and build rich context
+                                                                  
                     formatted = format_result(exec_result["result"])
                     rich_ctx = build_rich_context(exec_result["result"], df, question)
 
-                    # Step 4: Synthesize human answer from REAL result
+                                                                      
                     messages = [
                         {"role": "system", "content": _data_system_prompt(file_name, chart_keys)},
                         {
@@ -667,7 +628,7 @@ async def answer_question(
                         },
                     ]
 
-                    # Include conversation history (last 4 turns)
+                                                                 
                     _SAFE_ROLES = {"assistant", "ai", "user", "human"}
                     for msg in (conversation_history or [])[-4:]:
                         raw_role = str(msg.get("role", "")).lower()
@@ -691,7 +652,7 @@ async def answer_question(
                     return {"answer": answer, "data_queried": True, "new_chart": None}
 
                 else:
-                    # Code execution failed — log and fall through to reasoning path
+                                                                                    
                     logger.warning(
                         "Pandas execution failed, falling back to reasoning: %s",
                         exec_result["error"],
@@ -704,11 +665,11 @@ async def answer_question(
             if load_err:
                 logger.warning("Parquet load failed: %s", load_err)
 
-    # ══════════════════════════════════════════════════════════════════════
-    # LAYER 2 — Reasoning Path (RAG + static context + optional query)
-    # ══════════════════════════════════════════════════════════════════════
+                                                                            
+                                                                      
+                                                                            
 
-    # Build column metadata for the query planner fallback
+                                                          
     col_types: dict[str, str] = {}
     col_metadata: dict[str, dict] = {}
 
@@ -736,7 +697,7 @@ async def answer_question(
             col_types[col_name] = "datetime"
             col_metadata[col_name] = {"type": "datetime"}
 
-    # Run RAG retrieval + query planner in parallel
+                                                   
     retrieval_coro = retrieve_chunks(
         file_hash=file_hash,
         question=question,
@@ -759,7 +720,7 @@ async def answer_question(
     chunks, data_result = await asyncio.gather(retrieval_coro, query_coro)
     context = _assemble_context(chunks, data_result, static_ctx)
 
-    # Assemble message list
+                           
     messages = [
         {"role": "system", "content": _data_system_prompt(file_name, chart_keys)},
         {"role": "system", "content": f"CONTEXT:\n{context}"},
@@ -774,7 +735,7 @@ async def answer_question(
         messages.append({"role": role, "content": str(msg.get("content", ""))[:1000]})
     messages.append({"role": "user", "content": question})
 
-    # Anti-hallucination safeguard
+                                  
     has_chunks = bool(chunks)
     has_query = data_result is not None
     if not has_chunks and not has_query and not static_ctx.strip():
@@ -787,7 +748,7 @@ async def answer_question(
             ),
         })
 
-    # Synthesize answer
+                       
     try:
         temp = 0.05 if data_result is not None else 0.1
         completion = await asyncio.to_thread(
@@ -824,20 +785,15 @@ async def answer_chart_explanation(
     redis_client,
 ) -> dict:
 
-    """
-
-    Explain a chart using extracted Plotly values + RAG column-stat context.
-    Returns: {"answer": str, "data_queried": False, "new_chart": None}
-
-    """
+       
 
     from .indexer import retrieve_chunks
 
-    # Extract real numbers from the Plotly chart JSON
+                                                     
 
     chart_facts = _extract_chart_facts(chart_data, chart_key)
 
-    # Also pull the most relevant column-stat chunks for additional context
+                                                                           
 
     chunks = await retrieve_chunks(
         file_hash=file_hash,
@@ -858,8 +814,8 @@ async def answer_chart_explanation(
         },
     ]
 
-    # Include conversation history so follow-up questions maintain context
-    # (e.g. "what about the outliers in it?" keeps the "it" reference)
+                                                                          
+                                                                      
     _SAFE_ROLES = {"assistant", "ai", "user", "human"}
     for msg in (conversation_history or [])[-4:]:
         raw_role = str(msg.get("role", "")).lower()
@@ -879,7 +835,7 @@ async def answer_chart_explanation(
         )
         answer = (completion.choices[0].message.content or "").strip()
 
-        # Always append the chart tag so the frontend renders the chart
+                                                                       
 
         if chart_key and "[CHART:" not in answer:
             answer = f"{answer}\n[CHART: {chart_key}]"

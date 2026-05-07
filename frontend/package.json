@@ -10,7 +10,7 @@
     "lint": "eslint src --ext .js,.jsx --report-unused-disable-directives --max-warnings 0"
   },
   "dependencies": {
-    "@react-oauth/google": "^0.13.4",
+    "@supabase/supabase-js": "^2.105.3",
     "jspdf": "^2.5.2",
     "plotly.js-dist-min": "^2.35.0",
     "react": "^18.3.1",

@@ -1,5 +1,3 @@
-"""Architect Agent: cleans data, classifies columns, detects types, profiles the dataset."""
-
 import json
 import logging
 import os
@@ -13,14 +11,12 @@ from ..core.llm_client import get_groq_client
 
 logger = logging.getLogger(__name__)
 
-_NULL_THRESHOLD        = 0.60   # matches imputation threshold in utils.py
-_CARDINALITY_THRESHOLD = 0.90   # >90% unique values → high-cardinality ID
-_QUASI_CONST_THRESHOLD = 0.95   # one value in >95% of rows → not useful
-_FREE_TEXT_AVG_LEN     = 30     # avg string length > this → free-text column
-_FREE_TEXT_CARDINALITY = 0.60   # >60% unique values + long text = free text
+_NULL_THRESHOLD = 0.60
+_CARDINALITY_THRESHOLD = 0.90
+_QUASI_CONST_THRESHOLD = 0.95
+_FREE_TEXT_AVG_LEN = 30
+_FREE_TEXT_CARDINALITY = 0.60
 
-# Column name markers that strongly indicate metadata / internal ID columns.
-# We focus on explicit markers to avoid matching stats like 'wickets' (which contains 'key').
 _ID_PATTERNS = frozenset({
     "uuid", "guid", "hash", "pk", "token", "secret", "password", "passwd", "pwd",
     "email", "e-mail", "mail", "phone", "mobile", "tel", "ipaddress", "ip_address",
@@ -28,9 +24,7 @@ _ID_PATTERNS = frozenset({
 })
 
 def _is_id_like_name(col: str) -> bool:
-    """Check if a column name explicitly signals it's an ID/Metadata column."""
     c = col.lower().replace("_", "").replace("-", "")
-    # Hard matches for common id/key/index abbreviations if they are stand-alone or suffix
     if c in ("id", "key", "idx", "index", "pk"):
         return True
     if c.endswith("id") or c.startswith("id") or "uuid" in c:
@@ -49,27 +43,27 @@ def _classify_columns(df: pd.DataFrame) -> dict:
         nunique = df[col].nunique(dropna=True)
         col_lower = col.lower()
 
-        # 1. Mostly null
+                        
         if null_ratio > _NULL_THRESHOLD:
             reason = f"mostly_null ({null_ratio:.0%} missing)"
 
-        # 2. Constant or quasi-constant (one value dominates ≥95% of rows)
+                                                                          
         elif nunique <= 1:
             first_val = df[col].dropna().unique()[0] if nunique == 1 else "N/A"
             reason = f"constant (only value: {first_val!r})"
         elif nunique >= 2:
-            vc = df[col].value_counts(dropna=True)   # computed once, reused below
+            vc = df[col].value_counts(dropna=True)                                
             top_freq = vc.iloc[0] / n
             if top_freq >= _QUASI_CONST_THRESHOLD:
                 reason = f"quasi_constant ({top_freq:.0%} = {vc.index[0]!r})"
 
-        # 3. High-cardinality ID column (name matches ID pattern + very high uniqueness)
+                                                                                        
         if reason is None and df[col].dtype == "object" and n > 0:
             if (nunique / n > _CARDINALITY_THRESHOLD
                     and _is_id_like_name(col)):
                 reason = f"high_cardinality_id ({nunique} unique / {n} rows)"
 
-        # 4. Free-text column — sample 200 rows to avoid full-series .str.len()
+                                                                               
         if reason is None and df[col].dtype == "object" and nunique > 0:
             non_null = df[col].dropna().head(200)
             avg_len = non_null.astype(str).str.len().mean() if len(non_null) > 0 else 0
@@ -102,7 +96,6 @@ def profile_dataset(df: pd.DataFrame, column_types: dict) -> dict:
         return fallback
 
     def sanitize_str(s: str) -> str:
-        # Prevent prompt injection and handle null bytes
         return str(s).replace("\x00", "").replace("ignore previous instructions", "[clean]").strip()[:100]
 
     columns_payload = []
@@ -178,7 +171,6 @@ def architect_agent(state: AnalysisState) -> AnalysisState:
     state.current_agent = "architect"
     logger.info("Architect agent started")
 
-    # Hard guard: nothing to process
     if state.raw_df is None or state.raw_df.empty:
         add_pipeline_error(
             state.errors,
@@ -195,23 +187,14 @@ def architect_agent(state: AnalysisState) -> AnalysisState:
     if state.stats_summary is None:
         state.stats_summary = {}
 
-    # ── Step 1: Clean the data ──────────────────────────────────────────────
-    # If cleaning fails for ANY reason, fall back to raw data so the pipeline
-    # is never blocked by a formatting edge case in the input file.
     clean_df = None
     try:
         clean_df, impute_logs = clean_dataframe(raw_df.copy())
-        # FIX 7: Only persist imputations after successful clean_dataframe completion
         if impute_logs:
             state.stats_summary["imputations"] = impute_logs
-            
-        # Detect columns that were converted from percentage strings (e.g. "85%" → 0.85)
-        # Store so chart builders can format axes correctly
         pct_cols = [
             log["column"] for log in (impute_logs or [])
-            # clean_dataframe logs "Converted percentage column" for these
         ] if impute_logs else []
-        # Also detect by value range: 0–1 float columns with "rate","pct","percent" in name
         for col in clean_df.select_dtypes(include=["float64", "float32"]).columns:
             col_lower = col.lower()
             if any(kw in col_lower for kw in ("rate", "pct", "percent", "ratio", "share")):
@@ -235,7 +218,6 @@ def architect_agent(state: AnalysisState) -> AnalysisState:
 
     state.clean_df = clean_df
 
-    # ── Step 2: Classify columns ────────────────────────────────────────────
     try:
         classification = _classify_columns(clean_df)
         state.stats_summary["excluded_columns"] = classification["excluded"]
@@ -249,7 +231,6 @@ def architect_agent(state: AnalysisState) -> AnalysisState:
         logger.error("Column classification failed: %s", e)
         state.stats_summary["excluded_columns"] = []
 
-    # ── Step 3: Detect column types ─────────────────────────────────────────
     try:
         state.column_types = detect_column_types(clean_df)
         logger.info("Column types detected: %s", state.column_types)
@@ -257,9 +238,6 @@ def architect_agent(state: AnalysisState) -> AnalysisState:
         logger.error("Column type detection failed: %s", e)
         state.column_types = {}
 
-    # ── Step 4: Profile dataset (MOVED TO GRAPH.PY PARALLEL PATH) ──────────
-    # Profiling is now called concurrently with the statistician in core/graph.py
-    
     state.completed_agents.append("architect")
     logger.info(
         "Architect complete. clean_df has %d rows, %d cols",

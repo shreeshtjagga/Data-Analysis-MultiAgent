@@ -1,5 +1,3 @@
-"""Structured pipeline error helpers."""
-
 from typing import Any, Optional
 
 

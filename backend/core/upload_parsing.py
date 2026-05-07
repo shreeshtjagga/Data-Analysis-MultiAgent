@@ -44,7 +44,6 @@ def validate_upload_magic(parsed_ext: str, file_bytes: bytes) -> None:
     if parsed_ext == "xlsx":
         if not zipfile.is_zipfile(io.BytesIO(file_bytes)):
             raise HTTPException(status_code=400, detail="Invalid XLSX file signature")
-        # FIX 47: Perform deeper XLSX validation for smaller files only.
         if len(file_bytes) < 1_000_000:
             try:
                 from openpyxl import load_workbook
@@ -82,7 +81,6 @@ def detect_csv_delimiter(file_bytes: bytes) -> Optional[str]:
         dialect = csv.Sniffer().sniff(sniff_sample, delimiters=[",", ";", "\t", "|"])
         return dialect.delimiter
     except csv.Error:
-        # FIX 46: Returning None here intentionally falls back to pandas auto-detection.
         return None
 
 
@@ -101,7 +99,6 @@ def read_csv_with_fallback(
         attempts.append({"engine": "python", "sep": None, "encoding": encoding})
     attempts.append({})
 
-    # FIX 45: Rename local parse errors accumulator for clarity.
     parse_errors = []
     for csv_kwargs in attempts:
         try:

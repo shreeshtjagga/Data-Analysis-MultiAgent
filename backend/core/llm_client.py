@@ -7,14 +7,9 @@ from groq import Groq
 logger = logging.getLogger(__name__)
 
 _groq_client = None
-# FIX 1: Protect singleton initialization with lock
 _lock = threading.Lock()
 
 def get_groq_client() -> Groq | None:
-    """
-    Singleton Groq client to be shared across all agents and the API.
-    Reduces HTTP connection overhead.
-    """
     global _groq_client
     if _groq_client is not None:
         return _groq_client
@@ -27,7 +22,7 @@ def get_groq_client() -> Groq | None:
             try:
                 _groq_client = Groq(api_key=api_key)
                 logger.info("Shared Groq client initialized.")
-            except Exception as e:
-                logger.error("Failed to initialize Groq client: %s", e)
+            except Exception:
+                logger.exception("Failed to initialize Groq client")
                 return None
     return _groq_client

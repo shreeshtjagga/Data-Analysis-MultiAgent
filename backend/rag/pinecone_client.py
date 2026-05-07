@@ -1,25 +1,4 @@
-"""
-DataPulse Pinecone Client
-=========================
-Singleton Pinecone client for RAG operations.
-
-Embeddings: Pinecone Inference API (multilingual-e5-large, 1024-dim)
-  - Runs on Pinecone's servers → zero RAM on Render free tier
-  - ~100ms per embed call (network, not CPU)
-  - Free tier: 1M inference units/month (more than enough)
-
-Index: Single serverless index "datapulse-rag"
-Namespace: file_hash (isolates each user's dataset)
-
-Operations:
-  embed_texts(texts)              → list[list[float]]
-  embed_query(text)               → list[float]
-  upsert_chunks(namespace, chunks)→ int (count upserted)
-  query_chunks(namespace, vec, k) → list[dict]
-  namespace_exists(namespace)     → bool
-  delete_namespace(namespace)     → None
-  ping()                          → bool
-"""
+   
 from __future__ import annotations
 
 import logging
@@ -46,7 +25,7 @@ EMBED_DIMS          = 1024
 
 
 def _init_pinecone() -> bool:
-    """Initialize Pinecone client and ensure index exists. Thread-safe singleton."""
+                                                                                    
     global _pinecone_client, _pinecone_index
 
     if _pinecone_index is not None:
@@ -69,7 +48,7 @@ def _init_pinecone() -> bool:
             pc = Pinecone(api_key=PINECONE_API_KEY)
             _pinecone_client = pc
 
-            # Create index if it doesn't exist
+                                              
             existing = [idx.name for idx in pc.list_indexes()]
             if PINECONE_INDEX_NAME not in existing:
                 logger.info("Creating Pinecone index '%s'...", PINECONE_INDEX_NAME)
@@ -82,7 +61,7 @@ def _init_pinecone() -> bool:
                         region=PINECONE_REGION,
                     ),
                 )
-                # Wait for index to become ready
+                                                
                 for _ in range(30):
                     time.sleep(2)
                     try:
@@ -107,11 +86,7 @@ def _init_pinecone() -> bool:
 
 
 def embed_texts(texts: list[str]) -> Optional[list[list[float]]]:
-    """
-    Embed a list of strings using Pinecone Inference API.
-    Runs on Pinecone's servers — zero RAM/CPU cost on Render.
-    Returns list of 1024-dim vectors, or None on failure.
-    """
+       
     if not texts:
         return []
 
@@ -119,7 +94,7 @@ def embed_texts(texts: list[str]) -> Optional[list[list[float]]]:
         return None
 
     try:
-        response = _pinecone_client.inference.embed(  # type: ignore[union-attr]
+        response = _pinecone_client.inference.embed(                            
             model=EMBED_MODEL,
             inputs=texts,
             parameters={"input_type": "passage", "truncate": "END"},
@@ -131,16 +106,12 @@ def embed_texts(texts: list[str]) -> Optional[list[list[float]]]:
 
 
 def embed_query(text: str) -> Optional[list[float]]:
-    """
-    Embed a single query string.
-    Uses input_type="query" for asymmetric retrieval (better accuracy).
-    Returns 1024-dim vector or None on failure.
-    """
+       
     if not _init_pinecone():
         return None
 
     try:
-        response = _pinecone_client.inference.embed(  # type: ignore[union-attr]
+        response = _pinecone_client.inference.embed(                            
             model=EMBED_MODEL,
             inputs=[text],
             parameters={"input_type": "query", "truncate": "END"},
@@ -152,20 +123,7 @@ def embed_query(text: str) -> Optional[list[float]]:
 
 
 def upsert_chunks(namespace: str, chunks: list[dict]) -> int:
-    """
-    Upsert chunks into Pinecone under the given namespace.
-
-    Each chunk must have:
-      chunk_id:   str   (unique ID)
-      text:       str   (the factual text)
-      embedding:  list  (1024-dim vector)
-      chunk_type: str
-      column:     str
-
-    Returns count of chunks upserted, 0 on failure.
-    Pinecone metadata stores text + chunk_type + column for retrieval.
-    Text is truncated to 1000 chars to stay under 40KB metadata limit.
-    """
+       
     if not chunks:
         return 0
     if not _init_pinecone():
@@ -196,7 +154,7 @@ def upsert_chunks(namespace: str, chunks: list[dict]) -> int:
         total = 0
         for i in range(0, len(vectors), batch_size):
             batch = vectors[i : i + batch_size]
-            _pinecone_index.upsert(vectors=batch, namespace=namespace)  # type: ignore[union-attr]
+            _pinecone_index.upsert(vectors=batch, namespace=namespace)                            
             total += len(batch)
         logger.info(
             "Pinecone upserted %d vectors to namespace '%s'", total, namespace[:8]
@@ -212,16 +170,12 @@ def query_chunks(
     query_vector: list[float],
     k: int = 8,
 ) -> list[dict]:
-    """
-    Find top-k most relevant chunks for a query vector.
-    Returns list of dicts: {text, chunk_type, column, score}
-    Sorted by relevance score descending.
-    """
+       
     if not _init_pinecone():
         return []
 
     try:
-        result = _pinecone_index.query(  # type: ignore[union-attr]
+        result = _pinecone_index.query(                            
             vector=query_vector,
             top_k=k,
             namespace=namespace,
@@ -243,14 +197,11 @@ def query_chunks(
 
 
 def namespace_exists(namespace: str) -> bool:
-    """
-    Check if this namespace already has vectors.
-    Used to decide whether to re-index or skip.
-    """
+       
     if not _init_pinecone():
         return False
     try:
-        stats = _pinecone_index.describe_index_stats()  # type: ignore[union-attr]
+        stats = _pinecone_index.describe_index_stats()                            
         ns_stats = (stats.get("namespaces") or {})
         count = ns_stats.get(namespace, {}).get("vector_count", 0)
         return count > 0
@@ -260,16 +211,16 @@ def namespace_exists(namespace: str) -> bool:
 
 
 def delete_namespace(namespace: str) -> None:
-    """Delete all vectors in this namespace (e.g. when re-analysing same file)."""
+                                                                                  
     if not _init_pinecone():
         return
     try:
-        _pinecone_index.delete(delete_all=True, namespace=namespace)  # type: ignore[union-attr]
+        _pinecone_index.delete(delete_all=True, namespace=namespace)                            
         logger.info("Pinecone namespace '%s' cleared", namespace[:8])
     except Exception as exc:
         logger.warning("Pinecone delete_namespace failed: %s", exc)
 
 
 def ping() -> bool:
-    """Health check — returns True if Pinecone is reachable."""
+                                                               
     return _init_pinecone()

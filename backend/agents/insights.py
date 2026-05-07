@@ -2,7 +2,6 @@ import json
 import logging
 import os
 from typing import Optional
-# FIX 5: Ensure pd.isna is available in narrative builder
 import pandas as pd
 
 from ..core.state import AnalysisState
@@ -14,7 +13,6 @@ logger = logging.getLogger(__name__)
 
 
 def _build_column_narrative(stats: dict) -> str:
-    """Build a flat, readable column summary for the LLM to reason about directly."""
     lines = []
     numeric = stats.get("numeric_columns", {})
     for col, d in list(numeric.items())[:12]:
@@ -42,12 +40,10 @@ def _build_column_narrative(stats: dict) -> str:
 
 
 def _build_llm_prompt(slim_stats: dict) -> str:
-    """Builds the final prompt for the insights LLM using truncated (slim) stats."""
     profile = slim_stats.get("dataset_profile") or {}
     domain = profile.get("domain", "general")
     label = profile.get("label", "dataset")
-    
-    # We use slim_stats here to ensure narrative doesn't overflow
+
     col_narrative = _build_column_narrative(slim_stats)
     clean_stats = sanitize_for_json(slim_stats)
     payload_json = json.dumps(clean_stats, ensure_ascii=True)
@@ -86,8 +82,6 @@ def _llm_insights(stats: dict) -> Optional[dict]:
         return None
 
     prompt = _build_llm_prompt(stats)
-
-    # Extract domain/label for the system prompt before the API call
     domain = (stats.get("dataset_profile") or {}).get("domain", "general")
     label  = (stats.get("dataset_profile") or {}).get("label", "dataset")
 
@@ -116,13 +110,10 @@ def _llm_insights(stats: dict) -> Optional[dict]:
             raw = raw.split("\n", 1)[-1].rsplit("```", 1)[0].strip()
         
         result = json.loads(raw)
-
-        # Schema validation — if keys are wrong, fall back to rule-based
         required = {"headline", "findings", "data_info"}
         if not isinstance(result, dict) or not required.issubset(result.keys()):
             logger.warning("LLM insights returned unexpected schema: %s", list(result.keys()) if isinstance(result, dict) else type(result))
-            return None  # triggers rule-based fallback
-        # Ensure recommendations field always exists (may be omitted by LLM)
+            return None                                
         if "recommendations" not in result or not isinstance(result.get("recommendations"), list):
             result["recommendations"] = []
 
@@ -148,10 +139,8 @@ def _rule_based_insights(stats: dict) -> dict:
     outliers = stats.get("outliers", {})
     correlations = stats.get("strong_correlations", [])
     dq = stats.get("data_quality", {})
-    # FIX 6: Handle explicit None dataset_profile safely
     profile = stats.get("dataset_profile") or {}
 
-    # data_info: structural facts about what the dataset IS
     data_info = [
         f"This dataset contains {stats.get('row_count', 0):,} rows and {stats.get('column_count', 0)} columns.",
     ]
@@ -164,7 +153,6 @@ def _rule_based_insights(stats: dict) -> dict:
     completeness = dq.get("completeness", 100)
     data_info.append(f"Data completeness is {completeness:.1f}% with {dq.get('missing_cells', 0)} missing values.")
 
-    # findings: what can be drawn/concluded from the data
     findings = []
     if outliers:
         findings.append(f"Outliers detected in {len(outliers)} column(s): {', '.join(list(outliers.keys())[:4])}.")
@@ -233,8 +221,6 @@ def insights_agent(state: AnalysisState) -> AnalysisState:
     try:
         stats = state.stats_summary or {}
 
-        # If the statistician failed and stats are empty, use a safe minimal fallback.
-        # This prevents a hard crash and ensures the pipeline always produces a result.
         if not stats or not stats.get("row_count"):
             logger.warning("stats_summary is empty or partial — using safe minimal insights.")
             state.insights = {
@@ -253,18 +239,14 @@ def insights_agent(state: AnalysisState) -> AnalysisState:
         llm_result = _llm_insights(slim_stats)
         if llm_result:
             raw_findings = llm_result.get("findings", [])
-            # Post-processing: LLM sometimes returns all findings concatenated
-            # into one or two strings.  Split them into separate items if needed.
             if isinstance(raw_findings, list) and len(raw_findings) <= 2:
                 split_findings = []
                 for item in raw_findings:
                     if not isinstance(item, str):
                         split_findings.append(str(item))
                         continue
-                    # Split on ". " sentence boundaries when a single item is long
                     if len(item) > 120 and ". " in item:
                         parts = [s.strip() + "." for s in item.split(". ") if s.strip()]
-                        # Clean up double periods
                         parts = [p.replace("..", ".") for p in parts]
                         split_findings.extend(parts)
                     else:
@@ -299,7 +281,6 @@ def insights_agent(state: AnalysisState) -> AnalysisState:
             agent="insights",
             error_type="agent",
         )
-        # Always provide a minimal fallback so the pipeline doesn't return empty insights
         if not state.insights:
             state.insights = {
                 "headline": "",

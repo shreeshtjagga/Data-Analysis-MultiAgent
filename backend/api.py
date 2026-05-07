@@ -26,7 +26,6 @@ _INJECTION_PATTERNS = [
     r"you\s+are\s+now\s+a",
     r"act\s+as\s+(if\s+you\s+are\s+)?a",
     r"disregard\s+(all\s+)?prior",
-    # FIX 40: Bound whitespace quantifiers to reduce regex backtracking risk
     r"system\s{0,5}:\s{0,5}",
     r"<\s*system\s*>",
     r"<\s*/?inst\s*>",
@@ -45,7 +44,7 @@ _INJECTION_RE = _re.compile("|".join(_INJECTION_PATTERNS), _re.IGNORECASE)
 
 
 def sanitize_chat_input(text: str) -> str:
-    """Strip prompt injection patterns and null bytes from user input."""
+                                                                         
     text = text.replace("\x00", "").replace("\r", " ")
     text = _INJECTION_RE.sub("[removed]", text)
     return text.strip()
@@ -68,7 +67,6 @@ from .auth import (
     request_password_reset,
     reset_password_with_token,
     verify_access_token,
-    login_google_user,
     refresh_session,
 )
 from .core.constants import APP_VERSION, PIPELINE_VERSION
@@ -89,7 +87,7 @@ from .models.schemas import (
     DeleteResponse,
     ForgotPasswordRequest,
     ForgotPasswordResponse,
-    GoogleLoginRequest,
+    SyncSessionRequest,
     HealthResponse,
     ResetPasswordRequest,
     TokenResponse,
@@ -102,22 +100,21 @@ configure_logging()
 logger = logging.getLogger(__name__)
 
 APP_ENV = os.getenv("APP_ENV", "production")
-# REMOVED: GOOGLE_CLIENT_ID env var — Google OAuth moved to Supabase Dashboard
-# Auth → Providers → Google. The backend no longer verifies Google tokens directly.
-MAX_UPLOAD_BYTES = int(os.getenv("MAX_UPLOAD_BYTES", str(10 * 1024 * 1024))) # 10 MB limit for strict RAM bounds
-MAX_ANALYZE_ROWS = int(os.getenv("MAX_ANALYZE_ROWS", "15000")) # Lowered to 15K rows for 500MB Render memory limit
+                                                                                   
+MAX_UPLOAD_BYTES = int(os.getenv("MAX_UPLOAD_BYTES", str(10 * 1024 * 1024)))                                    
+MAX_ANALYZE_ROWS = int(os.getenv("MAX_ANALYZE_ROWS", "15000"))                                                    
 MAX_ANALYZE_COLUMNS = int(os.getenv("MAX_ANALYZE_COLUMNS", "150"))
 MAX_EXCEL_SHEETS = int(os.getenv("MAX_EXCEL_SHEETS", "5"))
 MAX_QUESTION_CHARS = int(os.getenv("CHAT_MAX_QUESTION_CHARS", "1200"))
-MAX_CONTEXT_BYTES = int(os.getenv("CHAT_MAX_CONTEXT_BYTES", str(4 * 1024 * 1024)))  # Increased to 4 MB to handle long histories
+MAX_CONTEXT_BYTES = int(os.getenv("CHAT_MAX_CONTEXT_BYTES", str(4 * 1024 * 1024)))                                              
 READ_CHUNK_BYTES = 1024 * 1024
 CHAT_RATE_LIMIT = int(os.getenv("CHAT_RATE_LIMIT", "10"))
 CHAT_RATE_WINDOW = int(os.getenv("CHAT_RATE_WINDOW_SECONDS", "60"))
 
-INTENT_MODEL    = os.getenv("GROQ_INTENT_MODEL", "llama-3.1-8b-instant")   # fast, structured
-SYNTHESIS_MODEL = os.getenv("GROQ_SYNTHESIS_MODEL", "llama-3.3-70b-versatile")  # smart, grounded
+INTENT_MODEL    = os.getenv("GROQ_INTENT_MODEL", "llama-3.1-8b-instant")                     
+SYNTHESIS_MODEL = os.getenv("GROQ_SYNTHESIS_MODEL", "llama-3.3-70b-versatile")                   
 
-# Groq client is now a shared singleton in core.llm_client
+                                                          
 
 
 _raw_origins = os.getenv("CORS_ORIGINS", "http://localhost:5173,http://localhost:3000")
@@ -138,10 +135,10 @@ async def lifespan(app: FastAPI):
     if APP_ENV == "production" and "*" in origins:
         raise RuntimeError("CORS_ORIGINS cannot contain '*' in production")
 
-    # NOTE: Google OAuth Client ID check removed — Google auth is now managed
-    # entirely by Supabase (Auth → Providers → Google). No local env var needed.
+                                                                             
+                                                                                
 
-    # ── Eagerly warm up connections so first request is instant ──────────────
+                                                                               
     try:
         await init_db()
         logger.info("Database tables ready")
@@ -151,7 +148,7 @@ async def lifespan(app: FastAPI):
             "Fix DATABASE_URL / DB password in .env and restart. Error: %s", exc
         )
 
-    # Warm DB pool: open one real connection now so asyncpg doesn't cold-start
+                                                                              
     try:
         from sqlalchemy import text
         from .db import engine
@@ -161,20 +158,20 @@ async def lifespan(app: FastAPI):
     except Exception as exc:
         logger.warning("DB warmup failed (non-fatal): %s", exc)
 
-    # Warm Redis: open the connection now instead of on first request
+                                                                     
     try:
         redis_ok = await redis_cache.ping()
         logger.info("Redis warmed up (reachable=%s)", redis_ok)
     except Exception as exc:
         logger.warning("Redis warmup failed (non-fatal): %s", exc)
 
-    # Warm up Pinecone connection (lazy init, non-blocking if key missing)
+                                                                          
     try:
         pc_ok = await asyncio.to_thread(pinecone_ping)
         logger.info("Pinecone warmed up (reachable=%s)", pc_ok)
     except Exception as exc:
         logger.warning("Pinecone warmup failed (non-fatal): %s", exc)
-    # ─────────────────────────────────────────────────────────────────────────
+                                                                               
 
     yield
     await redis_cache.close()
@@ -188,7 +185,7 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
-app.add_middleware(GZipMiddleware, minimum_size=1024)  # compress responses > 1KB
+app.add_middleware(GZipMiddleware, minimum_size=1024)                            
 app.add_middleware(
     CORSMiddleware,
     allow_origins=origins,
@@ -225,7 +222,7 @@ async def get_current_user_id(
     db: AsyncSession = Depends(get_db),
 ) -> int:
     token = credentials.credentials
-    # verify_access_token now calls Supabase Admin API — must be awaited
+                                                                        
     payload = await verify_access_token(token)
     if payload is None:
         raise HTTPException(
@@ -233,7 +230,7 @@ async def get_current_user_id(
             detail="Invalid or expired token",
             headers={"WWW-Authenticate": "Bearer"},
         )
-    # payload["sub"] is the Supabase UUID — look up local numeric user id
+                                                                         
     from .db import User
     from sqlalchemy import select as _sel
     result = await db.execute(_sel(User).where(User.supabase_id == payload["sub"]))
@@ -275,7 +272,7 @@ async def check_user_rate_limit(user_id: int = Depends(get_current_user_id)):
 
 @app.get("/health", response_model=HealthResponse, tags=["system"])
 async def health_check(db: AsyncSession = Depends(get_db)):
-    """Liveness probe — returns Postgres and Redis reachability."""
+                                                                   
     pg_ok = False
     try:
         await db.execute(__import__("sqlalchemy").text("SELECT 1"))
@@ -300,7 +297,6 @@ async def register(body: UserRegister, db: AsyncSession = Depends(get_db)):
     if not result["success"]:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=result["message"])
     
-    # FIX: Use real DB timestamps from register_user instead of fabricating utcnow()
     user_response = UserResponse(
         id=result["user_id"],
         name=result.get("name"),
@@ -318,10 +314,7 @@ async def register(body: UserRegister, db: AsyncSession = Depends(get_db)):
 
 @app.post("/auth/login", response_model=TokenResponse, tags=["auth"], dependencies=[Depends(check_ip_rate_limit)])
 async def login(body: UserLogin, db: AsyncSession = Depends(get_db), response: Response = None):
-    """
-    CHANGED: Uses Supabase sign_in_with_password — no custom JWT creation.
-    REMOVED: create_refresh_token() — Supabase returns its own refresh token.
-    """
+       
     result = await login_user(db, body.email, body.password)
     if not result["success"]:
         raise HTTPException(
@@ -330,7 +323,7 @@ async def login(body: UserLogin, db: AsyncSession = Depends(get_db), response: R
             headers={"WWW-Authenticate": "Bearer"},
         )
     user_obj = result["user"]
-    # Store Supabase refresh token in HttpOnly cookie
+                                                     
     if response is not None and result.get("refresh_token"):
         response.set_cookie(
             key="datapulse_refresh",
@@ -338,7 +331,7 @@ async def login(body: UserLogin, db: AsyncSession = Depends(get_db), response: R
             httponly=True,
             secure=(APP_ENV == "production"),
             samesite="lax",
-            max_age=7 * 24 * 3600,  # 7 days — matches Supabase default
+            max_age=7 * 24 * 3600,                                     
             path="/",
         )
     return TokenResponse(
@@ -372,46 +365,65 @@ async def reset_password(body: ResetPasswordRequest, db: AsyncSession = Depends(
     return AuthResponse(success=True, message=result["message"])
 
 
-@app.post("/auth/google", response_model=TokenResponse, tags=["auth"])
-async def login_with_google(body: GoogleLoginRequest, db: AsyncSession = Depends(get_db), response: Response = None):
-    """
-    Google OAuth via Supabase.
-    REMOVED: Manual google.oauth2.id_token verification — Supabase validates the
-    Google ID token against the client configured in Dashboard → Auth → Providers → Google.
-    """
-    credential = body.credential
-    if not credential:
-        raise HTTPException(status_code=400, detail="Missing Google credential")
-
-    result = await login_google_user(db, google_id_token=credential)
-    if not result["success"]:
+@app.post("/auth/sync-session", response_model=TokenResponse, tags=["auth"])
+async def sync_session(body: SyncSessionRequest, db: AsyncSession = Depends(get_db), response: Response = None):
+       
+                                
+    payload = await verify_access_token(body.access_token)
+    if payload is None:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail=result["message"],
+            detail="Invalid or expired access token",
         )
 
-    user_obj = result["user"]
-    # Store Supabase refresh token in HttpOnly cookie
-    if response is not None and result.get("refresh_token"):
+                                   
+    from .db import User
+    from sqlalchemy import select as _sel, or_
+    result = await db.execute(_sel(User).where(
+        or_(
+            User.supabase_id == payload["sub"],
+            User.email == payload["email"]
+        )
+    ))
+    user = result.scalar_one_or_none()
+    
+    if user is None:
+                                                                          
+        user = User(
+            supabase_id=payload["sub"],
+            email=payload["email"],
+            name=payload["email"].split("@")[0]                 
+        )
+        db.add(user)
+        await db.commit()
+        await db.refresh(user)
+    elif not user.supabase_id:
+                                                    
+        user.supabase_id = payload["sub"]
+        await db.commit()
+        await db.refresh(user)
+
+                                                   
+    if response is not None and body.refresh_token:
         response.set_cookie(
             key="datapulse_refresh",
-            value=result["refresh_token"],
+            value=body.refresh_token,
             httponly=True,
             secure=(APP_ENV == "production"),
             samesite="lax",
-            max_age=7 * 24 * 3600,  # 7 days
+            max_age=7 * 24 * 3600,          
             path="/",
         )
 
     return TokenResponse(
-        access_token=result["access_token"],
+        access_token=body.access_token,
         token_type="bearer",
         user=UserResponse(
-            id=user_obj["id"],
-            name=user_obj.get("name"),
-            email=user_obj["email"],
-            created_at=user_obj["created_at"],
-            updated_at=user_obj["updated_at"],
+            id=user.id,
+            name=user.name,
+            email=user.email,
+            created_at=user.created_at,
+            updated_at=user.updated_at,
         ),
     )
 
@@ -419,11 +431,7 @@ async def login_with_google(body: GoogleLoginRequest, db: AsyncSession = Depends
 
 @app.post("/auth/refresh", response_model=TokenResponse, tags=["auth"])
 async def refresh_token_route(request: Request, response: Response, db: AsyncSession = Depends(get_db)):
-    """
-    CHANGED: Uses Supabase refresh_session() instead of custom verify_refresh_token().
-    REMOVED: create_access_token(), create_refresh_token(), verify_refresh_token() — dead.
-    Supabase manages the full token rotation lifecycle.
-    """
+       
     token = request.cookies.get("datapulse_refresh")
     if not token:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Missing refresh token")
@@ -432,7 +440,7 @@ async def refresh_token_route(request: Request, response: Response, db: AsyncSes
     if new_session is None:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid or expired refresh token")
 
-    # Rotate cookie with new Supabase refresh token
+                                                   
     if new_session.get("refresh_token") and response is not None:
         response.set_cookie(
             key="datapulse_refresh",
@@ -444,7 +452,7 @@ async def refresh_token_route(request: Request, response: Response, db: AsyncSes
             path="/",
         )
 
-    # Verify new token and find local user
+                                          
     payload = await verify_access_token(new_session["access_token"])
     if payload is None:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Token verification failed after refresh")
@@ -496,16 +504,15 @@ async def me(
 
 
 
-# ── Utility for background storage ───────────────────────────────────────
-# Use an absolute path so the file is always written to the same location
-# that data_agent.py reads from, regardless of the server's working directory.
-_API_FILE_DIR = os.path.dirname(os.path.abspath(__file__))   # .../backend/
+                                                                           
+                                                                         
+                                                                              
+_API_FILE_DIR = os.path.dirname(os.path.abspath(__file__))                 
 _PARQUET_STORAGE_DIR = os.path.join(_API_FILE_DIR, "storage", "data")
 
 def persist_full_data_backend(df: pd.DataFrame, file_hash: str):
-    """Saves cleaned DataFrame to Parquet in the background."""
+                                                               
     try:
-        # FIX 42: Enforce strict hash format before constructing parquet path.
         assert _re.match(r"^[a-f0-9]{64}$", file_hash), "Invalid file hash"
         os.makedirs(_PARQUET_STORAGE_DIR, exist_ok=True)
         storage_path = os.path.join(_PARQUET_STORAGE_DIR, f"{file_hash}.parquet")
@@ -516,13 +523,12 @@ def persist_full_data_backend(df: pd.DataFrame, file_hash: str):
 
 
 def cleanup_old_parquet_files(retention_days: int = 3):
-    """Delete stale parquet files from backend storage to limit disk growth."""
+                                                                               
     try:
         os.makedirs(_PARQUET_STORAGE_DIR, exist_ok=True)
         cutoff = datetime.now() - timedelta(days=max(0, retention_days))
 
         deleted = 0
-        # FIX 48: Cap per-run scan to avoid long cleanup loops.
         files_checked = 0
         MAX_CHECK = 500
         for name in os.listdir(_PARQUET_STORAGE_DIR):
@@ -551,12 +557,11 @@ def cleanup_old_parquet_files(retention_days: int = 3):
 
 def _stratified_preview(df: pd.DataFrame, n: int) -> list:
     if len(df) <= n:
-        # FIX 49: Preserve datetime readability in preview payload.
         df_preview = df.copy()
         for col in df_preview.select_dtypes(include=["datetime64"]).columns:
             df_preview[col] = df_preview[col].dt.strftime("%Y-%m-%d %H:%M:%S")
         return json.loads(df_preview.to_json(orient="records"))
-    # Sample uniformly across the index so edge values are represented
+                                                                      
     step = max(1, len(df) // n)
     sampled = df.iloc[::step].head(n)
     df_preview = sampled.copy()
@@ -569,12 +574,11 @@ def _stratified_preview(df: pd.DataFrame, n: int) -> list:
 async def analyze(
     background_tasks: BackgroundTasks,
     file: UploadFile = File(...),
-    user_id: int = Depends(check_user_rate_limit), # check_user_rate_limit now returns user_id
+    user_id: int = Depends(check_user_rate_limit),                                            
     db: AsyncSession = Depends(get_db),
 ):
     logger.debug("analyze endpoint invoked, has_filename=%s", bool(file.filename))
 
-    # FIX 41: Sanitize uploaded filename before hashing and downstream usage.
     filename = os.path.basename(file.filename or "upload").strip()
     parsed_ext = filename.lower().split('.')[-1] if '.' in filename else ""
     if parsed_ext not in ("csv", "xlsx", "xls"):
@@ -601,7 +605,7 @@ async def analyze(
     validate_upload_magic(parsed_ext, file_bytes)
 
     file_hash = compute_file_hash(file_bytes, filename)
-    # Enforce strict hash format before any filesystem usage.
+                                                             
     assert _re.match(r"^[a-f0-9]{64}$", file_hash), "Invalid file hash"
 
 
@@ -663,7 +667,7 @@ async def analyze(
                 )
             else:
                 try:
-                    import xlrd  # noqa: F401
+                    import xlrd              
                 except Exception:
                     raise HTTPException(
                         status_code=422,
@@ -693,24 +697,24 @@ async def analyze(
             detail=f"Dataset has {column_count} columns. Maximum allowed is {MAX_ANALYZE_COLUMNS}.",
         )
 
-    # Run the agentic pipeline
+                              
     state = await asyncio.to_thread(run_pipeline, df)
 
-    # ── Full Data Persistence (Background) ───────────────────────────────────
+                                                                               
     SYNC_PARQUET_THRESHOLD_ROWS = 5000
 
     if getattr(state, "clean_df", None) is not None:
         df_to_save = state.clean_df.copy()
         if len(df_to_save) <= SYNC_PARQUET_THRESHOLD_ROWS:
-            # Small file — save synchronously so chat works immediately
+                                                                       
             persist_full_data_backend(df_to_save, file_hash)
         else:
-            # Large file — background is fine, user won't chat instantly
+                                                                        
             background_tasks.add_task(persist_full_data_backend, df_to_save, file_hash)
         background_tasks.add_task(cleanup_old_parquet_files, 3)
 
-    # ── Strip full DataFrames BEFORE model_dump to prevent serialising
-    # 30k rows as Python dicts (≈500 MB RAM spike). ───────────────────────────
+                                                                       
+                                                                               
     CHART_PREVIEW_ROWS = int(os.getenv("CHART_PREVIEW_ROWS", "500"))
 
     preview_raw = _stratified_preview(state.raw_df, CHART_PREVIEW_ROWS) if getattr(state, "raw_df", None) is not None else []
@@ -723,13 +727,13 @@ async def analyze(
     result = state.model_dump()
     result["raw_df"]   = preview_raw
     result["clean_df"] = preview_clean
-    result["file_hash"] = file_hash  # Crucial for chat context
+    result["file_hash"] = file_hash                            
 
-    # Only hard-fail if BOTH stats and insights are completely empty.
-    # Partial data (e.g., architect succeeded but statistician failed) still yields a usable page.
+                                                                     
+                                                                                                  
     has_stats    = bool(result.get("stats_summary") and result["stats_summary"].get("row_count"))
     has_insights = bool(result.get("insights") and result["insights"].get("findings"))
-    # True last-resort: literally nothing was produced
+                                                      
     is_fatal = not has_stats and not has_insights
 
     if is_fatal:
@@ -742,13 +746,13 @@ async def analyze(
             },
         )
     elif state.errors:
-        # Non-fatal warnings: log them but continue — the result is still usable
+                                                                                
         logger.warning(
             "Pipeline completed with non-fatal errors for user %d / %s: %s",
             user_id, filename, state.errors,
         )
 
-    # Fix #6: compute serialized charts once, reuse for both DB save and response
+                                                                                 
     serialized_charts = _serialize_charts(result.get("charts") or {})
 
     save_result = await save_analysis(
@@ -765,7 +769,7 @@ async def analyze(
     else:
         result["analysis_id"] = save_result.get("analysis_id")
 
-    # ── Build RAG index in background ────────────────────────────────────────
+                                                                               
     _rag_stats    = result.get("stats_summary") or {}
     _rag_insights = result.get("insights") or {}
     _rag_charts   = serialized_charts or {}
@@ -794,11 +798,11 @@ async def analyze(
     result["charts"] = serialized_charts
     result["partial"] = False
     if state.errors:
-        result["warnings"] = state.errors   # surface non-fatal errors to frontend
+        result["warnings"] = state.errors                                         
 
-    # orjson serialises NaN/Inf → null natively and is ~10x faster than
-    # the manual recursive sanitize_floats walk on large result dicts.
-    # Added OPT_SERIALIZE_NUMPY to prevent 'Type is not JSON serializable: numpy.float64' errors.
+                                                                       
+                                                                      
+                                                                                                 
     safe_result = orjson.loads(orjson.dumps(result, option=orjson.OPT_NON_STR_KEYS | orjson.OPT_SERIALIZE_NUMPY))
 
     return {"from_cache": False, "pipeline_version": PIPELINE_VERSION, **safe_result}
@@ -846,26 +850,26 @@ async def remove_analysis(
     return DeleteResponse(success=True, message=result["message"])
 
 
-# ── Plot-intent keyword sets ──────────────────────────────────────────────────
+                                                                                
 _PLOT_GENERATE_KEYWORDS = frozenset({
-    # explicit generation verbs
+                               
     "generate", "create", "make", "build", "draw",
-    # show/give patterns
+                        
     "show me a", "give me a", "give me some", "give some",
     "show some", "show a", "show plots", "show charts",
-    # new/another patterns
+                          
     "new chart", "new plot", "another chart", "another plot",
     "one more chart", "one more plot", "more charts", "more plots",
     "different chart", "different plot", "other chart", "other plot",
     "other plots", "other charts",
-    # can you patterns
+                      
     "can you plot", "can you chart", "can you generate", "can you create",
     "can you make", "can you show",
-    # what's possible patterns
+                              
     "what plots", "what charts", "possible plots", "possible charts",
     "what else can", "what other", "any other plot", "any other chart",
     "any more plot", "any more chart",
-    # chart type names used as request
+                                      
     "plot a", "chart a", "histogram", "scatter plot", "bar chart",
     "pie chart", "donut chart", "heatmap", "line chart", "box plot",
     "violin plot", "stacked bar", "frequency chart", "distribution chart",
@@ -910,10 +914,7 @@ class QueryPlan(BaseModel):
 
 
 def _is_result_plausible(data_result: dict, stats: dict) -> tuple[bool, str]:
-    """
-    Cross-check data agent result against known stats to catch impossible values.
-    Returns (is_plausible, reason_if_not).
-    """
+       
     if not data_result or "error" in data_result:
         return False, data_result.get("error", "query failed")
     
@@ -921,25 +922,24 @@ def _is_result_plausible(data_result: dict, stats: dict) -> tuple[bool, str]:
     if result == "No rows found." or result is None:
         return False, "empty result"
     
-    # FIX 22: Skip plausibility range checks for non-numeric result payloads.
     if not isinstance(result, (int, float)):
         return True, ""
 
-    # Check numeric results against known column ranges
+                                                       
     numeric_cols = stats.get("numeric_columns", {})
     
-    # For top_n / aggregate results that return a single number,
-    # verify it's within known min/max
-    # Find which column was queried
+                                                                
+                                      
+                                   
     sort_col = data_result.get("sort_column") or data_result.get("query", "")
     for col, col_stats in numeric_cols.items():
         if col.lower() in sort_col.lower():
             col_min = col_stats.get("min", float("-inf"))
             col_max = col_stats.get("max", float("inf"))
-            if not (col_min <= result <= col_max * 1.01):  # 1% tolerance
+            if not (col_min <= result <= col_max * 1.01):                
                 return False, f"value {result} outside known range [{col_min}, {col_max}]"
     
-    # Check row_count results don't exceed known row_count
+                                                          
     if data_result.get("query", "").startswith("Row count"):
         known_rows = stats.get("row_count", float("inf"))
         if isinstance(result, int) and result > known_rows:
@@ -949,15 +949,10 @@ def _is_result_plausible(data_result: dict, stats: dict) -> tuple[bool, str]:
 
 
 def _classify_chat_intent(question: str) -> str:
-    """
-    Classify chat intent. Returns one of:
-      "generate_chart" - user wants a new chart built
-      "explain_chart"  - user wants an existing chart explained
-      "data_question"  - user wants factual data answer (RAG handles this)
-    """
+       
     q = question.lower().strip()
 
-    # ---- Off-Topic Guardrail --------------------------------------------
+                                                                           
     _OFF_TOPIC = (
         "write code", "write python", "write javascript", "write java",
         "how to program", "how to code", "write a function", "help me code",
@@ -969,7 +964,7 @@ def _classify_chat_intent(question: str) -> str:
     if any(ot in q for ot in _OFF_TOPIC):
         return "off_topic"
 
-    # ---- Greeting / small talk (intercept before any data logic) --------
+                                                                           
     _PURE_GREETINGS = {
         "hello", "hi", "hey", "howdy", "hiya", "yo",
         "bye", "goodbye", "see you", "see ya", "later", "cya",
@@ -996,7 +991,7 @@ def _classify_chat_intent(question: str) -> str:
         if any(g in q for g in ("hello", "hi", "bye", "hey", "thanks", "thank", "ok", "okay")):
             return "greeting"
 
-    # ---- Explain triggers (highest priority) ----------------------------
+                                                                           
     _EXPLAIN = (
         "explain", "what does this", "what do these",
         "tell me about this chart", "tell me about the chart",
@@ -1013,7 +1008,7 @@ def _classify_chat_intent(question: str) -> str:
     if any(p in q for p in _EXPLAIN):
         return "explain_chart"
 
-    # ---- Generate triggers (wide net) -----------------------------------
+                                                                           
     _NEED_WANT = (
         "i need graph", "i need a graph", "i need chart", "i need a chart",
         "i need plot", "i need a plot", "i need visualization",
@@ -1050,7 +1045,7 @@ def _classify_chat_intent(question: str) -> str:
     if any(p in q for p in _NEED_WANT):
         return "generate_chart"
 
-    # Action verb + chart noun
+                              
     _GEN_VERBS = (
         "generate", "create", "make", "build", "draw",
         "visualize", "visualise",
@@ -1065,17 +1060,17 @@ def _classify_chat_intent(question: str) -> str:
         if verb in q:
             if any(noun in q for noun in _CHART_NOUNS):
                 return "generate_chart"
-            # visualize/visualise alone with any column/dimension word is enough
+                                                                                
             if verb in ("visualize", "visualise"):
                 return "generate_chart"
 
-    # "plot X" or "graph X" used as a verb
+                                          
     words = q.split()
     for i_w, w in enumerate(words):
         if w in ("plot", "graph") and i_w + 1 < len(words):
             return "generate_chart"
 
-    # Time/dimension breakdown + visual word implies chart
+                                                          
     _BREAKDOWN = (
         "by year", "by month", "by quarter", "by week", "by day",
         "over time", "over the years", "over the months",
@@ -1090,12 +1085,12 @@ def _classify_chat_intent(question: str) -> str:
         "graph", "chart", "plot", "visualization",
         "bar", "line", "scatter", "histogram", "pie", "donut",
     )
-    # Use word-boundary matching to avoid false positives (e.g. "bar" in "barista")
+                                                                                   
     _visual_re = _re.compile(r'\b(' + '|'.join(_re.escape(w) for w in _VISUAL_WORD) + r')\b')
     if any(bd in q for bd in _BREAKDOWN) and _visual_re.search(q):
         return "generate_chart"
 
-    # ---- Existing chart reference (explain) -----------------------------
+                                                                           
     _CHART_REFS = (
         "the scatter", "the histogram", "the bar chart", "the bar",
         "the heatmap", "the line chart", "the line graph",
@@ -1108,7 +1103,7 @@ def _classify_chat_intent(question: str) -> str:
         if not any(v in q for v in _OVERRIDE):
             return "explain_chart"
 
-    # ---- Default: data question (RAG + Parquet) -------------------------
+                                                                           
     return "data_question"
 
 
@@ -1118,9 +1113,9 @@ async def chat_with_analysis(
     user_id: int = Depends(get_current_user_id),
     db: AsyncSession = Depends(get_db),
 ):
-    """Answer a user question about the current analysis context."""
+                                                                    
 
-    # ── Rate limiting ─────────────────────────────────────────────────────────
+                                                                                
     try:
         key = f"ratelimit:chat:{user_id}"
         count = await redis_cache.increment_with_ttl(key, CHAT_RATE_WINDOW)
@@ -1134,7 +1129,6 @@ async def chat_with_analysis(
             raise exc
         logger.warning("Redis rate limiter unavailable for user %s: %s", user_id, exc)
 
-    # FIX 18: Sanitize user input immediately before any question usage.
     question = sanitize_chat_input(body.question.strip())
     context = body.context or {}
 
@@ -1142,10 +1136,9 @@ async def chat_with_analysis(
         raise HTTPException(status_code=400, detail="Question is required")
     if len(question) > MAX_QUESTION_CHARS:
         raise HTTPException(status_code=413, detail=f"Question too long. Max {MAX_QUESTION_CHARS} characters.")
-    # FIX 17: Also enforce a byte-length cap. len() counts Unicode code-points,
-    # not bytes — a CJK / emoji string can pass the char check while sending
-    # 3-4× more bytes to the LLM, bypassing the intended input budget.
-    _MAX_QUESTION_BYTES = MAX_QUESTION_CHARS * 4  # worst-case UTF-8 expansion
+                                                                            
+                                                                      
+    _MAX_QUESTION_BYTES = MAX_QUESTION_CHARS * 4                              
     if len(question.encode("utf-8")) > _MAX_QUESTION_BYTES:
         raise HTTPException(status_code=413, detail=f"Question too long. Max {MAX_QUESTION_CHARS} characters.")
 
@@ -1156,14 +1149,13 @@ async def chat_with_analysis(
     if len(context_blob.encode("utf-8")) > MAX_CONTEXT_BYTES:
         raise HTTPException(status_code=413, detail=f"Context too large. Max {MAX_CONTEXT_BYTES // 1024} KB.")
 
-    # ── Extract context fields ────────────────────────────────────────────────
-    # Check if frontend passed the optimized chat_context_pack directly
+                                                                                
+                                                                       
     chat_context_pack = context.get("chat_context_pack")
     if chat_context_pack:
-        # FIX: The pack uses compact keys (profile, quality, columns, correlations,
-        # key_findings, headline) — NOT stats/insights/fileName/charts.
-        # Reconstruct the expected dicts so _build_static_context and the query
-        # planner receive properly shaped data.
+                                                                       
+                                                                               
+                                               
         _pack_columns = chat_context_pack.get("columns") or {}
         _pack_numeric = {}
         _pack_categorical = {}
@@ -1200,7 +1192,7 @@ async def chat_with_analysis(
             "findings": chat_context_pack.get("key_findings") or [],
             "headline": chat_context_pack.get("headline") or "",
         }
-        # fileName and charts live at the top-level context, not inside the pack
+                                                                                
         file_name = context.get("fileName") or "dataset"
         charts_data = context.get("charts") or {}
         file_hash = context.get("file_hash")
@@ -1211,9 +1203,9 @@ async def chat_with_analysis(
         charts_data = context.get("charts", {})
         file_hash = context.get("file_hash")
 
-    # ── Security: verify the authenticated user owns this file_hash ───────────
-    # Without this check, any authenticated user could pass someone else's
-    # file_hash in the context payload and query their private data.
+                                                                                
+                                                                          
+                                                                    
     if file_hash:
         try:
             _fh_row = await db.execute(
@@ -1234,7 +1226,7 @@ async def chat_with_analysis(
         except HTTPException:
             raise
         except Exception as _fh_exc:
-            # DB error on ownership check — log and deny to be safe
+                                                                   
             logger.error("file_hash ownership check failed: %s", _fh_exc)
             raise HTTPException(
                 status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -1246,7 +1238,6 @@ async def chat_with_analysis(
     using_preview_only = False
     if file_hash:
         try:
-            # FIX 42: Validate file hash before storage-path usage in chat branch.
             assert _re.match(r"^[a-f0-9]{64}$", file_hash), "Invalid file hash"
             storage_path = os.path.join(_PARQUET_STORAGE_DIR, f"{file_hash}.parquet")
             if os.path.exists(storage_path):
@@ -1270,22 +1261,22 @@ async def chat_with_analysis(
     if not isinstance(df_records, list):
         df_records = []
 
-    # Merge existing dashboard chart keys + any already-generated chat charts.
-    # The frontend sends context.generated_chart_keys so repeated "one more plot"
-    # requests do not duplicate charts generated earlier in this chat session.
+                                                                              
+                                                                                 
+                                                                              
     dashboard_keys = list(charts_data.keys()) if isinstance(charts_data, dict) else []
     generated_keys = context.get("generated_chart_keys") or []
     if not isinstance(generated_keys, list):
         generated_keys = []
     existing_chart_keys = list(dict.fromkeys(dashboard_keys + generated_keys))
 
-    # ── Classify intent ───────────────────────────────────────────────────────
+                                                                                
     intent = _classify_chat_intent(question)
     logger.info("Chat intent classified as '%s' for question: %s", intent, question[:80])
 
-    # ══════════════════════════════════════════════════════════════════════════
-    # BRANCH -1 — Off-topic (non-analytical questions)
-    # ══════════════════════════════════════════════════════════════════════════
+                                                                                
+                                                      
+                                                                                
     if intent == "off_topic":
         return {
             "answer": (
@@ -1297,9 +1288,9 @@ async def chat_with_analysis(
             "new_chart": None,
         }
 
-    # ══════════════════════════════════════════════════════════════════════════
-    # BRANCH 0 — Greeting / small talk
-    # ══════════════════════════════════════════════════════════════════════════
+                                                                                
+                                      
+                                                                                
     if intent == "greeting":
         _q = question.lower()
         if any(t in _q for t in ("bye", "goodbye", "see you", "later", "cya")):
@@ -1317,15 +1308,15 @@ async def chat_with_analysis(
                    "or say 'generate a chart' to create a new visualization.")
         return {"answer": msg, "data_queried": False, "new_chart": None}
 
-    # ══════════════════════════════════════════════════════════════════════════
-    # BRANCH A — Generate a new chart
-    # ══════════════════════════════════════════════════════════════════════════
+                                                                                
+                                     
+                                                                                
     if intent == "generate_chart":
         from .agents.plot_generator import generate_on_demand_chart, suggest_novel_chart
 
-        # ── Pre-filter: extract filter conditions from the user's request ──
-        # e.g. "chart of sales in year 2022 only" → filter year col to 2022
-        # e.g. "pie chart for Kawasaki" → filter Brand to Kawasaki
+                                                                             
+                                                                           
+                                                                  
         chart_df_records = df_records
         filter_label = ""
         if df_records:
@@ -1333,13 +1324,13 @@ async def chat_with_analysis(
             import pandas as _pd_chart
             _chart_df = _pd_chart.DataFrame(df_records)
 
-            # Year filter: "in year 2022", "year 2020 only", "for 2023"
+                                                                       
             _year_match = _re.search(r'(?:in\s+)?(?:year|yr)\s*(\d{4})', q_lower)
             if not _year_match:
                 _year_match = _re.search(r'(?:for|of|from)\s+(\d{4})\s*(?:only)?', q_lower)
             if _year_match:
                 _target_year = int(_year_match.group(1))
-                # Find the most likely year column
+                                                  
                 _year_col = None
                 for _col in _chart_df.columns:
                     if _chart_df[_col].dtype in ('int64', 'float64', 'int32'):
@@ -1366,7 +1357,7 @@ async def chat_with_analysis(
                     except Exception as _filt_exc:
                         logger.warning("Year filter failed: %s", _filt_exc)
 
-            # Entity filter: "for Kawasaki", "of Honda bikes"
+                                                             
             if not filter_label:
                 _cat_cols = stats.get("categorical_columns") or {}
                 for _cat_name, _cat_info in _cat_cols.items():
@@ -1420,7 +1411,7 @@ async def chat_with_analysis(
                 "new_chart": None,
             }
 
-        # Build a natural answer describing what was generated
+                                                              
         reasoning = novel.get("reasoning", "")
         answer = (reasoning + filter_label) if reasoning else f"Here is the chart you requested{filter_label}."
 
@@ -1430,9 +1421,9 @@ async def chat_with_analysis(
             "new_chart": chart_result,
         }
 
-    # ══════════════════════════════════════════════════════════════════════════
-    # BRANCH B — Explain an existing chart
-    # ══════════════════════════════════════════════════════════════════════════
+                                                                                
+                                          
+                                                                                
     if intent == "explain_chart":
         if not existing_chart_keys:
             return {
@@ -1441,20 +1432,20 @@ async def chat_with_analysis(
                 "new_chart": None,
             }
 
-        # Find which chart they're talking about
+                                                
         q_lower = question.lower()
 
-        # Try to match a specific chart key they may have mentioned
+                                                                   
         matched_key = None
         matched_chart_data = None
 
-        # Check if they mentioned a specific chart key
+                                                      
         for key in existing_chart_keys:
             if key.lower() in q_lower:
                 matched_key = key
                 break
 
-        # If no exact key match, infer from chart type words
+                                                            
         if not matched_key:
             chart_type_words = {
                 "scatter": "scatter", "histogram": "histogram",
@@ -1465,7 +1456,7 @@ async def chat_with_analysis(
             }
             for word, prefix in chart_type_words.items():
                 if word in q_lower:
-                    # Find first matching chart key with this prefix
+                                                                    
                     for key in existing_chart_keys:
                         if key.lower().startswith(prefix):
                             matched_key = key
@@ -1473,13 +1464,13 @@ async def chat_with_analysis(
                 if matched_key:
                     break
 
-        # Extract chart data for context.
-        # The frontend now sends only sentinel keys ({key: true}) to keep the
-        # HTTP payload small. Try to load the real fig from Redis first;
-        # fall back to whatever the context carries (legacy/full payload path).
+                                         
+                                                                             
+                                                                        
+                                                                               
         if matched_key and isinstance(charts_data, dict) and matched_key in charts_data:
             _raw_from_context = charts_data[matched_key]
-            # Sentinel value from slim frontend: skip and load from cache
+                                                                         
             _needs_redis = (
                 _raw_from_context is True
                 or _raw_from_context is None
@@ -1500,7 +1491,7 @@ async def chat_with_analysis(
                     raw = _raw_from_context
                     logger.debug("Parsing chart data for key '%s' (type=%s)", matched_key, type(raw).__name__)
                     chart_fig = json.loads(raw) if isinstance(raw, str) else raw
-                    # Build a readable summary of the chart's data
+                                                                  
                     traces_info = []
                     for trace in chart_fig.get("data", [])[:3]:
                         ttype = trace.get("type", "unknown")
@@ -1528,11 +1519,11 @@ async def chat_with_analysis(
                 except Exception as e:
                     logger.warning("Could not parse chart data for key %s: %s", matched_key, e)
 
-        # ── RAG-grounded chart explanation ──────────────────────────────────
+                                                                              
         _explain_key = matched_key or (existing_chart_keys[0] if existing_chart_keys else "")
         _chart_raw = None
 
-        # Load the real chart fig from Redis (frontend sends only sentinel keys now).
+                                                                                     
         if _explain_key and file_hash:
             try:
                 _cache_key_expl = redis_cache.analysis_key(user_id, file_hash)
@@ -1558,7 +1549,7 @@ async def chat_with_analysis(
             )
             return explain_result
 
-        # Fallback: no LLM
+                          
         _tag = f"\n[CHART: {_explain_key}]" if _explain_key else ""
         return {
             "answer": f"Here is the chart from {file_name}.{_tag}",
@@ -1566,9 +1557,9 @@ async def chat_with_analysis(
             "new_chart": None,
         }
 
-    # ══════════════════════════════════════════════════════════════════════════
-    # BRANCH C — Data question (RAG + Parquet Query)
-    # ══════════════════════════════════════════════════════════════════════════
+                                                                                
+                                                    
+                                                                                
     _data_client = get_groq_client()
     if _data_client and file_hash:
         _data_redis = _get_cache_client()
@@ -1585,7 +1576,7 @@ async def chat_with_analysis(
         )
         return ans_result
 
-    # Fallback if no LLM configured
+                                   
     return {
         "answer": (
             f"The dataset '{file_name}' has {stats.get('row_count', '?')} rows "

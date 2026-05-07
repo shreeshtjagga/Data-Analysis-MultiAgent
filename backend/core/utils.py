@@ -12,10 +12,6 @@ logger = logging.getLogger(__name__)
 
 
 def rewrite_local_dev_host(url: str, service_name: str) -> str:
-    """
-    In local development, rewrite docker-compose service hosts (e.g. redis, db)
-    to localhost when the app is not running inside a container.
-    """
     app_env = os.getenv("APP_ENV", "production").lower()
     if app_env != "development" or os.path.exists("/.dockerenv"):
         return url
@@ -47,15 +43,10 @@ def rewrite_local_dev_host(url: str, service_name: str) -> str:
 
 
 def _parse_salary_range(series: pd.Series) -> pd.Series:
-    """
-    Convert survey salary-range strings like '41k-65k', '0-40k', '125k-150k', '225k+'
-    into numeric midpoint floats (USD).
-    """
     def _to_mid(val):
         if pd.isna(val):
             return np.nan
         s = str(val).lower().replace(",", "").replace("$", "").strip()
-        # Extract numbers with optional 'k' suffix
         nums = re.findall(r"(\d+\.?\d*)k?", s)
         multipliers = re.findall(r"(\d+\.?\d*)(k)", s)
         if multipliers:
@@ -69,42 +60,34 @@ def _parse_salary_range(series: pd.Series) -> pd.Series:
 
 
 def _looks_like_salary_range(series: pd.Series) -> bool:
-    """
-    Returns True if the majority of non-null values look like salary ranges
-    e.g. '41k-65k', '0-40k', '225k+', '125k-150k'.
-    """
     sample = series.dropna().head(30).astype(str)
     if len(sample) == 0:
         return False
-    pattern = re.compile(r"^\d+k?\s*[-–+]?\s*\d*k?$", re.IGNORECASE)
     matched = sample.str.match(r"^\d+k?\s*[-–+]?\s*\d*k?$", na=False)
     return matched.sum() >= len(sample) * 0.5
 
 
-# ── Null-like text values that should be treated as NaN ────────────────────
 _NULL_STRINGS = frozenset({
     "nan", "none", "null", "na", "n/a", "n\\a", "#n/a", "#na", "#null",
     "nil", "undefined", "unknown", "missing", "-", "--", "---", "",
     "not available", "not applicable", "no data", "no response", "nr",
 })
 
-# ── Boolean text mappings ───────────────────────────────────────────────────
 _TRUE_STRINGS  = frozenset({"yes", "y", "true", "1", "on", "agree", "positive", "correct", "ok"})
 _FALSE_STRINGS = frozenset({"no", "n", "false", "0", "off", "disagree", "negative", "incorrect"})
 
+IMPUTE_MAX_NULL_RATIO = 0.60
+
 
 def _normalize_null_strings(series: pd.Series) -> pd.Series:
-    """Replace common null-like text values with actual NaN."""
     lower = series.astype(str).str.strip().str.lower()
     return series.where(~lower.isin(_NULL_STRINGS), other=np.nan)
 
 
 def _try_parse_currency(series: pd.Series) -> Tuple[Optional[pd.Series], bool]:
-    """Try to parse currency strings like '$1,234.56', '€500', '1.2M' → float."""
     sample = series.dropna().head(30).astype(str)
     if len(sample) == 0:
         return None, False
-    # Must look like currency in >50% of sample
     currency_pat = re.compile(r"^[\$€£¥₹]?[\d,\.]+[kKmMbB]?$")
     matched = sample.str.strip().str.match(r"^[\$€£¥₹]?[\d,\.]+[kKmMbB]?\s*$", na=False)
     if matched.sum() < len(sample) * 0.5:
@@ -132,7 +115,6 @@ def _try_parse_currency(series: pd.Series) -> Tuple[Optional[pd.Series], bool]:
 
 
 def _try_parse_percentage(series: pd.Series) -> Tuple[Optional[pd.Series], bool]:
-    """Try to parse percentage strings like '85%', '3.5 %' → float (0.85, 0.035)."""
     sample = series.dropna().head(30).astype(str).str.strip()
     if len(sample) == 0:
         return None, False
@@ -154,7 +136,6 @@ def _try_parse_percentage(series: pd.Series) -> Tuple[Optional[pd.Series], bool]
 
 
 def _try_parse_boolean(series: pd.Series) -> Tuple[Optional[pd.Series], bool]:
-    """Try to parse boolean-text columns (Yes/No, True/False, Y/N) → 0.0/1.0."""
     sample = series.dropna().head(30).astype(str).str.strip().str.lower()
     if len(sample) == 0:
         return None, False
@@ -178,61 +159,33 @@ def _try_parse_boolean(series: pd.Series) -> Tuple[Optional[pd.Series], bool]:
 
 
 def _try_parse_mixed_numeric(series: pd.Series) -> Tuple[Optional[pd.Series], bool]:
-    """
-    Handle columns that are mostly numeric but contain text noise
-    like 'N/A', 'unknown', '-' mixed in with real numbers.
-    """
     sample = series.dropna().head(50).astype(str)
     if len(sample) == 0:
         return None, False
-    # Try numeric coercion on the whole column
     converted = pd.to_numeric(series, errors="coerce")
     valid_ratio = converted.notna().sum() / max(len(series), 1)
-    # Accept if ≥60% are valid numbers (the rest are text noise → NaN)
     if valid_ratio >= 0.60:
         return converted, True
     return None, False
 
 
 def clean_dataframe(df: pd.DataFrame) -> tuple[pd.DataFrame, list]:
-    """
-    Production-grade dataframe cleaner. Handles:
-      - Duplicate rows
-      - Column name normalization (strips whitespace)
-      - Null-like text normalisation ('N/A', 'none', '--' → NaN)
-      - Salary / range strings ('41k-65k' → midpoint float)
-      - Currency strings ('$1,234.56', '€500', '1.2M' → float)
-      - Percentage strings ('85%' → 0.85)
-      - Boolean text ('Yes'/'No', 'True'/'False' → 1.0/0.0)
-      - Mixed numeric columns (numbers + noise text → numeric + NaN)
-      - Infinity / extreme values → NaN
-      - Missing value imputation (median/mode, only for <60% null cols)
-    Returns (cleaned_df, imputation_records).
-    """
     initial_rows = len(df)
     logs: list = []
-
-    # ── 1. Normalize column names (strip whitespace) ────────────────────────
     df.columns = [str(c).strip() for c in df.columns]
-
-    # ── 2. Drop exact duplicate rows ────────────────────────────────────────
     df = df.drop_duplicates()
     dropped = initial_rows - len(df)
     if dropped > 0:
         logger.info("Dropped %d duplicate rows", dropped)
 
-    # ── 3. Strip leading/trailing whitespace from all string cells ──────────
     for col in df.select_dtypes(include=["object"]).columns:
         try:
             df[col] = df[col].astype(str).str.strip()
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.debug("Failed to strip string values for column '%s': %s", col, exc)
 
-    # ── 4. Normalize null-like text → NaN ───────────────────────────────────
     for col in list(df.select_dtypes(include=["object"]).columns):
         df[col] = _normalize_null_strings(df[col])
-
-    # ── 5. Replace ±Inf in numeric columns with NaN ─────────────────────────
     num_cols_now = df.select_dtypes(include=[np.number]).columns
     for col in num_cols_now:
         inf_count = np.isinf(df[col]).sum()
@@ -240,13 +193,11 @@ def clean_dataframe(df: pd.DataFrame) -> tuple[pd.DataFrame, list]:
             df[col] = df[col].replace([np.inf, -np.inf], np.nan)
             logger.info("Replaced %d ±Inf values in '%s' with NaN", inf_count, col)
 
-    # ── 6. Smart type coercion for object columns ────────────────────────────
     for col in list(df.select_dtypes(include=["object"]).columns):
         col_data = df[col].dropna()
         if len(col_data) == 0:
             continue
 
-        # 6a. Salary ranges ('41k-65k', '0-40k', '225k+')
         if _looks_like_salary_range(df[col]):
             parsed = _parse_salary_range(df[col])
             if parsed.notna().sum() / max(len(df), 1) > 0.5:
@@ -254,41 +205,34 @@ def clean_dataframe(df: pd.DataFrame) -> tuple[pd.DataFrame, list]:
                 logger.info("Converted salary range '%s' to numeric midpoints", col)
                 continue
 
-        # 6b. Currency strings ('$1,234', '€500', '1.2M')
         parsed_cur, ok = _try_parse_currency(df[col])
         if ok and parsed_cur is not None:
             df[col] = parsed_cur
             logger.info("Converted currency column '%s' to float", col)
             continue
 
-        # 6c. Percentage strings ('85%' → 0.85)
         parsed_pct, ok = _try_parse_percentage(df[col])
         if ok and parsed_pct is not None:
             df[col] = parsed_pct
             logger.info("Converted percentage column '%s' to float ratio", col)
             continue
 
-        # 6d. Boolean text ('Yes'/'No', 'True'/'False')
         parsed_bool, ok = _try_parse_boolean(df[col])
         if ok and parsed_bool is not None:
             df[col] = parsed_bool
             logger.info("Converted boolean-text column '%s' to 0/1 float", col)
             continue
 
-        # 6e. Mixed numeric (mostly numbers + noise text like 'N/A')
         parsed_mix, ok = _try_parse_mixed_numeric(df[col])
         if ok and parsed_mix is not None:
             df[col] = parsed_mix
             logger.info("Coerced mixed-type column '%s' to numeric (noise → NaN)", col)
             continue
 
-    # ── 7. Impute — only columns with <60% missing ──────────────────────────
-    _IMPUTE_MAX_NULL_RATIO = 0.60
-
     for col in df.select_dtypes(include=[np.number]).columns:
         missing_count = int(df[col].isna().sum())
         null_ratio = missing_count / max(len(df), 1)
-        if missing_count > 0 and null_ratio < _IMPUTE_MAX_NULL_RATIO:
+        if missing_count > 0 and null_ratio < IMPUTE_MAX_NULL_RATIO:
             median_val = df[col].median()
             df[col] = df[col].fillna(median_val)
             logger.info("Filled %d missing in '%s' with median=%s", missing_count, col, median_val)
@@ -303,7 +247,7 @@ def clean_dataframe(df: pd.DataFrame) -> tuple[pd.DataFrame, list]:
     for col in df.select_dtypes(include=["object"]).columns:
         missing_count = int(df[col].isna().sum())
         null_ratio = missing_count / max(len(df), 1)
-        if missing_count > 0 and null_ratio < _IMPUTE_MAX_NULL_RATIO:
+        if missing_count > 0 and null_ratio < IMPUTE_MAX_NULL_RATIO:
             mode_val = df[col].mode()
             if not mode_val.empty:
                 fill = mode_val.iloc[0]
@@ -333,7 +277,6 @@ def detect_column_types(df: pd.DataFrame) -> dict[str, str]:
             if sample.empty:
                 type_map[col] = "categorical"
                 continue
-            # Detect HH:MM or HH:MM:SS time strings — NOT datetimes
             time_pat = sample.astype(str).str.match(r"^\d{1,2}:\d{2}(:\d{2})?$", na=False)
             if time_pat.sum() > len(sample) * 0.7:
                 type_map[col] = "duration"
@@ -355,11 +298,6 @@ def truncate_stats_for_llm(
     max_correlations: int = 5,
     max_categorical_cols: int = 15,
 ) -> dict:
-    """
-    Return a compact copy of *stats* suitable for LLM prompts.
-    Keeps the most informative columns and strips heavy sub-structures
-    (correlation matrices, full value-count dicts, outlier indices).
-    """
     truncated = {
         "row_count": stats.get("row_count"),
         "column_count": stats.get("column_count"),
@@ -369,7 +307,6 @@ def truncate_stats_for_llm(
         "excluded_columns": stats.get("excluded_columns"),
     }
 
-    # Numeric — top N by variance (most informative columns first)
     numeric = stats.get("numeric_columns", {})
     
     def _safe(v):
@@ -394,10 +331,7 @@ def truncate_stats_for_llm(
             f"Showing top {max_numeric_cols} of {len(numeric)} by variance"
         )
 
-    # Correlations — top N
     truncated["strong_correlations"] = stats.get("strong_correlations", [])[:max_correlations]
-
-    # Categorical — lightweight: unique count + most common only
     categorical = stats.get("categorical_columns", {})
     truncated["categorical_columns"] = {
         col: {
@@ -407,7 +341,6 @@ def truncate_stats_for_llm(
         for col, v in list(categorical.items())[:max_categorical_cols]
     }
 
-    # Outliers — counts only (drop indices, bounds)
     outliers = stats.get("outliers", {})
     truncated["outlier_counts"] = {
         col: v.get("count", 0) for col, v in outliers.items()
@@ -430,7 +363,6 @@ def json_default(obj: Any) -> Any:
         return obj.isoformat()
     if isinstance(obj, set):
         return list(obj)
-    # FIX 28: Handle bytes payloads and Python complex values.
     if isinstance(obj, bytes):
         return obj.decode("utf-8", errors="replace")
     if isinstance(obj, complex):
@@ -445,7 +377,6 @@ def sanitize_for_json(value: Any) -> Any:
         return [sanitize_for_json(v) for v in value]
     if isinstance(value, tuple):
         return [sanitize_for_json(v) for v in value]
-    # FIX 27: Normalize datetime-like values recursively.
     if isinstance(value, (pd.Timestamp, datetime, date)):
         return value.isoformat()
     if isinstance(value, float) and (value != value):
@@ -460,53 +391,47 @@ def sanitize_for_json(value: Any) -> Any:
     return value
 
 def build_chat_context_pack(stats: dict, insights: dict) -> dict:
-    """
-    Rich but compact context object built once at /analyze time,
-    stored in the result, and consumed by the /chat endpoint.
-    Gives the chatbot LLM direct access to per-column numbers
-    without needing a Parquet query for basic questions.
-    """
-    numeric     = stats.get("numeric_columns", {})
+    numeric = stats.get("numeric_columns", {})
     categorical = stats.get("categorical_columns", {})
-    profile     = stats.get("dataset_profile", {})
-    quality     = stats.get("data_quality", {})
-    outliers    = stats.get("outliers", {})
+    profile = stats.get("dataset_profile", {})
+    quality = stats.get("data_quality", {})
+    outliers = stats.get("outliers", {})
     correlations = stats.get("strong_correlations", [])[:8]
 
     col_narratives: dict = {}
 
     for col, data in list(numeric.items())[:20]:
         col_narratives[col] = {
-            "type":          "numeric",
-            "mean":          round(data.get("mean", 0), 3),
-            "median":        round(data.get("median", 0), 3),
-            "min":           round(data.get("min", 0), 3),
-            "max":           round(data.get("max", 0), 3),
-            "std":           round(data.get("std", 0), 3),
-            "skew":          round(data.get("skewness", 0), 2),
+            "type": "numeric",
+            "mean": round(data.get("mean", 0), 3),
+            "median": round(data.get("median", 0), 3),
+            "min": round(data.get("min", 0), 3),
+            "max": round(data.get("max", 0), 3),
+            "std": round(data.get("std", 0), 3),
+            "skew": round(data.get("skewness", 0), 2),
             "outlier_count": outliers.get(col, {}).get("count", 0),
         }
 
     for col, data in list(categorical.items())[:15]:
         col_narratives[col] = {
-            "type":         "categorical",
+            "type": "categorical",
             "unique_count": data.get("unique_values", 0),
-            "top_value":    data.get("most_common"),
+            "top_value": data.get("most_common"),
             "top_value_pct": round(
                 data.get("most_common_count", 0)
                 / max(stats.get("row_count", 1), 1) * 100, 1
             ),
-            "top_5":        data.get("top_5_values", {}),
+            "top_5": data.get("top_5_values", {}),
             "least_common": data.get("least_common"),
         }
 
     return {
-        "profile":       profile,
-        "quality":       quality,
-        "row_count":     stats.get("row_count"),
-        "column_count":  stats.get("column_count"),
-        "columns":       col_narratives,
-        "correlations":  correlations,
-        "key_findings":  insights.get("findings", [])[:5],
-        "headline":      insights.get("headline", ""),
+        "profile": profile,
+        "quality": quality,
+        "row_count": stats.get("row_count"),
+        "column_count": stats.get("column_count"),
+        "columns": col_narratives,
+        "correlations": correlations,
+        "key_findings": insights.get("findings", [])[:5],
+        "headline": insights.get("headline", ""),
     }

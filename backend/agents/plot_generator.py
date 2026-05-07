@@ -1,14 +1,4 @@
-"""
-DataPulse On-Demand Plot Generator — v4 FIXED
-==============================================
-Key fixes over v3:
-- suggest_novel_chart now actually reads user_request to pick the RIGHT chart type
-- If user says "pie chart" → tries pie/donut first, not histogram
-- If user says "scatter" → tries scatter first
-- If user says "another plot" (no type specified) → picks next unused combination
-- Proper "cannot generate" message when all combos exhausted
-- LLM-based chart planning when user specifies columns or a specific type
-"""
+   
 
 from __future__ import annotations
 
@@ -54,7 +44,7 @@ _TYPE_DISPLAY = {
     "stacked_bar": "Stacked bar chart",
 }
 
-# Maps user keywords → chart types to try (ordered by priority)
+                                                               
 _KEYWORD_TO_CHART_TYPES = {
     "pie":          ["donut", "pie"],
     "donut":        ["donut", "pie"],
@@ -76,7 +66,7 @@ _KEYWORD_TO_CHART_TYPES = {
 }
 
 
-# ── Helpers ───────────────────────────────────────────────────────────────────
+                                                                                
 
 def _records_to_df(records: list[dict]) -> pd.DataFrame:
     if not records:
@@ -91,7 +81,6 @@ def _records_to_df(records: list[dict]) -> pd.DataFrame:
             pass
     for col in df.select_dtypes(include=["object"]).columns:
         try:
-            # FIX 23: Handle pandas versions without format='mixed' support.
             parsed = pd.to_datetime(df[col], format="mixed", errors="coerce")
         except (ValueError, TypeError):
             try:
@@ -140,12 +129,7 @@ def _predict_chart_key(chart_type: str, x: Optional[str], y: Optional[str]) -> s
 
 
 def _is_duplicate(candidate_key: str, existing_keys: list[str]) -> bool:
-    """
-    Return True only if candidate_key is the SAME chart type + same columns
-    as an existing key.  Different chart types of the same columns are NOT
-    duplicates — a scatter of price vs sales is not a duplicate of a bar chart
-    of price vs sales.
-    """
+       
     _PREFIXES = [
         "scatter_", "ranked_bar_", "grouped_bar_", "histogram_",
         "box_", "violin_", "donut_", "freq_bar_", "line_",
@@ -153,7 +137,7 @@ def _is_duplicate(candidate_key: str, existing_keys: list[str]) -> bool:
     ]
 
     def _parse(k: str) -> tuple[str, str]:
-        """Return (chart_type_prefix, normalized_column_string)."""
+                                                                   
         k = k.lower()
         for prefix in _PREFIXES:
             if k.startswith(prefix):
@@ -162,17 +146,17 @@ def _is_duplicate(candidate_key: str, existing_keys: list[str]) -> bool:
 
     ctype_c, cols_c = _parse(candidate_key)
     for ek in existing_keys:
-        # 1. Exact key match (fastest)
+                                      
         if candidate_key.lower() == ek.lower():
             return True
         ctype_e, cols_e = _parse(ek)
-        # 2. Same chart type is required before any further comparison
+                                                                      
         if not ctype_c or ctype_c != ctype_e:
             continue
-        # 3. Exact column string match
+                                      
         if cols_c == cols_e:
             return True
-        # 4. Same set of column-name tokens (order-independent, e.g. x/y swapped)
+                                                                                 
         parts_c = {p for p in cols_c.split("_") if len(p) > 2}
         parts_e = {p for p in cols_e.split("_") if len(p) > 2}
         if parts_c and parts_e and parts_c == parts_e:
@@ -181,11 +165,7 @@ def _is_duplicate(candidate_key: str, existing_keys: list[str]) -> bool:
 
 
 def _detect_requested_chart_types(user_request: str) -> list[str]:
-    """
-    Parse the user's message to detect which chart type(s) they want.
-    Returns ordered list of chart types to try (most specific first).
-    Returns empty list if no specific type detected (→ pick any novel chart).
-    """
+       
     q = user_request.lower()
     requested = []
     for keyword, types in _KEYWORD_TO_CHART_TYPES.items():
@@ -197,9 +177,7 @@ def _detect_requested_chart_types(user_request: str) -> list[str]:
 
 
 def _detect_mentioned_columns(user_request: str, df_columns: list[str]) -> list[str]:
-    """
-    Find column names mentioned in the user's request (fuzzy match).
-    """
+       
     q_lower = user_request.lower()
     mentioned = []
     for col in df_columns:
@@ -210,10 +188,7 @@ def _detect_mentioned_columns(user_request: str, df_columns: list[str]) -> list[
 
 
 def _build_all_candidates(df: pd.DataFrame, existing_chart_keys: list[str]) -> list[dict]:
-    """
-    Build a complete list of all possible chart specs that are NOT already shown.
-    Ordered by: scatter > bar > histogram > donut > box > freq_bar > heatmap > line
-    """
+       
     numeric = [c for c in df.columns if pd.api.types.is_numeric_dtype(df[c])]
     categorical = [c for c in df.columns
                    if not pd.api.types.is_numeric_dtype(df[c])
@@ -232,61 +207,61 @@ def _build_all_candidates(df: pd.DataFrame, existing_chart_keys: list[str]) -> l
                 "_key": key,
             })
 
-    # scatter pairs
+                   
     for i, c1 in enumerate(numeric):
         for c2 in numeric[i+1:]:
             _add("scatter", c1, c2, title=f"{c1} vs {c2}")
 
-    # ranked_bar: cat x numeric
+                               
     for cat in categorical:
         for num in numeric:
             _add("ranked_bar", cat, num, title=f"Top {cat} by {num}")
 
-    # grouped_bar: cat x numeric (low-cardinality cats)
+                                                       
     for cat in categorical:
         nu = df[cat].nunique(dropna=True)
         if 2 <= nu <= 20:
             for num in numeric:
                 _add("grouped_bar", cat, num, title=f"Average {num} by {cat}")
 
-    # histogram for each numeric
+                                
     for c in numeric:
         _add("histogram", c, None, title=f"Distribution of {c}")
 
-    # donut for low-cardinality categoricals
+                                            
     for cat in categorical:
         nu = df[cat].nunique(dropna=True)
         if 2 <= nu <= 8:
             _add("donut", cat, None, title=f"Composition of {cat}")
 
-    # box: cat x numeric
+                        
     for cat in categorical:
         nu = df[cat].nunique(dropna=True)
         if 2 <= nu <= 15:
             for num in numeric:
                 _add("box", cat, num, title=f"{num} distribution by {cat}")
 
-    # violin: cat x numeric (2-6 cats only)
+                                           
     for cat in categorical:
         nu = df[cat].nunique(dropna=True)
         if 2 <= nu <= 6:
             for num in numeric:
                 _add("violin", cat, num, title=f"{num} by {cat}")
 
-    # freq_bar for categoricals
+                               
     for cat in categorical:
         _add("freq_bar", cat, None, title=f"Frequency of {cat}")
 
-    # heatmap (all numeric)
+                           
     if len(numeric) >= 3:
         _add("heatmap", None, None, title="Correlation Heatmap")
 
-    # line: datetime x numeric
+                              
     for dt in datetime_cols:
         for num in numeric[:3]:
             _add("line", dt, num, title=f"{num} over time")
 
-    # stacked bar: two low-cardinality categoricals
+                                                   
     small_cats = [c for c in categorical if 2 <= df[c].nunique(dropna=True) <= 8]
     if len(small_cats) >= 2:
         _add("stacked_bar", small_cats[0], None, color=small_cats[1], title=f"{small_cats[0]} vs {small_cats[1]}")
@@ -300,17 +275,7 @@ def suggest_novel_chart(
     user_request: str = "",
     stats_summary: dict = None,
 ) -> dict:
-    """
-    Suggest a new chart that:
-    1. Matches what the user asked for (if they specified a type/columns)
-    2. Has NOT already been shown
-    3. Actually has data signal
-
-    Returns:
-        {"cannot_plot": False, "spec": {...}, "reasoning": "..."}
-        OR
-        {"cannot_plot": True, "reason": "..."}
-    """
+       
     df = _records_to_df(df_records)
     if df.empty:
         return {"cannot_plot": True, "reason": "No dataset preview available. Please re-upload your file."}
@@ -320,7 +285,7 @@ def suggest_novel_chart(
                    if not pd.api.types.is_numeric_dtype(df[c])
                    and not pd.api.types.is_datetime64_any_dtype(df[c])]
 
-    # ── Step 1: Parse what the user wants ──────────────────────────────────
+                                                                             
     requested_types = _detect_requested_chart_types(user_request)
     mentioned_cols = _detect_mentioned_columns(user_request, list(df.columns))
 
@@ -329,7 +294,7 @@ def suggest_novel_chart(
         requested_types, mentioned_cols, len(existing_chart_keys)
     )
 
-    # ── Step 2: Build all possible non-duplicate candidates ────────────────
+                                                                             
     all_candidates = _build_all_candidates(df, existing_chart_keys)
 
     if not all_candidates:
@@ -344,11 +309,10 @@ def suggest_novel_chart(
             )
         }
 
-    # ── Step 3: If user specified a type, filter to that type first ────────
+                                                                             
     if requested_types:
-        # Try each requested type in order
+                                          
         for rtype in requested_types:
-            # FIX 24: Treat pie and donut as interchangeable request aliases.
             type_candidates = [
                 c for c in all_candidates
                 if c["chart_type"] in (
@@ -358,7 +322,7 @@ def suggest_novel_chart(
                 )
             ]
 
-            # If user also mentioned specific columns, prefer those
+                                                                   
             if mentioned_cols and type_candidates:
                 col_matched = [
                     c for c in type_candidates
@@ -376,12 +340,12 @@ def suggest_novel_chart(
                     "reasoning": f"Showing a {_TYPE_DISPLAY.get(rtype, rtype)} as requested.",
                 }
 
-        # User asked for a specific type but none available (all shown or impossible)
-        # Tell them specifically why
+                                                                                     
+                                    
         type_names = [_TYPE_DISPLAY.get(t, t) for t in requested_types]
         type_str = " or ".join(type_names)
 
-        # Check if the type is even possible with this data
+                                                           
         impossible_reasons = _explain_why_type_impossible(requested_types, df, numeric, categorical, existing_chart_keys)
         return {
             "cannot_plot": True,
@@ -390,8 +354,8 @@ def suggest_novel_chart(
             )
         }
 
-    # ── Step 4: No specific type requested → pick best novel chart ─────────
-    # If user mentioned columns, prefer those
+                                                                             
+                                             
     if mentioned_cols:
         col_matched = [
             c for c in all_candidates
@@ -410,7 +374,7 @@ def suggest_novel_chart(
                 "reasoning": f"Showing {col_phrase} as a {_TYPE_DISPLAY.get(ct, ct)}.",
             }
 
-    # Pick the first available (highest priority from _build_all_candidates ordering)
+                                                                                     
     spec = all_candidates[0]
     spec_clean = {k: v for k, v in spec.items() if k != "_key"}
     ct = spec["chart_type"]
@@ -431,7 +395,7 @@ def _explain_why_type_impossible(
     categorical: list[str],
     existing_keys: list[str],
 ) -> Optional[str]:
-    """Give a specific reason why the requested chart type can't be generated."""
+                                                                                 
     for rtype in requested_types:
         if rtype in ("donut", "pie"):
             low_card = [c for c in categorical if 2 <= df[c].nunique(dropna=True) <= 8]
@@ -460,17 +424,14 @@ def _explain_why_type_impossible(
     return None
 
 
-# ── Main generation entry point ───────────────────────────────────────────────
+                                                                                
 
 def generate_on_demand_chart(
     spec: dict,
     df_records: list[dict],
     existing_chart_keys: Optional[list[str]] = None,
 ) -> dict:
-    """
-    Build a Plotly chart from a spec dict.
-    Returns: {"id": str, "fig": dict|None, "error": str|None, "is_duplicate": bool}
-    """
+       
     existing_chart_keys = existing_chart_keys or []
 
     chart_type = (spec.get("chart_type") or "").lower().strip()
@@ -493,11 +454,10 @@ def generate_on_demand_chart(
     y     = _resolve_column(y,     actual_cols)
     color = _resolve_column(color, actual_cols)
 
-    # Duplicate check
+                     
     candidate_key = _predict_chart_key(chart_type, x, y)
     if existing_chart_keys and _is_duplicate(candidate_key, existing_chart_keys):
         logger.info("Duplicate chart detected: %s", candidate_key)
-        # FIX 25: Return consistent duplicate response payload shape.
         return {"id": "duplicate", "fig": None, "error": None, "is_duplicate": True}
 
     num_cols = [c for c in df.columns if pd.api.types.is_numeric_dtype(df[c])]
@@ -583,7 +543,7 @@ def generate_on_demand_chart(
             chart_type, x, y,
         )
         fallback_chart = None
-        # Try robust defaults so generic "show me a chart" always returns at least one chart.
+                                                                                             
         if len(num_cols) >= 3:
             fallback_chart = _build_heatmap(df, num_cols, title="Correlation Heatmap")
         if fallback_chart is None and num_cols:

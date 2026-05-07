@@ -1,16 +1,4 @@
-"""
-DataPulse Pandas Code Executor — Sandboxed
-==========================================
-Generates and executes pandas code from natural language questions.
-Used for analytical questions (counts, sums, filters, aggregations)
-where exact numbers are needed from the full dataset.
-
-Security:
-- Only `pd`, `np`, and `df` are exposed in the execution namespace
-- No imports, file I/O, exec/eval, or network access allowed
-- Code is validated before execution
-- Result size is capped to prevent memory issues
-"""
+   
 
 from __future__ import annotations
 
@@ -26,10 +14,10 @@ import pandas as pd
 
 logger = logging.getLogger(__name__)
 
-# ── Banned patterns for sandboxing ─────────────────────────────────────────────
+                                                                                 
 _BANNED_PATTERNS = [
     r'\bimport\b',
-    r'\b__\w+__\b',         # dunder access
+    r'\b__\w+__\b',                        
     r'\bexec\b',
     r'\beval\b',
     r'\bopen\b',
@@ -56,18 +44,13 @@ _MAX_RESULT_ROWS = 50
 _MAX_RESULT_CHARS = 3000
 
 
-# ── Question Classification ───────────────────────────────────────────────────
+                                                                                
 
 async def classify_question(question: str, groq_client) -> str:
-    """
-    Classify a question as 'analytical' or 'reasoning'.
-    
-    analytical = needs exact numbers: counts, sums, averages, filters, lookups
-    reasoning  = needs interpretation: trends, comparisons, why, what-if, explain
-    """
+       
     q = question.lower().strip()
     
-    # Fast heuristic shortcuts — avoid LLM call for obvious cases
+                                                                 
     _ANALYTICAL_SIGNALS = (
         "how many", "how much", "total", "count of", "number of",
         "average", "sum of", "maximum", "minimum", "what is the",
@@ -88,7 +71,7 @@ async def classify_question(question: str, groq_client) -> str:
     if any(sig in q for sig in _REASONING_SIGNALS):
         return "reasoning"
     
-    # Borderline — use LLM to classify
+                                      
     try:
         prompt = (
             "Classify this data question into ONE category:\n"
@@ -114,11 +97,11 @@ async def classify_question(question: str, groq_client) -> str:
     except Exception as exc:
         logger.warning("Question classification failed: %s", exc)
     
-    # Default to analytical — better to run real code than guess
+                                                                
     return "analytical"
 
 
-# ── Pandas Code Generation ────────────────────────────────────────────────────
+                                                                                
 
 def _build_codegen_prompt(
     question: str,
@@ -126,7 +109,7 @@ def _build_codegen_prompt(
     dtypes: dict[str, str],
     sample_values: dict[str, list],
 ) -> str:
-    """Build the prompt that asks the LLM to write pandas code."""
+                                                                  
     return f"""You are a pandas expert. Write ONLY executable Python/pandas code.
 
 DATASET INFO:
@@ -157,11 +140,11 @@ async def generate_pandas_code(
     df: pd.DataFrame,
     groq_client,
 ) -> str:
-    """Generate pandas code from a natural language question."""
+                                                                
     columns = df.columns.tolist()
     dtypes = {col: str(df[col].dtype) for col in columns}
     
-    # Build sample values for each column (helps LLM match entities)
+                                                                    
     sample_values = {}
     for col in columns:
         if df[col].dtype == 'object' or str(df[col].dtype) == 'category':
@@ -192,40 +175,37 @@ async def generate_pandas_code(
     )
     code = (resp.choices[0].message.content or "").strip()
     
-    # Strip markdown fences if LLM added them anyway
+                                                    
     if code.startswith("```"):
         code = code.split("\n", 1)[-1].rsplit("```", 1)[0].strip()
     
     return code
 
 
-# ── Safe Execution ─────────────────────────────────────────────────────────────
+                                                                                 
 
 def _validate_code(code: str) -> Optional[str]:
-    """Return error message if code is unsafe, else None."""
+                                                            
     match = _BANNED_RE.search(code)
     if match:
         return f"Unsafe code detected: '{match.group()}'"
-    # Limit code length
+                       
     if len(code) > 2000:
         return "Generated code is too long (>2000 chars)"
-    # Must assign to `result`
+                             
     if "result" not in code:
         return "Code does not assign to 'result' variable"
     return None
 
 
 def safe_execute(code: str, df: pd.DataFrame) -> dict:
-    """
-    Execute pandas code in a sandboxed environment.
-    Returns: {"result": Any, "error": str|None, "code": str}
-    """
-    # Validate
+       
+              
     error = _validate_code(code)
     if error:
         return {"result": None, "error": error, "code": code}
     
-    # Execute in restricted namespace
+                                     
     namespace = {"df": df.copy(), "pd": pd, "np": np}
     try:
         exec(code, {"__builtins__": {}}, namespace)
@@ -244,10 +224,10 @@ def safe_execute(code: str, df: pd.DataFrame) -> dict:
     return {"result": result, "error": None, "code": code}
 
 
-# ── Result Formatting ──────────────────────────────────────────────────────────
+                                                                                 
 
 def format_result(result: Any) -> str:
-    """Convert a pandas execution result to a clean string for the LLM."""
+                                                                          
     if result is None:
         return "No result"
     
@@ -275,10 +255,10 @@ def build_rich_context(
     df: pd.DataFrame,
     question: str,
 ) -> dict:
-    """Build additional context beyond the raw result for richer answers."""
+                                                                            
     ctx = {"total_records": len(df)}
     
-    # If result is a count, add percentage context
+                                                  
     if isinstance(result, (int, float, np.integer, np.floating)):
         try:
             pct = (float(result) / len(df)) * 100
@@ -287,7 +267,7 @@ def build_rich_context(
         except (ZeroDivisionError, ValueError):
             pass
     
-    # Pull high-level column info
+                                 
     q_lower = question.lower()
     for col in df.columns:
         col_lower = col.lower()
@@ -304,7 +284,7 @@ def build_rich_context(
     return ctx
 
 
-# ── Challenge Detection ───────────────────────────────────────────────────────
+                                                                                
 
 _CHALLENGE_PHRASES = (
     "are you sure", "confirm", "double check", "really",
@@ -313,6 +293,6 @@ _CHALLENGE_PHRASES = (
 )
 
 def is_challenge(question: str) -> bool:
-    """Detect if the user is challenging/verifying the previous answer."""
+                                                                          
     q = question.lower().strip()
     return any(phrase in q for phrase in _CHALLENGE_PHRASES)

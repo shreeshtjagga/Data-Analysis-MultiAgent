@@ -59,7 +59,6 @@ function cleanAxisTitle(value) {
   return truncateLabel(cleanQuestionLabel(value), 42);
 }
 
-// FIX 33: Support Plotly title values that may be string or object.
 function getFigureTitleText(fig, fallback = "") {
   const title = fig?.layout?.title;
   if (typeof title === "string") return title;
@@ -625,7 +624,6 @@ const ChartPanel = memo(({ result, PlotComponent }) => {
   }, [spotlightChartKey]);
 
   const captureInitialBounds = useCallback((key, figure) => {
-    // FIX 32: Guard undefined layout/xaxis during plot initialization.
     const xRange = figure?.layout?.xaxis?.range
       ? normalizeRangePair(figure.layout.xaxis.range)
       : null;
@@ -1147,7 +1145,6 @@ export default function DataPulse({ user, onLogout }) {
   }, [chatMsgs, chatLoading]);
   const clearStageTimers = () => {
     stageTimersRef.current.forEach((timerId) => {
-      // FIX 36: Explicitly clear both timeout and interval timer IDs.
       clearTimeout(timerId);
       clearInterval(timerId);
     });
@@ -1416,7 +1413,6 @@ export default function DataPulse({ user, onLogout }) {
         const yGap = 12;
         const chartBoxHeight = totalRows > 1 ? (availableHeight - yGap) / totalRows : Math.min(availableHeight, 100);
 
-      // FIX 34: Keep per-chart try/catch inside loop to avoid whole-export failure.
       for (let i = 0; i < totalCharts; i++) {
           const key = chartKeys[i];
           const fig = charts[key];

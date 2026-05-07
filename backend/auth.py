@@ -1,20 +1,4 @@
-"""
-DataPulse Auth — Supabase Backend
-==================================
-Replaces custom JWT + bcrypt + google-auth with Supabase Auth.
-
-REMOVED (dead after migration):
-  - jose JWT (create_access_token, verify_access_token) → Supabase issues tokens
-  - passlib/bcrypt (hash_password, verify_password) → Supabase hashes internally
-  - python-jose refresh tokens → Supabase handles refresh via session
-  - google.oauth2 id_token verification → Supabase verifies Google tokens
-  - password reset token generation → Supabase has built-in resetPasswordForEmail
-
-KEPT:
-  - normalize_email() → still needed for input sanitization
-  - SMTP email helpers → kept for custom notifications
-  - get_user_by_id() → still needed by API endpoints
-"""
+   
 
 import logging
 import os
@@ -36,7 +20,7 @@ from .db import User, AnalysisHistory
 
 logger = logging.getLogger(__name__)
 
-# ── Supabase Admin Client ──────────────────────────────────────────────────────
+                                                                                 
 SUPABASE_URL = os.getenv("SUPABASE_URL", "").strip()
 SUPABASE_SERVICE_ROLE_KEY = os.getenv("SUPABASE_SERVICE_ROLE_KEY", "").strip()
 SUPABASE_ANON_KEY = os.getenv("SUPABASE_ANON_KEY", "").strip()
@@ -47,22 +31,19 @@ if not SUPABASE_URL or not SUPABASE_SERVICE_ROLE_KEY:
         "Get them from Supabase Dashboard → Settings → API."
     )
 
-# Service-role client: used server-side only, never exposed to frontend
+                                                                       
 _supabase_admin: Client = create_client(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY)
 
-# Public client: used for sign-in (validates user credentials via anon key)
+                                                                           
 _supabase_public: Client = create_client(SUPABASE_URL, SUPABASE_ANON_KEY)
 
-# ── Supabase JWT verification ──────────────────────────────────────────────────
-# Supabase JWTs are standard HS256. Verification happens via Supabase Admin API.
-# We call get_user(jwt) instead of manually decoding — this handles expiry,
-# rotation, and revocation automatically.
+                                                                                 
+                                                                                
+                                                                           
+                                         
 
 async def verify_access_token(token: str) -> Optional[dict]:
-    """
-    Verify a Supabase JWT and return {sub: uuid, email: str} or None.
-    Uses Supabase Admin API — handles expiry and revocation correctly.
-    """
+       
     import asyncio
     try:
         resp = await asyncio.to_thread(_supabase_admin.auth.get_user, token)
@@ -78,7 +59,7 @@ async def verify_access_token(token: str) -> Optional[dict]:
         return None
 
 
-# ── Email helpers ──────────────────────────────────────────────────────────────
+                                                                                 
 
 def normalize_email(email: str, *, check_deliverability: bool = False) -> Optional[str]:
     if not email:
@@ -124,14 +105,14 @@ def _send_password_reset_email(to_email: str, reset_link: str) -> bool:
         return False
 
 
-# ── User profile sync ──────────────────────────────────────────────────────────
-# Supabase Auth manages auth.users. Our SQLAlchemy `users` table stores
-# the profile (name, etc.) keyed by the Supabase UUID (stored as string in email
-# field for compatibility). After full migration, consider replacing the User
-# table with a Supabase `profiles` table via RLS policies.
+                                                                                 
+                                                                       
+                                                                                
+                                                                             
+                                                          
 
 async def _get_or_create_profile(db: AsyncSession, supabase_user_id: str, email: str, name: Optional[str] = None) -> User:
-    """Sync a Supabase auth user into our local users table."""
+                                                               
     result = await db.execute(
         select(User).where(User.supabase_id == supabase_user_id)
     )
@@ -139,7 +120,7 @@ async def _get_or_create_profile(db: AsyncSession, supabase_user_id: str, email:
     if user is not None:
         return user
 
-    # First time login — create local profile row
+                                                 
     user = User(
         supabase_id=supabase_user_id,
         email=email,
@@ -153,7 +134,7 @@ async def _get_or_create_profile(db: AsyncSession, supabase_user_id: str, email:
     return user
 
 
-# ── Register ───────────────────────────────────────────────────────────────────
+                                                                                 
 
 async def register_user(db: AsyncSession, email: str, password: str, name: Optional[str] = None) -> dict:
     if not email or not password:
@@ -173,7 +154,7 @@ async def register_user(db: AsyncSession, email: str, password: str, name: Optio
             {
                 "email": normalized_email,
                 "password": password,
-                "email_confirm": True,  # skip confirmation email for now
+                "email_confirm": True,                                   
                 "user_metadata": {"name": name or ""},
             }
         )
@@ -187,7 +168,7 @@ async def register_user(db: AsyncSession, email: str, password: str, name: Optio
         logger.error("Supabase register_user failed: %s", exc)
         return {"success": False, "message": "Registration failed. Please try again."}
 
-    # Sync profile to local DB
+                              
     user = await _get_or_create_profile(db, str(supabase_user.id), normalized_email, name)
 
     logger.info("User registered via Supabase: %s (local_id=%d)", normalized_email, user.id)
@@ -202,7 +183,7 @@ async def register_user(db: AsyncSession, email: str, password: str, name: Optio
     }
 
 
-# ── Login ──────────────────────────────────────────────────────────────────────
+                                                                                 
 
 async def login_user(db: AsyncSession, email: str, password: str) -> dict:
     if not email or not password:
@@ -230,7 +211,7 @@ async def login_user(db: AsyncSession, email: str, password: str) -> dict:
         logger.error("Supabase login_user error: %s", exc)
         return {"success": False, "message": "Login failed. Please try again."}
 
-    # Sync/get local profile
+                            
     name = (supabase_user.user_metadata or {}).get("name")
     user = await _get_or_create_profile(db, str(supabase_user.id), normalized_email, name)
 
@@ -251,59 +232,13 @@ async def login_user(db: AsyncSession, email: str, password: str) -> dict:
     }
 
 
-# ── Google OAuth ───────────────────────────────────────────────────────────────
-# REMOVED: verify_google_token() using google.oauth2.id_token — dead, replaced by
-# Supabase's built-in Google provider. Google tokens are now validated by Supabase
-# via the OAuth code exchange flow or ID token submission.
-
-async def login_google_user(db: AsyncSession, google_id_token: str, name: Optional[str] = None) -> dict:
-    """
-    Verify a Google ID token via Supabase and create/find the local user profile.
-    Supabase validates the token against the Google Client ID configured in
-    the Supabase Dashboard → Auth → Providers → Google.
-    """
-    import asyncio
-    try:
-        resp = await asyncio.to_thread(
-            _supabase_public.auth.sign_in_with_id_token,
-            {"provider": "google", "token": google_id_token}
-        )
-        session = resp.session
-        supabase_user = resp.user
-        if session is None or supabase_user is None:
-            return {"success": False, "message": "Invalid Google token"}
-    except Exception as exc:
-        logger.error("Supabase Google login failed: %s", exc)
-        return {"success": False, "message": "Invalid Google token"}
-
-    email = supabase_user.email
-    if not email:
-        return {"success": False, "message": "No email provided by Google"}
-
-    meta_name = name or (supabase_user.user_metadata or {}).get("full_name") or (supabase_user.user_metadata or {}).get("name")
-    user = await _get_or_create_profile(db, str(supabase_user.id), email, meta_name)
-
-    logger.info("Google user logged in via Supabase: %s (local_id=%d)", email, user.id)
-    return {
-        "success": True,
-        "message": "Login successful!",
-        "access_token": session.access_token,
-        "refresh_token": session.refresh_token,
-        "token_type": "bearer",
-        "user": {
-            "id": user.id,
-            "name": user.name,
-            "email": user.email,
-            "created_at": user.created_at,
-            "updated_at": user.updated_at,
-        },
-    }
+                                                                                 
+                                                                            
 
 
-# ── Password Reset ─────────────────────────────────────────────────────────────
-# REMOVED: create_password_reset_token(), verify_password_reset_token(),
-# reset_password_with_token() using custom HMAC tokens — dead. Supabase has a
-# built-in resetPasswordForEmail() that sends a secure, time-limited link.
+                                                                                 
+                                                                             
+                                                                          
 
 async def request_password_reset(db: AsyncSession, email: str) -> dict:
     generic_message = "If an account exists for that email, a password reset link has been sent."
@@ -324,21 +259,17 @@ async def request_password_reset(db: AsyncSession, email: str) -> dict:
         )
         logger.info("Password reset link generated for: %s", normalized_email)
     except Exception as exc:
-        # Don't leak whether the email exists
+                                             
         logger.warning("Password reset request failed (non-fatal): %s", exc)
 
     return {"success": True, "message": generic_message, "email_sent": True}
 
 
 async def reset_password_with_token(db: AsyncSession, token: str, new_password: str) -> dict:
-    """
-    Reset password using the Supabase session token from the reset link.
-    The frontend receives the token from the URL after clicking the reset link,
-    then passes it here.
-    """
+       
     import asyncio
     try:
-        # Exchange the recovery token for a session first
+                                                         
         resp = await asyncio.to_thread(
             _supabase_public.auth.verify_otp,
             {"token_hash": token, "type": "recovery"}
@@ -347,7 +278,7 @@ async def reset_password_with_token(db: AsyncSession, token: str, new_password: 
         if session is None:
             return {"success": False, "message": "Invalid or expired reset token"}
 
-        # Use the session token to update the password
+                                                      
         user_client = create_client(SUPABASE_URL, SUPABASE_ANON_KEY)
         await asyncio.to_thread(
             user_client.auth.set_session,
@@ -365,12 +296,11 @@ async def reset_password_with_token(db: AsyncSession, token: str, new_password: 
     return {"success": True, "message": "Password reset successful. Please log in with your new password."}
 
 
-# ── Token Refresh ──────────────────────────────────────────────────────────────
-# REMOVED: create_refresh_token(), verify_refresh_token() using custom HMAC tokens.
-# Supabase refresh tokens are opaque strings managed by Supabase internally.
+                                                                                 
+                                                                            
 
 async def refresh_session(refresh_token: str) -> Optional[dict]:
-    """Exchange a Supabase refresh token for a new access token."""
+                                                                   
     import asyncio
     try:
         resp = await asyncio.to_thread(
@@ -388,7 +318,7 @@ async def refresh_session(refresh_token: str) -> Optional[dict]:
         return None
 
 
-# ── User lookup ────────────────────────────────────────────────────────────────
+                                                                                 
 
 async def get_user_by_id(db: AsyncSession, user_id: int) -> Optional[User]:
     return await db.get(User, user_id)
