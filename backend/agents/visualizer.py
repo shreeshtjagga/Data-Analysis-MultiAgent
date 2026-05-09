@@ -203,7 +203,8 @@ def _build_ranked_bar(df: pd.DataFrame, x_col: str, y_col: str, title: str, agg:
         return None
     agg_label = 'Total' if agg == 'sum' else 'Average'
     chart_title = title or f'Top {len(grouped)} {x_col} by {agg_label} {y_col}'
-    fig = px.bar(grouped, x=y_col, y=x_col, orientation='h', title=chart_title, color=color_col if color_col and color_col in grouped.columns else y_col, color_continuous_scale='Blues', text=y_col)
+    colors = ['#00d4a8','#4d9fff','#f5a623','#a78bfa','#ff4d6a','#00bcd4','#ff9800','#8bc34a']
+    fig = px.bar(grouped, x=y_col, y=x_col, orientation='h', title=chart_title, color=x_col, color_discrete_sequence=colors, text=y_col)
     fig.update_traces(texttemplate='%{text:.2s}', textposition='outside')
     pct_cols = (stats or {}).get('percentage_columns', []) if isinstance(stats, dict) else []
     if y_col in pct_cols:
@@ -237,11 +238,12 @@ def _build_grouped_bar(df: pd.DataFrame, cat_col: str, num_col: str, title: str,
     agg_label = 'Total' if agg == 'sum' else 'Average'
     chart_title = title or f'{agg_label} {num_col} by {cat_col}'
     horizontal = n_cats > 10
+    colors = ['#00d4a8','#4d9fff','#f5a623','#a78bfa','#ff4d6a','#00bcd4','#ff9800','#8bc34a']
     if horizontal:
-        fig = px.bar(grouped, x=num_col, y=cat_col, orientation='h', title=chart_title, color=color_col_use)
+        fig = px.bar(grouped, x=num_col, y=cat_col, orientation='h', title=chart_title, color=cat_col, color_discrete_sequence=colors)
         fig.update_layout(yaxis=dict(autorange='reversed'))
     else:
-        fig = px.bar(grouped, x=cat_col, y=num_col, title=chart_title, color=color_col_use)
+        fig = px.bar(grouped, x=cat_col, y=num_col, title=chart_title, color=cat_col, color_discrete_sequence=colors)
         fig.update_layout(xaxis_tickangle=-30, xaxis_automargin=True)
     fig.update_layout(showlegend=False)
     score = 72 + comp * 18
@@ -337,7 +339,19 @@ def _build_heatmap(df: pd.DataFrame, num_cols: list[str], title: str='') -> Opti
     if corr.empty or corr.shape[0] < 2:
         return None
     chart_title = title or 'Correlation Heatmap'
-    fig = px.imshow(corr, text_auto=True, title=chart_title, color_continuous_scale='RdBu_r', zmin=-1, zmax=1)
+    fig = px.imshow(corr, text_auto=True, title=chart_title, zmin=-1, zmax=1)
+    fig.update_layout(
+        paper_bgcolor='#161c28',
+        plot_bgcolor='#161c28',
+        font_color='#e8edf5',
+    )
+    fig.update_traces(
+        colorscale=[
+            [0, '#0d3b6e'],
+            [0.5, '#1e2d45'],
+            [1, '#00d4a8']
+        ]
+    )
     height = max(380, min(600, 200 + 48 * len(cols)))
     score = 85.0
     return Chart(key='heatmap_correlation', fig=_style(fig, height), score=score, cols=set(cols))

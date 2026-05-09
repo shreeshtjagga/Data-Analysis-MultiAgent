@@ -322,7 +322,6 @@ function getCoreRevelations(desc, fig, key) {
   if (extent) {
     insights.push(`Observed numeric range spans from ${extent.min.toFixed(2)} to ${extent.max.toFixed(2)}, indicating notable spread.`);
   }
-  insights.push("Use this chart as a decision anchor to validate trends before acting on downstream analysis outputs.");
   return Array.from(new Set(insights)).slice(0, 5);
 }
 function isChartZoomable(data) {
@@ -411,6 +410,7 @@ function renderMarkdown(text) {
   return elements;
 }
 const ChatBubble = memo(({ m, PlotComponent, result, stopPageZoomOnCtrlWheel }) => {
+  const [expandedChartKey, setExpandedChartKey] = useState(null);
   return (
     <div
       style={{
@@ -486,6 +486,7 @@ const ChatBubble = memo(({ m, PlotComponent, result, stopPageZoomOnCtrlWheel }) 
       )}
       {}
       <div
+        className={m.role === 'ai' ? 'ai-message' : ''}
         style={{
           background: m.role === 'user'
             ? 'linear-gradient(135deg, #6366f1 0%, #4f46e5 100%)'
@@ -526,8 +527,15 @@ const ChatBubble = memo(({ m, PlotComponent, result, stopPageZoomOnCtrlWheel }) 
               const cData = Array.isArray(parsedFig?.data) ? parsedFig.data : [];
               const cLayout = (parsedFig?.layout && typeof parsedFig.layout === 'object') ? parsedFig.layout : {};
               inlineChartJSX = (
-                <div style={{ border: '1px solid rgba(99,102,241,0.2)', borderRadius: '12px', overflow: 'hidden', background: 'rgba(0,0,0,0.3)', width: '100%' }}>
-                  <div onWheel={stopPageZoomOnCtrlWheel}>
+                <div style={{ border: '1px solid rgba(99,102,241,0.2)', borderRadius: '12px', overflow: 'hidden', background: 'rgba(0,0,0,0.3)', width: '100%', padding: '12px', display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                      <span style={{ color: 'var(--primary-500)', fontSize: '16px' }}>📊</span>
+                      <strong style={{ fontSize: '13px', color: 'var(--text-main)' }}>{cLayout.title?.text || key.replace(/_/g, ' ')}</strong>
+                    </div>
+                    <button onClick={() => setExpandedChartKey(key)} className="topbar-btn" style={{ padding: '4px 10px', fontSize: '11px', background: 'rgba(99,102,241,0.1)' }}>Expand</button>
+                  </div>
+                  <div style={{ height: '120px', pointerEvents: 'none', opacity: 0.8 }} onWheel={stopPageZoomOnCtrlWheel}>
                     <PlotComponent
                       data={cData.map(t => ({ ...t, textfont: { color: '#FFFFFF' } }))}
                       layout={{
@@ -538,20 +546,54 @@ const ChatBubble = memo(({ m, PlotComponent, result, stopPageZoomOnCtrlWheel }) 
                         font: { color: '#FFFFFF', family: "'Inter', sans-serif" },
                         autosize: true,
                         width: undefined,
-                        dragmode: cLayout?.dragmode || 'zoom',
-                        hoverlabel: { bgcolor: 'rgba(8,12,24,0.98)', font: { color: '#F8FAFC', size: 12 }, bordercolor: 'rgba(99,102,241,0.85)' },
-                        height: 300,
-                        margin: { r: 16, t: 36, b: 36 },
-                        xaxis: { ...(cLayout.xaxis || {}), tickfont: { color: '#FFFFFF', size: 10 }, automargin: true },
-                        yaxis: { ...(cLayout.yaxis || {}), tickfont: { color: '#FFFFFF', size: 10 }, automargin: true, tickmode: 'auto', nticks: 10 },
-                        title: { ...(cLayout.title || {}), font: { size: 14, color: '#fff', weight: 'bold' }, y: 0.95, yanchor: 'top' },
-                        legend: { orientation: 'h', yanchor: 'top', y: -0.2, xanchor: 'center', x: 0.5, font: { size: 10, color: 'rgba(255,255,255,0.7)' } },
+                        dragmode: false,
+                        height: 120,
+                        margin: { r: 5, t: 5, b: 5, l: 5 },
+                        xaxis: { visible: false },
+                        yaxis: { visible: false },
+                        title: { text: '' },
+                        showlegend: false,
                       }}
-                      config={{ ...PLOTLY_CONFIG, scrollZoom: false, staticPlot: true, displayModeBar: false }}
+                      config={{ ...PLOTLY_CONFIG, staticPlot: true, displayModeBar: false }}
                       useResizeHandler
-                      style={{ width: '100%', height: '360px' }}
+                      style={{ width: '100%', height: '100%' }}
                     />
                   </div>
+                  {expandedChartKey === key && (
+                    <div style={{ position: 'fixed', inset: 0, zIndex: 9999, background: 'rgba(0,0,0,0.85)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '40px' }} onClick={() => setExpandedChartKey(null)}>
+                      <div style={{ background: 'var(--bg-main)', border: '1px solid var(--border-subtle)', borderRadius: '16px', width: '90%', maxWidth: '1000px', height: '80vh', display: 'flex', flexDirection: 'column', overflow: 'hidden' }} onClick={e => e.stopPropagation()}>
+                        <div style={{ padding: '16px 24px', borderBottom: '1px solid var(--border-subtle)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                          <strong style={{ fontSize: '16px', color: 'var(--text-main)' }}>{cLayout.title?.text || key.replace(/_/g, ' ')}</strong>
+                          <button onClick={() => setExpandedChartKey(null)} style={{ background: 'none', border: 'none', color: 'var(--text-muted)', fontSize: '24px', cursor: 'pointer' }}>×</button>
+                        </div>
+                        <div style={{ flex: 1, padding: '24px' }}>
+                          <PlotComponent
+                            data={cData.map(t => ({ ...t, textfont: { color: '#FFFFFF' } }))}
+                            layout={{
+                              ...PLOTLY_DARK_LAYOUT,
+                              ...cLayout,
+                              paper_bgcolor: 'rgba(0,0,0,0)',
+                              plot_bgcolor: 'rgba(0,0,0,0)',
+                              font: { color: '#FFFFFF', family: "'Inter', sans-serif" },
+                              autosize: true,
+                              width: undefined,
+                              dragmode: cLayout?.dragmode || 'zoom',
+                              hoverlabel: { bgcolor: 'rgba(8,12,24,0.98)', font: { color: '#F8FAFC', size: 12 }, bordercolor: 'rgba(99,102,241,0.85)' },
+                              height: undefined,
+                              margin: { r: 24, t: 40, b: 60, l: 60 },
+                              xaxis: { ...(cLayout.xaxis || {}), tickfont: { color: '#FFFFFF', size: 11 }, automargin: true },
+                              yaxis: { ...(cLayout.yaxis || {}), tickfont: { color: '#FFFFFF', size: 11 }, automargin: true },
+                              title: { text: '' },
+                              legend: { orientation: 'h', yanchor: 'top', y: -0.15, xanchor: 'center', x: 0.5, font: { size: 12, color: 'rgba(255,255,255,0.7)' } },
+                            }}
+                            config={{ ...PLOTLY_CONFIG, displayModeBar: true }}
+                            useResizeHandler
+                            style={{ width: '100%', height: '100%' }}
+                          />
+                        </div>
+                      </div>
+                    </div>
+                  )}
                 </div>
               );
               break;
@@ -980,10 +1022,8 @@ const ChartPanel = memo(({ result, PlotComponent }) => {
                     <span>{insight}</span>
                   </div>
                 ))}
-                <div style={{ marginTop: 'auto', paddingTop: '20px', display: 'flex', alignItems: 'center', gap: '8px', opacity: 0.5 }}>
-                  <div style={{ height: '1px', flex: 1, background: 'var(--border-subtle)' }} />
-                  <span style={{ fontSize: '10px', textTransform: 'uppercase', letterSpacing: '1px' }}>Processed via DataPulse v5.0</span>
-                  <div style={{ height: '1px', flex: 1, background: 'var(--border-subtle)' }} />
+                <div className="chart-footer">
+                  PROCESSED VIA DATAPULSE V5.0
                 </div>
               </div>
             </div>
@@ -1545,17 +1585,11 @@ export default function DataPulse({ user, onLogout }) {
           <div style={{ color: 'var(--primary-500)', fontSize: '24px', textShadow: '0 0 10px rgba(99,102,241,0.4)' }}>◈</div>
           <strong style={{ fontSize: '18px', color: 'var(--text-main)', fontFamily: "'Inter', sans-serif" }}>DATA PULSE</strong>
         </div>
-        <div style={{ display: 'flex', alignItems: 'center', gap: '32px' }}>
-          <div style={{ display: 'flex', gap: '16px' }}>
-            <button onClick={toggleHistory} style={{ background: 'none', border: 'none', color: 'var(--text-main)', cursor: 'pointer', fontWeight: 600, fontSize: '13px', textTransform: 'uppercase', letterSpacing: '0.1em', opacity: 0.8 }}>History</button>
-            {result && <button onClick={openExportModal} style={{ background: 'none', border: 'none', color: 'var(--text-main)', cursor: 'pointer', fontWeight: 600, fontSize: '13px', textTransform: 'uppercase', letterSpacing: '0.1em', opacity: 0.8 }}>Download</button>}
+        <div className="topbar-actions">
+            <button onClick={toggleHistory} className="topbar-btn">History</button>
+            {result && <button onClick={() => setShowExportModal(true)} className="topbar-btn">Download</button>}
           </div>
-          <div style={{ width: '1px', height: '20px', background: 'var(--border-subtle)' }} />
-          <div style={{ display: 'flex', alignItems: 'center', gap: '20px' }}>
-            <span style={{ fontSize: '13px', color: 'var(--text-muted)', opacity: 0.7 }}>{user?.email}</span>
-            <button onClick={onLogout} style={{ background: 'none', border: 'none', color: 'var(--primary-500)', cursor: 'pointer', fontWeight: 700, fontSize: '13px', textTransform: 'uppercase', letterSpacing: '0.1em' }}>Logout</button>
-          </div>
-        </div>
+          <div style={{ fontSize: '14px', color: 'var(--text-muted)' }}>{user?.email}</div>
       </div>
       <div className="container" style={{ flex: 1, display: 'flex', flexDirection: 'column', position: 'relative', zIndex: 1, padding: 0, overflow: 'hidden' }}>
         {}
@@ -1746,10 +1780,22 @@ export default function DataPulse({ user, onLogout }) {
                   </div>
                   <div ref={chatContainerRef} style={{ flex: 1, overflowY: "auto", display: "flex", flexDirection: "column", gap: "12px", background: 'var(--bg-input)', padding: '16px', borderRadius: '12px', border: '1px solid var(--border-subtle)' }}>
                     {chatMsgs.length === 0 ? (
-                      <div style={{ margin: 'auto', textAlign: 'center', display: 'flex', flexDirection: 'column', gap: '10px', maxWidth: '310px', background: 'linear-gradient(180deg, rgba(99,102,241,0.08), rgba(6,9,18,0.05))', border: '1px solid rgba(99,102,241,0.2)', borderRadius: '12px', padding: '16px 18px' }}>
-                        <strong style={{ fontSize: '16px', color: 'var(--text-main)', fontFamily: "'Inter', sans-serif", letterSpacing: '0.02em' }}>Expert Data Analyst Advisor</strong>
-                        <p style={{ fontSize: '13px', color: '#cbd5e1', lineHeight: 1.55, fontFamily: "'Inter', sans-serif" }}>Ask me anything about your dataset — insights, trends, outliers, or which chart reveals the story best.</p>
-                        <div style={{ fontSize: '11px', color: 'var(--text-muted)', borderTop: '1px solid rgba(99,102,241,0.15)', paddingTop: '8px', opacity: 0.8 }}>⚠ Responses are limited to the active dataset only.</div>
+                      <div style={{ margin: 'auto', display: 'flex', flexDirection: 'column', gap: '16px', width: '100%', maxWidth: '340px' }}>
+                        <div style={{ background: 'linear-gradient(180deg, rgba(99,102,241,0.08), rgba(6,9,18,0.05))', border: '1px solid rgba(99,102,241,0.2)', borderRadius: '12px', padding: '16px 18px', textAlign: 'center' }}>
+                          <strong style={{ fontSize: '15px', color: 'var(--text-main)', fontFamily: "'Inter', sans-serif", letterSpacing: '0.02em', display: 'block', marginBottom: '12px' }}>💡 Suggested Questions</strong>
+                          <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                            {[
+                              "What's the top category?",
+                              "Show me the overall trend.",
+                              "Are there any outliers?",
+                              "Which factors have highest correlation?"
+                            ].map((q, i) => (
+                              <button key={i} onClick={() => { setChatInput(q); }} style={{ background: 'rgba(255,255,255,0.03)', border: '1px solid var(--border-subtle)', borderRadius: '8px', padding: '10px 14px', color: 'var(--text-main)', fontSize: '13px', cursor: 'pointer', textAlign: 'left', transition: 'all 0.2s' }} onMouseOver={e => { e.currentTarget.style.borderColor = 'var(--primary-500)'; e.currentTarget.style.background = 'rgba(99,102,241,0.08)'; }} onMouseOut={e => { e.currentTarget.style.borderColor = 'var(--border-subtle)'; e.currentTarget.style.background = 'rgba(255,255,255,0.03)'; }}>
+                                › {q}
+                              </button>
+                            ))}
+                          </div>
+                        </div>
                       </div>
                     ) : chatMsgs.map((m, i) => (
                       <ChatBubble
@@ -1789,9 +1835,9 @@ export default function DataPulse({ user, onLogout }) {
                 </div>
               ) : (
                 <div className="panel-flat flex-col gap-24 animate-fade-in">
-                  <div style={{ display: 'flex', borderBottom: '1px solid var(--border-subtle)', gap: '16px', paddingBottom: '12px' }}>
-                    {PRIMARY_TABS.map(t => <button key={t} onClick={() => setTab(t)} style={{ background: 'none', border: 'none', color: tab === t ? 'var(--text-main)' : 'var(--text-muted)', fontWeight: tab === t ? 600 : 500, fontSize: '14px', cursor: 'pointer', borderBottom: tab === t ? '2px solid var(--primary-500)' : 'none', paddingBottom: '12px', marginBottom: '-13px', textTransform: 'capitalize', letterSpacing: '0.05em' }}>{t}</button>)}
-                    {SECONDARY_TABS.map(t => <button key={t} onClick={() => setTab(t)} style={{ background: 'none', border: 'none', color: tab === t ? 'var(--text-main)' : 'var(--text-muted)', fontWeight: tab === t ? 600 : 500, fontSize: '14px', cursor: 'pointer', borderBottom: tab === t ? '2px solid var(--primary-500)' : 'none', paddingBottom: '12px', marginBottom: '-13px', textTransform: 'capitalize', letterSpacing: '0.05em' }}>{t}</button>)}
+                  <div className="tabs-nav">
+                    {PRIMARY_TABS.map(t => <button key={t} onClick={() => setTab(t)} className={`tab ${tab === t ? 'active' : ''}`}>{t}</button>)}
+                    {SECONDARY_TABS.map(t => <button key={t} onClick={() => setTab(t)} className={`tab ${tab === t ? 'active' : ''}`}>{t}</button>)}
                   </div>
                   {tab === "overview" && (
                     <div className="flex-col gap-24">
@@ -1813,9 +1859,9 @@ export default function DataPulse({ user, onLogout }) {
                       )}
                       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '16px' }}>
                         {keyMetrics.map(m => (
-                          <div key={m.label} style={{ padding: '20px', border: '1px solid var(--border-subtle)', borderRadius: '12px', background: 'var(--bg-input)' }}>
-                            <strong style={{ fontSize: '12px', color: 'var(--text-muted)', display: 'block', marginBottom: '8px', textTransform: 'uppercase', letterSpacing: '0.05em' }}>{m.label}</strong>
-                            <span style={{ fontSize: '28px', fontFamily: "'Inter', sans-serif", fontWeight: 800, color: 'var(--text-main)', textShadow: '0 0 15px rgba(255,255,255,0.1)' }}>{m.val}</span>
+                          <div key={m.label} className="kpi-card">
+                            <strong className="kpi-label">{m.label}</strong>
+                            <span className="kpi-value">{m.val}</span>
                           </div>
                         ))}
                       </div>
@@ -1828,7 +1874,7 @@ export default function DataPulse({ user, onLogout }) {
                               value: Object.keys(stats.numeric_columns || {}).length || '—',
                               color: '#60a5fa',
                               icon: (
-                                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                                <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
                                   <line x1="4" y1="9" x2="20" y2="9"/><line x1="4" y1="15" x2="20" y2="15"/><line x1="10" y1="3" x2="8" y2="21"/><line x1="16" y1="3" x2="14" y2="21"/>
                                 </svg>
                               )
@@ -1838,7 +1884,7 @@ export default function DataPulse({ user, onLogout }) {
                               value: Object.keys(stats.categorical_columns || {}).length || '—',
                               color: '#c084fc',
                               icon: (
-                                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                                <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
                                   <path d="M20.59 13.41l-7.17 7.17a2 2 0 0 1-2.83 0L2 12V2h10l8.59 8.59a2 2 0 0 1 0 2.82z"/><line x1="7" y1="7" x2="7.01" y2="7"/>
                                 </svg>
                               )
@@ -1848,7 +1894,7 @@ export default function DataPulse({ user, onLogout }) {
                               value: dq.total_missing != null ? dq.total_missing.toLocaleString() : (dq.missing_count != null ? dq.missing_count.toLocaleString() : '0'),
                               color: '#fbbf24',
                               icon: (
-                                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                                <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
                                   <path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/>
                                 </svg>
                               )
@@ -1858,7 +1904,7 @@ export default function DataPulse({ user, onLogout }) {
                               value: dq.duplicate_rows != null ? dq.duplicate_rows.toLocaleString() : '0',
                               color: '#f472b6',
                               icon: (
-                                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                                <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
                                   <rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/>
                                 </svg>
                               )
@@ -1868,7 +1914,7 @@ export default function DataPulse({ user, onLogout }) {
                               value: datasetTypeLabel || '—',
                               color: '#38bdf8',
                               icon: (
-                                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                                <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
                                   <line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/>
                                 </svg>
                               )
@@ -1878,7 +1924,7 @@ export default function DataPulse({ user, onLogout }) {
                               value: (stats.excluded_columns || []).length,
                               color: '#94a3b8',
                               icon: (
-                                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                                <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
                                   <path d="M22 3H2l8 9.46V19l4 2v-8.54L22 3z"/>
                                 </svg>
                               )
@@ -1985,7 +2031,11 @@ export default function DataPulse({ user, onLogout }) {
                         {findings.length ? findings.map((f, i) => (
                             <div key={`ins-${i}`} style={{ marginBottom: '14px', padding: '14px 16px', borderRadius: '10px', background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(99,102,241,0.12)', display: 'flex', gap: '14px', alignItems: 'flex-start' }}>
                               <div style={{ width: '26px', height: '26px', borderRadius: '50%', background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(255,255,255,0.12)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0, fontSize: '12px', fontWeight: 700, color: 'var(--text-muted)' }}>{i + 1}</div>
-                              <div style={{ fontSize: '14px', color: 'var(--text-main)', lineHeight: 1.6, paddingTop: '4px' }}>{f}</div>
+                              <div style={{ fontSize: '14px', color: 'var(--text-main)', lineHeight: 1.6, paddingTop: '4px' }}>
+                                {f.split(/([₹$€£]?-?\d+(?:,\d{3})*(?:\.\d+)?(?:%|k|M|B)?)/g).map((part, index) => 
+                                  /^[₹$€£]?-?\d+(?:,\d{3})*(?:\.\d+)?(?:%|k|M|B)?$/.test(part) ? <strong key={index} style={{ color: '#00d4a8', fontWeight: 700 }}>{part}</strong> : part
+                                )}
+                              </div>
                             </div>
                         )) : <div style={{ fontSize: '14px', color: 'var(--text-muted)', fontStyle: 'italic' }}>No analyst findings were generated for this dataset.</div>}
                       </div>
@@ -2236,21 +2286,22 @@ export default function DataPulse({ user, onLogout }) {
                       pointerEvents: deleteLoading === item.analysis_id ? 'none' : 'auto',
                       transition: 'opacity 0.2s ease, border-color 0.2s ease'
                     }} onClick={() => loadHistoryItem(item)}>
-                      <div className="flex-col gap-4" style={{ flex: 1, minWidth: 0, paddingRight: '12px' }}>
-                        <strong style={{ fontSize: '14px', color: 'var(--text-main)', display: 'block', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{item.file_name}</strong>
-                        <span className="caption">{new Date(item.analyzed_at).toLocaleDateString()} • {item.row_count} rows</span>
+                      <div className="flex-col gap-12" style={{ flex: 1, minWidth: 0, width: '100%' }}>
+                        <div>
+                          <strong style={{ fontSize: '14px', color: 'var(--text-main)', display: 'block', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{item.file_name}</strong>
+                          <span className="caption" style={{ marginTop: '2px', display: 'block', color: 'var(--text-muted)' }}>{new Date(item.analyzed_at).toLocaleDateString()} • {(item.row_count || 0).toLocaleString()} rows</span>
+                        </div>
+                        <div style={{ height: '1px', background: 'var(--border-subtle)', width: '100%' }}></div>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: '12px' }}>
+                          <span style={{ color: 'var(--text-muted)', fontWeight: 500 }}>{item.column_count || 'Multi'} cols • Analysis ready</span>
+                          <div style={{ display: 'flex', gap: '8px' }}>
+                            <button style={{ padding: '6px 12px', background: 'rgba(99,102,241,0.1)', color: '#818cf8', border: '1px solid rgba(99,102,241,0.3)', borderRadius: '6px', cursor: 'pointer', fontWeight: 600 }}>Load</button>
+                            <button onClick={(e) => { e.stopPropagation(); deleteItem(item.analysis_id); }} disabled={deleteLoading === item.analysis_id} style={{ padding: '6px 10px', background: 'transparent', color: 'var(--error)', border: '1px solid rgba(239,68,68,0.3)', borderRadius: '6px', cursor: deleteLoading === item.analysis_id ? 'wait' : 'pointer' }}>
+                              {deleteLoading === item.analysis_id ? "..." : "🗑"}
+                            </button>
+                          </div>
+                        </div>
                       </div>
-                      <button
-                        onClick={(e) => { e.stopPropagation(); deleteItem(item.analysis_id); }}
-                        disabled={deleteLoading === item.analysis_id}
-                        style={{ background: 'none', border: 'none', color: 'var(--text-muted)', cursor: deleteLoading === item.analysis_id ? 'wait' : 'pointer', padding: '8px', fontSize: '24px', display: 'flex', alignItems: 'center', justifyContent: 'center' }}
-                      >
-                        {deleteLoading === item.analysis_id ? (
-                          <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ animation: 'spin 1s linear infinite' }}>
-                            <path d="M21 12a9 9 0 1 1-6.219-8.56"></path>
-                          </svg>
-                        ) : "🗑"}
-                      </button>
                     </div>
                   ))
                 )
