@@ -5,7 +5,6 @@ import ParticleBackground from "../components/ParticleBackground.jsx";
 import GlobeCanvas from "../components/GlobeCanvas.jsx";
 import PlotComponent from "react-plotly.js";
 const PALETTE = ["#6366f1", "#10b981", "#f59e0b", "#06b6d4", "#ef4444", "#a855f7", "#34d399", "#f472b6"];
-
 const PLOTLY_DARK_LAYOUT = {
   paper_bgcolor: "rgba(0,0,0,0)",
   plot_bgcolor: "rgba(0,0,0,0)",
@@ -22,56 +21,44 @@ const PLOTLY_DARK_LAYOUT = {
   autosize: true,
   margin: { l: 40, r: 20, t: 40, b: 30 },
 };
-
 const PLOTLY_CONFIG = {
   responsive: true,
-  // Keep interactions gesture-driven with custom in-card reset controls.
   displayModeBar: false,
   scrollZoom: true,
   displaylogo: false,
   doubleClick: "reset+autosize"
 };
-
 const MIN_ZOOM_SPAN_RATIO = 0.12;
 const MAX_ZOOM_OUT_MULTIPLIER = 1.0;
 const ZOOM_BOUNDARY_PADDING_RATIO = 0.05;
-
 function truncateLabel(value, max = 26) {
   const text = String(value ?? "").trim();
   if (text.length <= max) return text;
   return `${text.slice(0, max - 1)}…`;
 }
-
 function cleanQuestionLabel(value) {
   const raw = String(value ?? "").trim();
   if (!raw) return "";
-  // Remove survey prefixes like "Q4 - " and leading punctuation artifacts.
   let text = raw
     .replace(/^Q\d+\s*[-:]*\s*/i, "")
     .replace(/^[-\s.:]+/, "")
     .trim();
-  // Keep labels concise and avoid trailing question mark in legends.
   text = text.replace(/\?+$/, "").trim();
   return text || raw;
 }
-
 function cleanAxisTitle(value) {
   return truncateLabel(cleanQuestionLabel(value), 42);
 }
-
 function getFigureTitleText(fig, fallback = "") {
   const title = fig?.layout?.title;
   if (typeof title === "string") return title;
   return title?.text || fallback;
 }
-
 function stopPageZoomOnCtrlWheel(event) {
-  // Keep wheel events available for Plotly zoom while blocking browser page zoom.
   if (event.ctrlKey || event.metaKey) {
     event.preventDefault();
   }
 }
-
 function normalizeTraceData(data) {
   return (Array.isArray(data) ? data : []).map((trace) => {
     const next = { ...trace };
@@ -84,7 +71,6 @@ function normalizeTraceData(data) {
     return next;
   });
 }
-
 function hasLongCategoryLabels(data) {
   const samples = [];
   (Array.isArray(data) ? data : []).forEach((trace) => {
@@ -92,39 +78,31 @@ function hasLongCategoryLabels(data) {
   });
   return samples.some((v) => String(v ?? "").length > 14);
 }
-
 function parseAxisValue(value) {
   if (typeof value === "number" && Number.isFinite(value)) {
     return { value, kind: "number" };
   }
-
   const parsedDate = Date.parse(value);
   if (Number.isFinite(parsedDate)) {
     return { value: parsedDate, kind: "date" };
   }
-
   return null;
 }
-
 function normalizeRangePair(range) {
   if (!Array.isArray(range) || range.length !== 2) return null;
   const first = parseAxisValue(range[0]);
   const second = parseAxisValue(range[1]);
   if (!first || !second || first.kind !== second.kind) return null;
-
   const low = Math.min(first.value, second.value);
   const high = Math.max(first.value, second.value);
   if (!Number.isFinite(low) || !Number.isFinite(high) || low === high) return null;
-
   return { low, high, kind: first.kind };
 }
-
 function collectAxisValues(data, axisKey) {
   const sourceKey = axisKey === "x" ? "x" : "y";
   const traces = Array.isArray(data) ? data : [];
   const parsed = [];
   let categoricalExtent = 0;
-
   traces.forEach((trace) => {
     const raw = trace?.[sourceKey];
     if (!Array.isArray(raw)) return;
@@ -134,9 +112,7 @@ function collectAxisValues(data, axisKey) {
       if (next) parsed.push(next);
     });
   });
-
   if (parsed.length < 2) return null;
-
   const kind = parsed[0].kind;
   const filtered = parsed.filter((p) => p.kind === kind).map((p) => p.value);
   if (filtered.length < 2) {
@@ -145,22 +121,18 @@ function collectAxisValues(data, axisKey) {
     }
     return null;
   }
-
   return { min: Math.min(...filtered), max: Math.max(...filtered), kind };
 }
-
 function buildAxisConstraint(layoutAxis, dataAxisValues) {
   const layoutRange = normalizeRangePair(layoutAxis?.range);
   const base = layoutRange || dataAxisValues;
   if (!base) return null;
-
   let baseMin = base.low ?? base.min;
   let baseMax = base.high ?? base.max;
   if (!Number.isFinite(baseMin) || !Number.isFinite(baseMax)) return null;
   if (baseMax === baseMin) {
     baseMax = baseMin + 1;
   }
-
   const span = Math.max(1e-9, baseMax - baseMin);
   return {
     kind: base.kind,
@@ -170,21 +142,17 @@ function buildAxisConstraint(layoutAxis, dataAxisValues) {
     hardMax: baseMax + span * ZOOM_BOUNDARY_PADDING_RATIO,
   };
 }
-
 function formatAxisValue(value, kind) {
   if (kind === "date") return new Date(value).toISOString();
   return value;
 }
-
 function clampRangeToConstraint(range, constraint) {
   const normalized = normalizeRangePair(range);
   if (!normalized || !constraint || normalized.kind !== constraint.kind) return null;
-
   let low = normalized.low;
   let high = normalized.high;
   let span = high - low;
   const center = (low + high) / 2;
-
   if (span < constraint.minSpan) {
     span = constraint.minSpan;
     low = center - span / 2;
@@ -194,7 +162,6 @@ function clampRangeToConstraint(range, constraint) {
     low = center - span / 2;
     high = center + span / 2;
   }
-
   if (low < constraint.hardMin) {
     const delta = constraint.hardMin - low;
     low += delta;
@@ -205,37 +172,28 @@ function clampRangeToConstraint(range, constraint) {
     low -= delta;
     high -= delta;
   }
-
   if (low < constraint.hardMin) low = constraint.hardMin;
   if (high > constraint.hardMax) high = constraint.hardMax;
-
   return [formatAxisValue(low, constraint.kind), formatAxisValue(high, constraint.kind)];
 }
-
 function getRelayoutRange(eventData, axisName) {
   const direct = eventData?.[`${axisName}.range`];
   if (Array.isArray(direct) && direct.length === 2) return direct;
-
   const start = eventData?.[`${axisName}.range[0]`];
   const end = eventData?.[`${axisName}.range[1]`];
   if (start !== undefined && end !== undefined) return [start, end];
-
   return null;
 }
-
 function rangesEqual(a, b) {
   if (!Array.isArray(a) || !Array.isArray(b) || a.length !== 2 || b.length !== 2) return false;
   const left = normalizeRangePair(a);
   const right = normalizeRangePair(b);
   if (!left || !right || left.kind !== right.kind) return false;
-
   return Math.abs(left.low - right.low) < 1e-9 && Math.abs(left.high - right.high) < 1e-9;
 }
-
 function isRangeAtZoomBoundary(range, constraint, direction) {
   const normalized = normalizeRangePair(range);
   if (!normalized || !constraint || normalized.kind !== constraint.kind) return false;
-
   const span = normalized.high - normalized.low;
   if (direction === "in") {
     return span <= (constraint.minSpan * 1.02);
@@ -245,29 +203,23 @@ function isRangeAtZoomBoundary(range, constraint, direction) {
   }
   return false;
 }
-
 function scaleRangeByFactor(range, constraint, factor) {
   const normalized = normalizeRangePair(range);
   if (!normalized || !constraint || normalized.kind !== constraint.kind) return null;
-
   const center = (normalized.low + normalized.high) / 2;
   const nextSpan = (normalized.high - normalized.low) * factor;
   const rawRange = [
     formatAxisValue(center - (nextSpan / 2), constraint.kind),
     formatAxisValue(center + (nextSpan / 2), constraint.kind),
   ];
-
   return clampRangeToConstraint(rawRange, constraint);
 }
-
 function getLegendConfig(traceCount, isMatrix) {
   if (isMatrix || traceCount <= 1) {
     return { showlegend: false, legend: {}, legendRows: 0 };
   }
-
   const legendRows = Math.max(1, Math.ceil(traceCount / 4));
   const legendYOffset = -0.16 - ((legendRows - 1) * 0.08);
-
   return {
     showlegend: true,
     legendRows,
@@ -284,7 +236,6 @@ function getLegendConfig(traceCount, isMatrix) {
     },
   };
 }
-
 function shouldHideLegend(data, traceCount) {
   const traces = Array.isArray(data) ? data : [];
   if (traceCount > 6) return true;
@@ -292,11 +243,9 @@ function shouldHideLegend(data, traceCount) {
   if (barCount >= 6) return true;
   return false;
 }
-
 function cleanPlotSummaryText(value) {
   const raw = String(value ?? "").trim();
   if (!raw) return "";
-
   return raw
     .replace(/^#+\s*/gm, "")
     .replace(/\bAI[_\s-]*NARRATIVE\b\s*[:-]*/gi, "")
@@ -305,43 +254,35 @@ function cleanPlotSummaryText(value) {
     .replace(/\s{2,}/g, " ")
     .trim();
 }
-
 function getPlotSummary(desc, fig, key) {
   const cleaned = cleanPlotSummaryText(desc);
   if (cleaned) return cleaned;
-
   const traceType = String(fig?.data?.[0]?.type || "chart").toLowerCase();
   const xTitle = cleanAxisTitle(fig?.layout?.xaxis?.title?.text || fig?.layout?.xaxis?.title || "");
   const yTitle = cleanAxisTitle(fig?.layout?.yaxis?.title?.text || fig?.layout?.yaxis?.title || "");
   const chartTitle = cleanQuestionLabel(fig?.layout?.title?.text || fig?.layout?.title || key.replaceAll("_", " "));
-
   if (traceType === "pie") return `${chartTitle} highlights category share distribution across the selected groups.`;
   if (traceType === "histogram") return `${chartTitle} shows frequency spread${xTitle ? ` for ${xTitle}` : ""}, helping identify skew and concentration.`;
   if (traceType === "box") return `${chartTitle} summarizes median, spread, and outliers${xTitle ? ` across ${xTitle}` : ""}.`;
   if (traceType === "heatmap") return `${chartTitle} maps intensity patterns to expose high and low concentration zones.`;
-
   if (xTitle && yTitle) {
     return `${chartTitle} compares ${yTitle} across ${xTitle} to surface key differences and trends.`;
   }
   return `${chartTitle} provides a focused visual summary of the most relevant variation in this dataset segment.`;
 }
-
 function getNumericExtent(trace) {
   const candidates = [];
   const yVals = Array.isArray(trace?.y) ? trace.y : [];
   const xVals = Array.isArray(trace?.x) ? trace.x : [];
-
   yVals.forEach((v) => {
     if (typeof v === "number" && Number.isFinite(v)) candidates.push(v);
   });
   xVals.forEach((v) => {
     if (typeof v === "number" && Number.isFinite(v)) candidates.push(v);
   });
-
   if (candidates.length < 2) return null;
   return { min: Math.min(...candidates), max: Math.max(...candidates), count: candidates.length };
 }
-
 function getCoreRevelations(desc, fig, key) {
   const traces = Array.isArray(fig?.data) ? fig.data : [];
   const traceType = String(traces[0]?.type || "chart").toLowerCase();
@@ -352,18 +293,15 @@ function getCoreRevelations(desc, fig, key) {
   const summarySentences = cleanedSummary
     ? cleanedSummary.split(/(?<=[.!?])\s+/).map((s) => s.trim()).filter(Boolean)
     : [];
-
   const firstTrace = traces[0] || {};
   const dataPointCount = Math.max(
     Array.isArray(firstTrace?.x) ? firstTrace.x.length : 0,
     Array.isArray(firstTrace?.y) ? firstTrace.y.length : 0,
   );
   const extent = getNumericExtent(firstTrace);
-
   const insights = [];
   if (summarySentences.length > 0) insights.push(summarySentences[0]);
   if (summarySentences.length > 1) insights.push(summarySentences[1]);
-
   if (traceType === "histogram") {
     insights.push(`The distribution across ${xTitle} highlights where observations are most concentrated.`);
   } else if (traceType === "box" || traceType === "violin") {
@@ -375,28 +313,21 @@ function getCoreRevelations(desc, fig, key) {
   } else {
     insights.push(`${chartTitle} compares ${yTitle} across ${xTitle}, exposing meaningful differences between categories.`);
   }
-
   if (traces.length > 1) {
     insights.push(`This view overlays ${traces.length} series, making cross-series comparison easier at a glance.`);
   }
-
   if (dataPointCount > 0) {
     insights.push(`The chart summarizes ${dataPointCount.toLocaleString()} plotted observations in the primary series.`);
   }
-
   if (extent) {
     insights.push(`Observed numeric range spans from ${extent.min.toFixed(2)} to ${extent.max.toFixed(2)}, indicating notable spread.`);
   }
-
   insights.push("Use this chart as a decision anchor to validate trends before acting on downstream analysis outputs.");
-
   return Array.from(new Set(insights)).slice(0, 5);
 }
-
 function isChartZoomable(data) {
   const traces = Array.isArray(data) ? data : [];
   if (traces.length === 0) return false;
-
   const nonZoomableTypes = new Set([
     "pie",
     "sunburst",
@@ -408,7 +339,6 @@ function isChartZoomable(data) {
     "table",
     "indicator",
   ]);
-
   return traces.some((trace) => {
     const traceType = String(trace?.type || "scatter").toLowerCase();
     if (nonZoomableTypes.has(traceType)) return false;
@@ -429,7 +359,57 @@ function isChartZoomable(data) {
     ].includes(traceType);
   });
 }
-
+function _parseBoldInline(str) {
+  const parts = str.split(/\*\*(.+?)\*\*/);
+  if (parts.length === 1) return str;
+  return parts.map((part, idx) =>
+    idx % 2 === 1
+      ? <strong key={idx} style={{ color: '#e2e8f0', fontWeight: 700 }}>{part}</strong>
+      : (part || null)
+  );
+}
+function renderMarkdown(text) {
+  if (!text) return null;
+  const lines = text.split('\n');
+  const elements = [];
+  let ki = 0;
+  lines.forEach((raw, i) => {
+    const line = raw.trim();
+    if (!line) {
+      elements.push(<div key={ki++} style={{ height: '5px' }} />);
+      return;
+    }
+    // Bullet: • or - or *
+    const bulletMatch = line.match(/^[•\-\*]\s+(.*)$/);
+    if (bulletMatch) {
+      elements.push(
+        <div key={ki++} style={{ display: 'flex', gap: '8px', alignItems: 'flex-start', marginTop: '3px' }}>
+          <span style={{ color: '#818cf8', fontWeight: 700, flexShrink: 0, marginTop: '1px' }}>•</span>
+          <span style={{ flex: 1, lineHeight: 1.55 }}>{_parseBoldInline(bulletMatch[1])}</span>
+        </div>
+      );
+      return;
+    }
+    // Numbered: 1. text
+    const numMatch = line.match(/^(\d+)\.\s+(.*)$/);
+    if (numMatch) {
+      elements.push(
+        <div key={ki++} style={{ display: 'flex', gap: '8px', alignItems: 'flex-start', marginTop: '3px' }}>
+          <span style={{ color: '#818cf8', fontWeight: 700, minWidth: '20px', flexShrink: 0 }}>{numMatch[1]}.</span>
+          <span style={{ flex: 1, lineHeight: 1.55 }}>{_parseBoldInline(numMatch[2])}</span>
+        </div>
+      );
+      return;
+    }
+    // Plain line (may contain bold)
+    elements.push(
+      <p key={ki++} style={{ margin: 0, marginTop: i === 0 ? 0 : '4px', lineHeight: 1.55 }}>
+        {_parseBoldInline(line)}
+      </p>
+    );
+  });
+  return elements;
+}
 const ChatBubble = memo(({ m, PlotComponent, result, stopPageZoomOnCtrlWheel }) => {
   return (
     <div
@@ -442,7 +422,7 @@ const ChatBubble = memo(({ m, PlotComponent, result, stopPageZoomOnCtrlWheel }) 
         marginBottom: '4px',
       }}
     >
-      {/* On-demand generated chart rendered ABOVE the text bubble */}
+      {}
       {m.role === 'ai' && m.newChart?.fig && PlotComponent && (
         <div style={{ width: '100%' }}>
           <div style={{
@@ -504,8 +484,7 @@ const ChatBubble = memo(({ m, PlotComponent, result, stopPageZoomOnCtrlWheel }) 
           </div>
         </div>
       )}
-
-      {/* Text bubble */}
+      {}
       <div
         style={{
           background: m.role === 'user'
@@ -525,16 +504,12 @@ const ChatBubble = memo(({ m, PlotComponent, result, stopPageZoomOnCtrlWheel }) 
       >
         {(() => {
           if (m.role !== 'ai' || !m.text.includes('[CHART:')) {
-            return m.text.split('\n').map((line, i) => (
-              <p key={i} style={{ margin: 0 }}>{line || '\u00A0'}</p>
-            ));
+            return renderMarkdown(m.text);
           }
-          // Phase 1: Strip ALL [CHART:...] tags -> clean readable text, no orphaned words
           const cleanText = m.text
             .replace(/\[CHART:\s*[^\]]+\]/g, '')
             .replace(/[ \t]{2,}/g, ' ')
             .trim();
-          // Phase 2: Find the FIRST valid chart key and build its JSX
           let inlineChartJSX = null;
           const CHART_TAG_RE = /\[CHART:\s*([^\]]+)\]/g;
           let tagM;
@@ -542,7 +517,6 @@ const ChatBubble = memo(({ m, PlotComponent, result, stopPageZoomOnCtrlWheel }) 
             const key = tagM[1].trim();
             if (result?.charts?.[key]) {
               const figRaw = result.charts[key];
-              // Skip sentinel values (true) — real fig must be an object or JSON string
               if (figRaw === true || figRaw == null || typeof figRaw === 'boolean') break;
               let parsedFig = figRaw;
               if (typeof figRaw === 'string') {
@@ -585,10 +559,7 @@ const ChatBubble = memo(({ m, PlotComponent, result, stopPageZoomOnCtrlWheel }) 
           }
           return (
             <>
-              {cleanText && cleanText.split('\n').map((line, i) => {
-                const t = line.trim();
-                return t ? <p key={i} style={{ margin: 0 }}>{t}</p> : null;
-              })}
+              {cleanText && renderMarkdown(cleanText)}
               {inlineChartJSX}
             </>
           );
@@ -597,9 +568,7 @@ const ChatBubble = memo(({ m, PlotComponent, result, stopPageZoomOnCtrlWheel }) 
     </div>
   );
 });
-
 ChatBubble.displayName = 'ChatBubble';
-
 const ChartPanel = memo(({ result, PlotComponent }) => {
   const [flipped, setFlipped] = useState({});
   const [chartRevisions, setChartRevisions] = useState({});
@@ -607,29 +576,24 @@ const ChartPanel = memo(({ result, PlotComponent }) => {
   const [chartInitialBounds, setChartInitialBounds] = useState({});
   const [chartInteractionMode, setChartInteractionMode] = useState({});
   const [spotlightChartKey, setSpotlightChartKey] = useState(null);
-
   useEffect(() => {
     if (!spotlightChartKey) return undefined;
-
     const handleEscape = (event) => {
       if (event.key === "Escape") {
         setSpotlightChartKey(null);
       }
     };
-
     window.addEventListener("keydown", handleEscape);
     return () => {
       window.removeEventListener("keydown", handleEscape);
     };
   }, [spotlightChartKey]);
-
   const captureInitialBounds = useCallback((key, figure) => {
     const xRange = figure?.layout?.xaxis?.range
       ? normalizeRangePair(figure.layout.xaxis.range)
       : null;
     const yRange = normalizeRangePair(figure?.layout?.yaxis?.range);
     if (!xRange && !yRange) return;
-
     setChartInitialBounds((prev) => {
       if (prev[key]) return prev;
       return {
@@ -641,7 +605,6 @@ const ChartPanel = memo(({ result, PlotComponent }) => {
       };
     });
   }, []);
-
   const resetChartView = useCallback((key) => {
     setSpotlightViewports((prev) => {
       if (!prev[key]) return prev;
@@ -651,15 +614,12 @@ const ChartPanel = memo(({ result, PlotComponent }) => {
     });
     setChartRevisions((prev) => ({ ...prev, [key]: (prev[key] || 0) + 1 }));
   }, []);
-
   const setChartMode = useCallback((key, mode) => {
     setChartInteractionMode((prev) => ({ ...prev, [key]: mode }));
   }, []);
-
   const entries = useMemo(() => {
-    // Priority order: most informative chart types first
     const CHART_PRIORITY = {
-      timeseries: 0, line: 1, scatter: 2, heatmap: 3,
+      timeseries: 0, heatmap: 1, line: 2, scatter: 3,
       ranked_bar: 4, grouped_bar: 5, stacked: 6, box: 7,
       violin: 8, likert: 9, freq: 10, histogram: 11,
       donut: 12, pie: 13,
@@ -688,31 +648,23 @@ const ChartPanel = memo(({ result, PlotComponent }) => {
       })
       .sort((a, b) => getChartPriority(a[0]) - getChartPriority(b[0]));
   }, [result?.charts]);
-
   const renderedEntries = useMemo(() => {
     if (!spotlightChartKey) return entries;
-
     const spotlightIndex = entries.findIndex(([key]) => key === spotlightChartKey);
     if (spotlightIndex <= 0) return entries;
-
     const current = entries[spotlightIndex];
     const previous = entries[spotlightIndex - 1];
     if (!current || !previous) return entries;
-
     const currentKey = current[0];
     const previousKey = previous[0];
     const currentIsWide = currentKey.startsWith("scatter_matrix") || currentKey.startsWith("heatmap") || currentKey.includes("matrix") || currentKey.startsWith("timeseries") || currentKey.startsWith("line");
     const previousIsWide = previousKey.startsWith("scatter_matrix") || previousKey.startsWith("heatmap") || previousKey.includes("matrix") || previousKey.startsWith("timeseries") || previousKey.startsWith("line");
-
-    // For a right-column chart in a two-column row, swap with left sibling so expansion starts at the same row position.
     if (currentIsWide || previousIsWide) return entries;
-
     const next = [...entries];
     next[spotlightIndex - 1] = current;
     next[spotlightIndex] = previous;
     return next;
   }, [entries, spotlightChartKey]);
-
   if (!PlotComponent) {
     return (
       <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
@@ -722,18 +674,12 @@ const ChartPanel = memo(({ result, PlotComponent }) => {
       </div>
     );
   }
-
-
-
   if (entries.length === 0) {
     return <div style={{ color: "var(--text-muted)", fontSize: "14px" }}>No charts available.</div>;
   }
-
   const toggleFlip = (key) => {
     setFlipped(prev => ({ ...prev, [key]: !prev[key] }));
   };
-
-
   return (
     <>
       <div
@@ -772,7 +718,6 @@ const ChartPanel = memo(({ result, PlotComponent }) => {
         };
         const initialBounds = chartInitialBounds[key] || {};
         const optimizedData = normalizedData.map(trace => {
-          // Reduce clutter in dense scatter plots by scaling markers down slightly when in grid view
           if (trace.type === "scatter" || trace.type === "scattergl") {
             const baseSize = trace.marker?.size || 8;
             return {
@@ -802,7 +747,6 @@ const ChartPanel = memo(({ result, PlotComponent }) => {
         const currentYRange = viewport.y || initialBounds.y || fig.layout?.yaxis?.range || null;
         const zoomChart = (factor) => {
           if (!canUseSpotlightZoom) return;
-
           setSpotlightViewports((prev) => {
             const current = prev[key] || {};
             const sourceX = current.x || currentXRange;
@@ -810,33 +754,25 @@ const ChartPanel = memo(({ result, PlotComponent }) => {
             const nextX = xConstraint ? scaleRangeByFactor(sourceX, xConstraint, factor) : null;
             const nextY = yConstraint ? scaleRangeByFactor(sourceY, yConstraint, factor) : null;
             if (!nextX && !nextY) return prev;
-
             const nextViewport = {
               ...current,
               ...(nextX ? { x: nextX } : {}),
               ...(nextY ? { y: nextY } : {}),
             };
-
             if (rangesEqual(current.x, nextViewport.x) && rangesEqual(current.y, nextViewport.y)) {
               return prev;
             }
-
             return { ...prev, [key]: nextViewport };
           });
         };
         const onChartWheel = (event) => {
-          // If not in focus mode, we don't want to intercept any wheel events for zooming.
-          // This allows natural page scrolling even if mouse is over a chart.
           if (!canUseSpotlightZoom) return;
-
           if (event.ctrlKey || event.metaKey) {
             event.preventDefault();
             return;
           }
-
           if (!xConstraint && !yConstraint) return;
           const direction = event.deltaY < 0 ? "in" : "out";
-
           const axesAtBoundary = [];
           if (xConstraint) axesAtBoundary.push(isRangeAtZoomBoundary(currentXRange, xConstraint, direction));
           if (yConstraint) axesAtBoundary.push(isRangeAtZoomBoundary(currentYRange, yConstraint, direction));
@@ -847,7 +783,6 @@ const ChartPanel = memo(({ result, PlotComponent }) => {
         const onChartRelayout = (eventData) => {
           if (!eventData) return;
           if (!canUseSpotlightZoom) return;
-
           if (eventData["xaxis.autorange"] || eventData["yaxis.autorange"]) {
             setSpotlightViewports((prev) => {
               if (!prev[key]) return prev;
@@ -857,13 +792,11 @@ const ChartPanel = memo(({ result, PlotComponent }) => {
             });
             return;
           }
-
           const rawX = getRelayoutRange(eventData, "xaxis");
           const rawY = getRelayoutRange(eventData, "yaxis");
           const clampedX = xConstraint ? clampRangeToConstraint(rawX, xConstraint) : null;
           const clampedY = yConstraint ? clampRangeToConstraint(rawY, yConstraint) : null;
           if (!clampedX && !clampedY) return;
-
           setSpotlightViewports((prev) => {
             const current = prev[key] || {};
             const nextViewport = {
@@ -871,14 +804,12 @@ const ChartPanel = memo(({ result, PlotComponent }) => {
               ...(clampedX ? { x: clampedX } : {}),
               ...(clampedY ? { y: clampedY } : {}),
             };
-
             if (rangesEqual(current.x, nextViewport.x) && rangesEqual(current.y, nextViewport.y)) {
               return prev;
             }
             return { ...prev, [key]: nextViewport };
           });
         };
-
         return (
           <div
             key={key}
@@ -895,7 +826,7 @@ const ChartPanel = memo(({ result, PlotComponent }) => {
             }}
           >
             <div className="chart-flip-inner">
-              {/* FRONT SIDE */}
+              {}
               <div className="chart-flip-front" style={{ padding: '24px' }}>
                 <button
                   className="chart-info-btn"
@@ -904,7 +835,6 @@ const ChartPanel = memo(({ result, PlotComponent }) => {
                 >
                   ℹ
                 </button>
-
                 <button
                   className="chart-focus-btn"
                   onClick={() => setSpotlightChartKey(isSpotlighted ? null : key)}
@@ -912,7 +842,6 @@ const ChartPanel = memo(({ result, PlotComponent }) => {
                 >
                   {isSpotlighted ? "⤡" : "⤢"}
                 </button>
-
                 {canUseSpotlightZoom && (
                   <div className="chart-action-group">
                     <button
@@ -941,7 +870,6 @@ const ChartPanel = memo(({ result, PlotComponent }) => {
                     </button>
                   </div>
                 )}
-
                 <div onWheel={onChartWheel}>
                   <PlotComponent
                     data={optimizedData}
@@ -1014,8 +942,7 @@ const ChartPanel = memo(({ result, PlotComponent }) => {
                   />
                 </div>
               </div>
-
-              {/* BACK SIDE */}
+              {}
               <div className="chart-flip-back">
                 <button
                   className="chart-info-btn"
@@ -1024,7 +951,6 @@ const ChartPanel = memo(({ result, PlotComponent }) => {
                 >
                   ✕
                 </button>
-
                 <button
                   className="chart-focus-btn"
                   onClick={() => setSpotlightChartKey(isSpotlighted ? null : key)}
@@ -1032,7 +958,6 @@ const ChartPanel = memo(({ result, PlotComponent }) => {
                 >
                   {isSpotlighted ? "⤡" : "⤢"}
                 </button>
-
                 <div className="chart-back-badge">
                   <span style={{ fontSize: '10px' }}>◈</span> {
                     fig.data?.[0]?.type
@@ -1040,18 +965,14 @@ const ChartPanel = memo(({ result, PlotComponent }) => {
                       : 'Data Insight'
                   }
                 </div>
-
                 <h3 className="chart-back-title">
                   {cleanQuestionLabel(getFigureTitleText(fig, key.replaceAll("_", " ")))}
                 </h3>
-
                 <div className="chart-back-divider" />
-
                 <div className="chart-back-section-label">Plot Summary</div>
                 <p className="chart-back-description">
                   {getPlotSummary(desc, fig, key)}
                 </p>
-
                 <div className="chart-back-section-label">Core Revelation</div>
                 {getCoreRevelations(desc, fig, key).map((insight, insightIdx) => (
                   <div className="chart-back-insight-item" key={`${key}-insight-${insightIdx}`}>
@@ -1059,7 +980,6 @@ const ChartPanel = memo(({ result, PlotComponent }) => {
                     <span>{insight}</span>
                   </div>
                 ))}
-
                 <div style={{ marginTop: 'auto', paddingTop: '20px', display: 'flex', alignItems: 'center', gap: '8px', opacity: 0.5 }}>
                   <div style={{ height: '1px', flex: 1, background: 'var(--border-subtle)' }} />
                   <span style={{ fontSize: '10px', textTransform: 'uppercase', letterSpacing: '1px' }}>Processed via DataPulse v5.0</span>
@@ -1074,27 +994,21 @@ const ChartPanel = memo(({ result, PlotComponent }) => {
     </>
   );
 });
-
 ChartPanel.displayName = 'ChartPanel';
-
 const PRIMARY_TABS = ["overview", "charts", "insights"];
 const SECONDARY_TABS = ["data"];
 const MAX_CHAT_MESSAGES = 40;
-
 function inferDatasetType(result, fileName) {
   const profile = result?.stats_summary?.dataset_profile || {};
   const label = String(profile?.label || "").trim();
   const domain = String(profile?.domain || "").trim();
-
   if (label && label.toLowerCase() !== "unknown") return label;
   if (domain) return `${domain} dataset`;
-
   const lower = String(fileName || "").toLowerCase();
   if (lower.endsWith(".csv")) return "tabular csv dataset";
   if (lower.endsWith(".xlsx") || lower.endsWith(".xls")) return "tabular excel dataset";
   return "structured dataset";
 }
-
 export default function DataPulse({ user, onLogout }) {
   const [phase, setPhase] = useState("upload");
   const [result, setResult] = useState(null);
@@ -1116,26 +1030,45 @@ export default function DataPulse({ user, onLogout }) {
   const [deleteLoading, setDeleteLoading] = useState(null);
   const [historySelectLoading, setHistorySelectLoading] = useState(null);
   const [progress, setProgress] = useState(0);
+  const [tableSort, setTableSort] = useState({ col: null, dir: 'none' });
+  const [showExportModal, setShowExportModal] = useState(false);
+  const [selectedExportKeys, setSelectedExportKeys] = useState([]);
   const fileRef = useRef();
   const chatContainerRef = useRef(null);
   const dragCounterRef = useRef(0);
   const stageTimersRef = useRef([]);
-
   useEffect(() => {
     loadHistory();
   }, []);
-
   const log = useCallback((msg) => {
     setAgentLog((p) => {
       const next = [...p, msg];
       return next.length > 20 ? next.slice(-20) : next;
     });
   }, []);
-
-  // PlotComponent is now statically imported
+  const handleTableSort = useCallback((col) => {
+    setTableSort(prev => {
+      if (prev.col !== col) return { col, dir: 'asc' };
+      if (prev.dir === 'asc') return { col, dir: 'desc' };
+      return { col: null, dir: 'none' };
+    });
+  }, []);
+  const sortedCleanDf = useMemo(() => {
+    const df = result?.clean_df;
+    if (!df || df.length === 0) return [];
+    if (tableSort.dir === 'none' || !tableSort.col) return df;
+    return [...df].sort((a, b) => {
+      const va = a[tableSort.col];
+      const vb = b[tableSort.col];
+      const na = typeof va === 'number' ? va : parseFloat(va);
+      const nb = typeof vb === 'number' ? vb : parseFloat(vb);
+      const isNum = !isNaN(na) && !isNaN(nb);
+      const cmp = isNum ? na - nb : String(va ?? '').localeCompare(String(vb ?? ''));
+      return tableSort.dir === 'asc' ? cmp : -cmp;
+    });
+  }, [result?.clean_df, tableSort]);
   useEffect(() => {
     if (chatContainerRef.current) {
-      // Use requestAnimationFrame instead of setTimeout to guarantee browser paint cycle has completed
       requestAnimationFrame(() => {
         if (chatContainerRef.current) {
           chatContainerRef.current.scrollTop = chatContainerRef.current.scrollHeight;
@@ -1150,7 +1083,6 @@ export default function DataPulse({ user, onLogout }) {
     });
     stageTimersRef.current = [];
   };
-
   const analyzeFile = useCallback(async (file) => {
     if (!file) return;
     setPhase("analyzing");
@@ -1162,14 +1094,11 @@ export default function DataPulse({ user, onLogout }) {
     setFileName(file.name);
     setChatMsgs([]);
     setGeneratedChartKeys([]);
-
     setAgentLog([
       "Uploading data to secure server…",
       "Architect initializing models…",
     ]);
     clearStageTimers();
-
-    // Smoother progress increment
     const progInterval = setInterval(() => {
       setProgress(p => {
         if (p < 92) return p + Math.random() * 2;
@@ -1177,7 +1106,6 @@ export default function DataPulse({ user, onLogout }) {
       });
     }, 400);
     stageTimersRef.current.push(progInterval);
-
     const stageMessages = [
       "Architect routing tasks → Statistician running…",
       "Statistician analyzing anomalies → Visualizer generating plots…",
@@ -1190,14 +1118,11 @@ export default function DataPulse({ user, onLogout }) {
       }, 800 + idx * 1500);
       stageTimersRef.current.push(t);
     });
-
     try {
       const data = await apiAnalyze(file);
       clearStageTimers();
       setProgress(100);
       log(data.from_cache ? "Loaded accelerated cache." : "System orchestration complete.");
-
-      // Delay slightly so user sees 100%
       setTimeout(() => {
         setResult(data);
         if (data?.analysis_id) {
@@ -1224,9 +1149,7 @@ export default function DataPulse({ user, onLogout }) {
       log(`Core Failure: ${err.message}`);
       setAnalysisError(err.message || "Analysis failed");
     }
-
   }, [log]);
-
   const onFile = useCallback((file) => analyzeFile(file), [analyzeFile]);
   const onDrop = useCallback((e) => {
     e.preventDefault();
@@ -1244,7 +1167,6 @@ export default function DataPulse({ user, onLogout }) {
     dragCounterRef.current -= 1;
     if (dragCounterRef.current === 0) setIsDragOver(false);
   }, []);
-
   const loadHistory = async () => {
     setHistoryLoading(true);
     try {
@@ -1258,7 +1180,6 @@ export default function DataPulse({ user, onLogout }) {
       setHistoryLoading(false);
     }
   };
-
   const toggleHistory = async () => {
     if (!showHistory && (history.length === 0 || historyStale)) {
       await loadHistory();
@@ -1266,7 +1187,6 @@ export default function DataPulse({ user, onLogout }) {
     }
     setShowHistory(!showHistory);
   };
-
   const deleteItem = async (id) => {
     setDeleteLoading(id);
     setHistoryActionError("");
@@ -1279,7 +1199,6 @@ export default function DataPulse({ user, onLogout }) {
       setDeleteLoading(null);
     }
   };
-
   const loadHistoryItem = async (item) => {
     setHistorySelectLoading(item.analysis_id);
     setHistoryActionError("");
@@ -1291,7 +1210,6 @@ export default function DataPulse({ user, onLogout }) {
       setShowHistory(false);
       setTab("overview");
       setGeneratedChartKeys([]);
-      // ✅ Reset chat so it starts fresh for the newly selected file
       setChatMsgs([]);
       setChatInput("");
     } catch (err) {
@@ -1300,56 +1218,46 @@ export default function DataPulse({ user, onLogout }) {
       setHistorySelectLoading(null);
     }
   };
-
-  const exportPDF = useCallback(async () => {
+  const openExportModal = useCallback(() => {
     if (!result) return;
-
+    const allKeys = Object.keys(result.charts || {});
+    setSelectedExportKeys(allKeys);
+    setShowExportModal(true);
+  }, [result]);
+  const exportPDF = useCallback(async (keysToExport) => {
+    if (!result) return;
+    setShowExportModal(false);
     try {
       const { default: Plotly } = await import("plotly.js-dist-min");
-
-      // Initialize Landscape A4
       const doc = new jsPDF("l", "mm", "a4");
       const pageWidth = doc.internal.pageSize.getWidth();  // ~297mm
       const pageHeight = doc.internal.pageSize.getHeight(); // ~210mm
-
-      // 0. Background Color (Pale Teal/Cream)
       doc.setFillColor(236, 244, 243);
       doc.rect(0, 0, pageWidth, pageHeight, 'F');
-
       const margin = 12;
-
-      // 1. TITLE
       doc.setFont("times", "bold"); // Serif font for dashboard title
       doc.setFontSize(22);
       doc.setTextColor(34, 49, 63); // Dark slate
       const displayTitle = fileName ? `${fileName.replace(/\.[^/.]+$/, "")} Dashboard` : "Analytics Dashboard";
       doc.text(truncateLabel(displayTitle, 45), margin, 20);
-
-      // DataPulse Watermark
       doc.setFont("helvetica", "bolditalic");
       doc.setFontSize(14);
       doc.setTextColor(180, 200, 195);
       doc.text("DataPulse", pageWidth - margin - 20, margin + 4);
-
-      // 2. SUBTITLE / HEADLINE
       const insights = result.insights || {};
       let headlineText = "Data processed successfully via automated AI analysis.";
       if (insights.headline) {
         headlineText = typeof insights.headline === 'object' ? String(insights.headline.text || "") : String(insights.headline);
       }
-
       doc.setFont("helvetica", "bold");
       doc.setFontSize(11); // Bold explicit heading
       doc.setTextColor(30, 40, 40);
       doc.text("Executive Summary", margin, 26);
-
       doc.setFont("helvetica", "normal");
       doc.setFontSize(10);
       doc.setTextColor(40, 40, 40);
       const splitSubtitle = doc.splitTextToSize(headlineText, pageWidth - margin * 2 - 20);
       doc.text(splitSubtitle, margin, 31);
-
-      // 3. TOP METRICS ROW (Business Insights)
       const stats = result.stats_summary || {};
       const findingsList = [];
       if (insights.findings && Array.isArray(insights.findings)) {
@@ -1362,25 +1270,18 @@ export default function DataPulse({ user, onLogout }) {
           findingsList.push(typeof f === 'object' ? String(f.text || f.message || "") : String(f));
         });
       }
-
       const topFinding = findingsList.length > 0 ? findingsList[0] : "Data processed and structured successfully.";
       const secondFinding = findingsList.length > 1 ? findingsList[1] : `Analyzed ${stats.row_count || 0} rows across ${stats.column_count || 0} variables.`;
-
       let metricY = 41;
       const numMetrics = 3;
       const metricBoxWidth = (pageWidth - margin * 2 - 20) / numMetrics;
-
       for (let i = 0; i < numMetrics; i++) {
         const mX = margin + i * (metricBoxWidth + 10);
-
-        // Label
         doc.setFont("helvetica", "bold");
         doc.setFontSize(10);
         doc.setTextColor(30, 50, 50);
         const label = i === 0 ? "Strategic Insight" : (i === 1 ? "Key Finding" : "Dataset Scope");
         doc.text(label, mX, metricY);
-
-        // Value
         doc.setFont("helvetica", "normal");
         doc.setFontSize(10);
         doc.setTextColor(20, 30, 30);
@@ -1388,99 +1289,71 @@ export default function DataPulse({ user, onLogout }) {
         if (i === 0) valStr = topFinding;
         else if (i === 1) valStr = secondFinding;
         else valStr = `${(stats.row_count || 0).toLocaleString()} records processed accurately.`;
-
         const splitVal = doc.splitTextToSize(valStr, metricBoxWidth);
         doc.text(splitVal, mX, metricY + 6);
       }
-
-      // 4. CHARTS GRID
       const charts = result.charts || {};
-      const chartKeys = Object.keys(charts);
-
+      const chartKeys = Array.isArray(keysToExport) && keysToExport.length > 0
+        ? keysToExport.filter(k => charts[k])
+        : Object.keys(charts);
       if (chartKeys.length > 0) {
         const totalCharts = Math.min(chartKeys.length, 6);
         let cols = 3;
         if (totalCharts <= 4) cols = 2;
         if (totalCharts === 1) cols = 1;
-
         const gap = 12;
         const availableWidth = pageWidth - margin * 2;
         const chartBoxWidth = (availableWidth - gap * (cols - 1)) / cols;
-
-        const startY = 62; // Shifted down to accommodate standalone Executive Summary
+        const startY = 62;
         const availableHeight = pageHeight - startY - margin;
         const totalRows = Math.ceil(totalCharts / cols);
         const yGap = 12;
         const chartBoxHeight = totalRows > 1 ? (availableHeight - yGap) / totalRows : Math.min(availableHeight, 100);
-
       for (let i = 0; i < totalCharts; i++) {
           const key = chartKeys[i];
           const fig = charts[key];
           if (!fig || !fig.data) continue;
-
           try {
-            // Calculate positions
             let col = i % cols;
             let row = Math.floor(i / cols);
-
             let boxX = margin + col * (chartBoxWidth + gap);
-
-            // Center bottom row if exactly 3 charts (2 top, 1 bottom)
             if (totalCharts === 3 && i === 2) {
               boxX = margin + (availableWidth / 2) - (chartBoxWidth / 2);
             }
-            // Center bottom row if exactly 5 charts (3 top, 2 bottom)
             if (totalCharts === 5 && i >= 3) {
-              // For 5 charts, cols=3. The bottom row has 2 charts.
-              // The width of 2 charts + 1 gap is (2*chartBoxWidth + gap).
               const bottomRowWidth = (2 * chartBoxWidth) + gap;
               const startOff = margin + (availableWidth - bottomRowWidth) / 2;
               const bottomCol = i - 3;
               boxX = startOff + bottomCol * (chartBoxWidth + gap);
             }
-
             const boxY = startY + row * (chartBoxHeight + yGap);
-
-            // Draw White Rounded Container
             doc.setFillColor(255, 255, 255);
             doc.setDrawColor(200, 215, 215);
             doc.roundedRect(boxX, boxY, chartBoxWidth, chartBoxHeight, 3, 3, 'FD');
-
-            // Draw Dark Title Pill Overlapping Top
             const pillWidth = chartBoxWidth * 0.95;
             const pillX = boxX + (chartBoxWidth - pillWidth) / 2;
             const pillY = boxY - 3;
             const pillHeight = 6;
-            doc.setFillColor(4, 59, 72); // dark teal
+            doc.setFillColor(4, 59, 72);
             doc.roundedRect(pillX, pillY, pillWidth, pillHeight, 2, 2, 'F');
-
-            // Pill Text Cleansing
             let baseTitle = key;
             if (fig.layout && fig.layout.title) {
               baseTitle = typeof fig.layout.title === 'string' ? fig.layout.title : (fig.layout.title.text || key.replaceAll("_", " "));
             }
             let strippedTitle = baseTitle.replace(/^(timeseries|scatter|bar\s?counts?|frequency\s?of|composition\s?of|donut|pie|line|heatmap)(?:\s+multi)?[\s-:]*/gi, "").trim() || baseTitle;
-            // Remove instances of "Q10 - ", "Q4 - " anywhere in the title
             strippedTitle = strippedTitle.replace(/\bQ\d+\s*[-:]*\s*/gi, "").trim() || strippedTitle;
-            // Remove aggregation suffixes e.g., "(agg to 16 pts)" and trailing question marks
             strippedTitle = strippedTitle.replace(/\(agg[^)]+\)/gi, "").replace(/\?+$/, "").trim() || strippedTitle;
-
-            doc.setFontSize(7.5); // Reduced slightly for better fit
+            doc.setFontSize(7.5);
             doc.setTextColor(255, 255, 255);
             doc.setFont("helvetica", "bold");
             const titleStr = strippedTitle.charAt(0).toUpperCase() + strippedTitle.slice(1);
             const trTitle = titleStr.length > 60 ? titleStr.slice(0, 57) + '...' : titleStr;
             doc.text(trTitle, boxX + chartBoxWidth / 2, pillY + 4.0, { align: 'center' });
-
             const innerWidth = chartBoxWidth - 4;
             const innerHeight = chartBoxHeight - 8;
-
-            // Base rendering height for Plotly to maintain good font sizes
             const scaleFactor = 320 / innerHeight;
             const renderWidth = Math.round(innerWidth * scaleFactor);
             const renderHeight = Math.round(innerHeight * scaleFactor);
-
-            // Prepare Plotly Configuration for Light Mode
             const pdfLayout = {
               ...fig.layout,
               paper_bgcolor: "rgba(0,0,0,0)",
@@ -1500,36 +1373,27 @@ export default function DataPulse({ user, onLogout }) {
               height: renderHeight,
               showlegend: false,
               margin: { l: 45, r: 25, t: 20, b: 45 },
-              title: null // Title is handled by pdf pill
+              title: null
             };
-
-            // Generate Image with retuned resolution ratio
             const imgData = await Plotly.toImage(
               { data: fig.data, layout: pdfLayout },
               { format: 'png', width: renderWidth, height: renderHeight, scale: 3 }
             );
-
-            // Add Image to Box
             doc.addImage(imgData, 'PNG', boxX + 2, boxY + 4, innerWidth, innerHeight);
-
           } catch (chartErr) {
             console.warn(`Skipped chart ${key}`, chartErr);
           }
         }
       }
-
       const cleanFileName = fileName.replace(/\.[^/.]+$/, "");
       doc.save(`${cleanFileName}_Dashboard.pdf`);
-
     } catch (err) {
       console.error("PDF Generation Error:", err);
       alert("Failed to compile PDF document. Please try again.");
     }
   }, [result, fileName]);
-
   const downloadCleanedData = useCallback(() => {
     if (!result || !result.clean_df || result.clean_df.length === 0) return;
-
     const df = result.clean_df;
     const headers = Object.keys(df[0]);
     const csvContent = [
@@ -1542,7 +1406,6 @@ export default function DataPulse({ user, onLogout }) {
         return val;
       }).join(","))
     ].join("\n");
-
     const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
     const url = URL.createObjectURL(blob);
     const link = document.createElement("a");
@@ -1552,27 +1415,20 @@ export default function DataPulse({ user, onLogout }) {
     link.click();
     document.body.removeChild(link);
   }, [result]);
-
   const chatStats = useMemo(() => result?.stats_summary || {}, [result?.stats_summary]);
   const chatInsights = useMemo(() => result?.insights || {}, [result?.insights]);
   const datasetTypeLabel = useMemo(() => inferDatasetType(result, fileName), [result, fileName]);
-
   const chatContext = useMemo(() => {
     if (!chatStats) return null;
-
-    // If backend provided an optimized pack, use it
     if (result?.chat_context_pack) {
       return {
         chat_context_pack: result.chat_context_pack,
         fileName,
         file_hash: result?.file_hash || null,
         generated_chart_keys: generatedChartKeys,
-        // Send sentinel chart keys so backend knows which charts exist (for explain_chart intent)
         charts: Object.keys(result?.charts || {}).reduce((acc, k) => ({ ...acc, [k]: true }), {}),
       };
     }
-    
-    // Fallback for older analyses
     const outlierSummary = Object.entries(chatStats?.outliers || {})
       .map(([column, info]) => ({ column, count: Number(info?.count || 0), percentage: Number(info?.percentage || 0) }))
       .sort((a, b) => b.count - a.count).slice(0, 10);
@@ -1590,20 +1446,14 @@ export default function DataPulse({ user, onLogout }) {
       generated_chart_keys: generatedChartKeys,
     };
   }, [chatStats, chatInsights, fileName, result?.charts, result?.file_hash, result?.chat_context_pack, datasetTypeLabel, generatedChartKeys]);
-
   const sendChat = useCallback(async () => {
     const q = chatInput.trim();
     if (!q || chatLoading || !result) return;
-
-    // Build history before appending current user message.
-    // Strip [CHART:...] tags so the LLM doesn't see internal rendering tags.
     const chatHistory = chatMsgs.map(m => ({
       role: m.role === 'ai' ? 'assistant' : 'user',
       content: (m.text || '').replace(/\[CHART:\s*[^\]]+\]/g, '').trim(),
     })).filter(m => m.content).slice(-10);
-
     setChatInput("");
-    // Give each message a stable unique ID to avoid React key drift when messages are sliced
     const userMsgId = `msg-${Date.now()}-u`;
     setChatMsgs((p) => [...p, { id: userMsgId, role: "user", text: q }].slice(-MAX_CHAT_MESSAGES));
     setChatLoading(true);
@@ -1611,16 +1461,13 @@ export default function DataPulse({ user, onLogout }) {
       const resp = await apiChat(q, chatContext || {}, chatHistory);
       if (resp?.new_chart?.id && resp?.new_chart?.fig) {
         const chartId = resp.new_chart.id;
-        // Track generated key so future requests don't duplicate it
         setGeneratedChartKeys((prev) => (prev.includes(chartId) ? prev : [...prev, chartId]));
-        // Add chart fig to result.charts so [CHART: key] inline references work
         setResult((prev) => prev ? ({
           ...prev,
           charts: { ...(prev.charts || {}), [chartId]: resp.new_chart.fig },
         }) : prev);
       }
       const rawAnswer = (resp.answer || "").trim() || "No response generated.";
-      // Strip double stars (**) for a cleaner plain-text look
       const cleanAnswer = rawAnswer.replace(/\*\*/g, '');
       const aiMsgId = `msg-${Date.now()}-a`;
       setChatMsgs((p) => [...p, {
@@ -1634,11 +1481,9 @@ export default function DataPulse({ user, onLogout }) {
       const errMsgId = `msg-${Date.now()}-e`;
       setChatMsgs((p) => [...p, { id: errMsgId, role: "ai", text: `Chat error: ${detail}`, newChart: null }].slice(-MAX_CHAT_MESSAGES));
     } finally {
-      // Always clear loading — even if catch itself throws
       setChatLoading(false);
     }
   }, [chatInput, chatLoading, result, chatContext, chatMsgs]);
-
   const stats = result?.stats_summary || {};
   const insights = result?.insights || {};
   const dq = stats.data_quality || {};
@@ -1672,12 +1517,10 @@ export default function DataPulse({ user, onLogout }) {
     }
     return String(value);
   })();
-
   const formatPercent = (value) => {
     const n = Number.isFinite(value) ? Number(value) : 100;
     return Number.isInteger(n) ? `${n}%` : `${n.toFixed(1)}%`;
   };
-
   const keyMetrics = [
     { label: "Total Rows", val: (stats.row_count || 0).toLocaleString() },
     { label: "Schema Columns", val: stats.column_count || 0 },
@@ -1696,8 +1539,7 @@ export default function DataPulse({ user, onLogout }) {
           : []}
         exclusionPadding={14}
       />
-
-      {/* NAVBAR */}
+      {}
       <div style={{ background: 'rgba(6, 9, 18, 0.90)', backdropFilter: 'blur(12px)', WebkitBackdropFilter: 'blur(12px)', padding: '16px 48px', borderBottom: '1px solid var(--border-subtle)', display: 'flex', justifyContent: 'space-between', alignItems: 'center', position: 'sticky', top: 0, zIndex: 100 }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
           <div style={{ color: 'var(--primary-500)', fontSize: '24px', textShadow: '0 0 10px rgba(99,102,241,0.4)' }}>◈</div>
@@ -1706,7 +1548,7 @@ export default function DataPulse({ user, onLogout }) {
         <div style={{ display: 'flex', alignItems: 'center', gap: '32px' }}>
           <div style={{ display: 'flex', gap: '16px' }}>
             <button onClick={toggleHistory} style={{ background: 'none', border: 'none', color: 'var(--text-main)', cursor: 'pointer', fontWeight: 600, fontSize: '13px', textTransform: 'uppercase', letterSpacing: '0.1em', opacity: 0.8 }}>History</button>
-            {result && <button onClick={exportPDF} style={{ background: 'none', border: 'none', color: 'var(--text-main)', cursor: 'pointer', fontWeight: 600, fontSize: '13px', textTransform: 'uppercase', letterSpacing: '0.1em', opacity: 0.8 }}>Download</button>}
+            {result && <button onClick={openExportModal} style={{ background: 'none', border: 'none', color: 'var(--text-main)', cursor: 'pointer', fontWeight: 600, fontSize: '13px', textTransform: 'uppercase', letterSpacing: '0.1em', opacity: 0.8 }}>Download</button>}
           </div>
           <div style={{ width: '1px', height: '20px', background: 'var(--border-subtle)' }} />
           <div style={{ display: 'flex', alignItems: 'center', gap: '20px' }}>
@@ -1715,27 +1557,23 @@ export default function DataPulse({ user, onLogout }) {
           </div>
         </div>
       </div>
-
       <div className="container" style={{ flex: 1, display: 'flex', flexDirection: 'column', position: 'relative', zIndex: 1, padding: 0, overflow: 'hidden' }}>
-        {/* MAIN SECTION */}
+        {}
         {phase === "upload" ? (
           <div className="animate-fade-in" style={{ flex: 1, display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 'clamp(22px, 3vw, 48px)', alignItems: 'center', maxWidth: '1400px', margin: '0 auto', padding: 'clamp(22px, 3vw, 40px) clamp(20px, 4vw, 64px)', height: '100%', overflow: 'hidden' }}>
-
-            {/* LEFT SIDE: AI Animated Visual */}
+            {}
             <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center' }}>
               <div style={{ position: 'relative', width: '100%', maxWidth: '390px' }}>
-                {/* Outer pulse ring */}
+                {}
                 <div style={{ position: 'absolute', inset: 0, borderRadius: '50%', background: 'var(--primary-500)', filter: 'blur(40px)', opacity: 0.05, animation: 'pulse 4s infinite' }} />
-
-                {/* The Rotating AI Globe Core Container */}
+                {}
                 <div className="ai-hologram-layer" style={{ zIndex: 1 }}>
-                  {/* FIX 37: Globe pointer interaction intentionally disabled for now. */}
+                  {}
                   <GlobeCanvas size={390} />
                 </div>
               </div>
             </div>
-
-            {/* RIGHT SIDE: Upload Logic */}
+            {}
             <div style={{ display: 'flex', flexDirection: 'column', justifyContent: 'center', alignItems: 'center', gap: '24px' }}>
               <div style={{ animation: 'slideUp 0.8s cubic-bezier(0.2, 0.8, 0.2, 1)', textAlign: 'center', width: '100%' }}>
                 <div style={{ display: 'inline-flex', alignItems: 'center', gap: '12px', padding: '6px 16px', background: 'rgba(99,102,241,0.1)', borderRadius: '100px', border: '1px solid rgba(99,102,241,0.2)', marginBottom: '16px', color: 'var(--primary-500)', fontSize: '13px', fontWeight: 600, letterSpacing: '0.1em', textTransform: 'uppercase', marginInline: 'auto' }}>
@@ -1752,8 +1590,7 @@ export default function DataPulse({ user, onLogout }) {
                   Ready to analyze your data? Connect a datasheet to initialize multi-agent analysis.
                 </p>
               </div>
-
-              {/* Upload Box */}
+              {}
               <div style={{ position: 'relative', width: '100%' }}>
                 <div
                   className={`upload-box ${isDragOver ? 'drag-over' : ''}`}
@@ -1779,8 +1616,7 @@ export default function DataPulse({ user, onLogout }) {
                   <input ref={fileRef} type="file" accept=".csv,.xlsx,.xls" style={{ display: "none" }} onChange={(e) => onFile(e.target.files[0])} />
                 </div>
               </div>
-
-              {/* Metrics */}
+              {}
               <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '16px', marginTop: '8px' }}>
                 {[
                   { title: "Neural Logic", desc: "Multi-agent orchestration.", icon: "◈" },
@@ -1807,21 +1643,18 @@ export default function DataPulse({ user, onLogout }) {
               </div>
             ) : (
               <div style={{ width: '100%', maxWidth: '600px', display: 'flex', flexDirection: 'column', alignItems: 'center' }}>
-                {/* Dynamic Animation */}
+                {}
                 <div style={{ position: 'relative', width: '120px', height: '120px', marginBottom: '40px', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
                   <div style={{ position: 'absolute', inset: 0, borderRadius: '50%', border: '2px solid rgba(99,102,241,0.2)', borderTop: '2px solid var(--primary-500)', animation: 'spin 1.5s linear infinite' }} />
                   <div style={{ position: 'absolute', inset: '15px', borderRadius: '50%', border: '2px solid rgba(16,185,129,0.2)', borderBottom: '2px solid var(--success)', animation: 'spin 2s linear infinite reverse' }} />
                   <div style={{ fontSize: '32px', color: 'var(--primary-500)', animation: 'pulse 2s infinite' }}>◈</div>
                 </div>
-
                 <h2 style={{ fontSize: '28px', color: 'var(--text-main)', marginBottom: '12px', letterSpacing: '0.05em' }}>Analyzing Dataset</h2>
-
-                {/* Agent Logs Component */}
+                {}
                 <div style={{ width: '100%', background: 'rgba(13,18,32,0.8)', border: '1px solid var(--border-subtle)', borderRadius: '16px', padding: '24px', position: 'relative', overflow: 'hidden' }}>
                   <div className="progress-container" style={{ marginBottom: '20px', height: '4px', background: 'rgba(255,255,255,0.05)' }}>
                     <div className="progress-bar" style={{ width: `${progress}%`, transition: 'width 0.5s cubic-bezier(0.4, 0, 0.2, 1)', background: 'linear-gradient(90deg, var(--primary-600), var(--info))' }} />
                   </div>
-
                   <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', minHeight: '60px', justifyContent: 'center' }}>
                     <span style={{ fontSize: '12px', color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '2px' }}>Active Agent Node</span>
                     <strong style={{ fontSize: '16px', color: 'var(--primary-500)', fontFamily: "'Outfit', monospace", textShadow: '0 0 10px rgba(99,102,241,0.3)' }}>
@@ -1829,15 +1662,13 @@ export default function DataPulse({ user, onLogout }) {
                     </strong>
                   </div>
                 </div>
-
                 <p style={{ marginTop: '24px', fontSize: '14px', color: 'var(--text-muted)', opacity: 0.8 }}>Data transparency protocols engaged. Preparing visualizations...</p>
               </div>
             )}
           </div>
         ) : (
           <div className="grid-12 animate-fade-in" style={{ alignItems: 'start', width: '100%', flex: 1, overflow: 'hidden', height: '100%' }}>
-
-            {/* LEFT 4 (Chat & Status) */}
+            {}
             <div className="col-4 flex-col gap-24" style={{ height: '100%', overflowY: 'auto', paddingRight: '12px' }}>
               <div
                 onClick={() => fileRef.current?.click()}
@@ -1870,8 +1701,7 @@ export default function DataPulse({ user, onLogout }) {
                   onChange={(e) => onFile(e.target.files?.[0])}
                 />
               </div>
-
-              {/* File Info */}
+              {}
               {fileName && (
                 <div className="card" style={{ padding: '20px' }}>
                   <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
@@ -1894,8 +1724,7 @@ export default function DataPulse({ user, onLogout }) {
                   </div>
                 </div>
               )}
-
-              {/* Chat Box (only if done) */}
+              {}
               {phase === "done" && result && (
                 <div className="card flex-col gap-16" style={{ padding: '20px', flex: 1, display: 'flex', overflow: 'hidden' }}>
                   <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
@@ -1952,8 +1781,7 @@ export default function DataPulse({ user, onLogout }) {
                 </div>
               )}
             </div>
-
-            {/* RIGHT (Results / Loading) */}
+            {}
             <div className="col-8" style={{ height: '100%', overflowY: 'auto', paddingRight: '12px', paddingBottom: '32px', display: 'flex', flexDirection: 'column' }}>
               {!result ? (
                 <div className="card animate-fade-in" style={{ minHeight: '500px', display: 'flex', alignItems: 'center', justifyContent: 'center', width: '100%' }}>
@@ -1965,7 +1793,6 @@ export default function DataPulse({ user, onLogout }) {
                     {PRIMARY_TABS.map(t => <button key={t} onClick={() => setTab(t)} style={{ background: 'none', border: 'none', color: tab === t ? 'var(--text-main)' : 'var(--text-muted)', fontWeight: tab === t ? 600 : 500, fontSize: '14px', cursor: 'pointer', borderBottom: tab === t ? '2px solid var(--primary-500)' : 'none', paddingBottom: '12px', marginBottom: '-13px', textTransform: 'capitalize', letterSpacing: '0.05em' }}>{t}</button>)}
                     {SECONDARY_TABS.map(t => <button key={t} onClick={() => setTab(t)} style={{ background: 'none', border: 'none', color: tab === t ? 'var(--text-main)' : 'var(--text-muted)', fontWeight: tab === t ? 600 : 500, fontSize: '14px', cursor: 'pointer', borderBottom: tab === t ? '2px solid var(--primary-500)' : 'none', paddingBottom: '12px', marginBottom: '-13px', textTransform: 'capitalize', letterSpacing: '0.05em' }}>{t}</button>)}
                   </div>
-
                   {tab === "overview" && (
                     <div className="flex-col gap-24">
                       {headline && (
@@ -2116,9 +1943,7 @@ export default function DataPulse({ user, onLogout }) {
                       </div>
                     </div>
                   )}
-
                   {tab === "charts" && <ChartPanel result={result} PlotComponent={PlotComponent} />}
-
                   {tab === "insights" && (
                     <div className="flex-col gap-24">
                       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '16px' }}>
@@ -2135,7 +1960,6 @@ export default function DataPulse({ user, onLogout }) {
                           <div style={{ marginTop: '8px', fontSize: '26px', color: 'var(--text-main)', fontFamily: "'Inter', sans-serif" }}>{formatPercent(dq.completeness || 100)}</div>
                         </div>
                       </div>
-
                       <div style={{ padding: '20px', background: 'var(--bg-input)', borderRadius: '12px', border: '1px solid var(--border-subtle)' }}>
                         <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '16px' }}>
                           <div style={{
@@ -2165,7 +1989,6 @@ export default function DataPulse({ user, onLogout }) {
                             </div>
                         )) : <div style={{ fontSize: '14px', color: 'var(--text-muted)', fontStyle: 'italic' }}>No analyst findings were generated for this dataset.</div>}
                       </div>
-
                       <div style={{ padding: '20px', background: 'var(--bg-input)', borderRadius: '12px', border: '1px solid var(--border-subtle)' }}>
                         <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '16px' }}>
                           <div style={{
@@ -2200,7 +2023,6 @@ export default function DataPulse({ user, onLogout }) {
                       </div>
                     </div>
                   )}
-
                   {tab === "data" && (
                     <div className="flex-col gap-16">
                       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
@@ -2213,16 +2035,37 @@ export default function DataPulse({ user, onLogout }) {
                           <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '13px', textAlign: 'left', background: 'var(--bg-input)' }}>
                             <thead style={{ background: 'rgba(99,102,241,0.05)', borderBottom: '1px solid var(--border-subtle)' }}>
                               <tr>
-                                {Object.keys(result.clean_df[0]).map(k => (
-                                  <th key={k} style={{ padding: '12px 14px', color: 'var(--text-muted)', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.05em', whiteSpace: 'nowrap' }}>{k}</th>
-                                ))}
+                                {Object.keys(result.clean_df[0]).map(k => {
+                                  const isActive = tableSort.col === k;
+                                  const icon = isActive ? (tableSort.dir === 'asc' ? '▲' : '▼') : '⇅';
+                                  return (
+                                    <th
+                                      key={k}
+                                      onClick={() => handleTableSort(k)}
+                                      style={{
+                                        padding: '12px 14px',
+                                        color: isActive ? '#818cf8' : 'var(--text-muted)',
+                                        fontWeight: 600,
+                                        textTransform: 'uppercase',
+                                        letterSpacing: '0.05em',
+                                        whiteSpace: 'nowrap',
+                                        cursor: 'pointer',
+                                        userSelect: 'none',
+                                        transition: 'color 0.15s ease',
+                                      }}
+                                    >
+                                      {k}
+                                      <span style={{ opacity: isActive ? 1 : 0.35, fontSize: '9px', marginLeft: '5px', verticalAlign: 'middle' }}>{icon}</span>
+                                    </th>
+                                  );
+                                })}
                               </tr>
                             </thead>
                             <tbody>
-                              {result.clean_df.map((row, i) => (
-                                <tr key={i} style={{ borderBottom: i === result.clean_df.length - 1 ? 'none' : '1px solid var(--border-subtle)' }}>
+                              {sortedCleanDf.map((row, i) => (
+                                <tr key={i} style={{ borderBottom: i === sortedCleanDf.length - 1 ? 'none' : '1px solid var(--border-subtle)' }}>
                                   {Object.values(row).map((v, j) => (
-                                    <td key={j} style={{ padding: '12px 14px', color: 'var(--text-main)', whiteSpace: 'nowrap' }}>{String(v)}</td>
+                                    <td key={j} style={{ padding: '12px 14px', color: 'var(--text-main)', whiteSpace: 'nowrap' }}>{String(v ?? '')}</td>
                                   ))}
                                 </tr>
                               ))}
@@ -2234,16 +2077,132 @@ export default function DataPulse({ user, onLogout }) {
                       </div>
                     </div>
                   )}
-
                 </div>
               )}
             </div>
-
           </div>
         )}
       </div>
-
-      {/* HISTORY SIDEBAR OVERLAY */}
+      {}
+      {showExportModal && (
+        <div style={{ position: 'fixed', inset: 0, zIndex: 2000, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+          {/* Backdrop */}
+          <div
+            onClick={() => setShowExportModal(false)}
+            style={{ position: 'absolute', inset: 0, background: 'rgba(0,0,0,0.65)', backdropFilter: 'blur(8px)' }}
+          />
+          {/* Modal */}
+          <div className="animate-fade-in" style={{
+            position: 'relative', zIndex: 1, width: 'min(560px, 94vw)',
+            background: 'var(--bg-card)', border: '1px solid rgba(99,102,241,0.25)',
+            borderRadius: '20px', padding: '32px', display: 'flex', flexDirection: 'column', gap: '20px',
+            boxShadow: '0 24px 60px rgba(0,0,0,0.6), 0 0 0 1px rgba(99,102,241,0.1)',
+          }}>
+            {/* Header */}
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
+              <div>
+                <h2 style={{ fontSize: '18px', fontWeight: 700, margin: 0, color: 'var(--text-main)' }}>Export Dashboard PDF</h2>
+                <p style={{ margin: '4px 0 0', fontSize: '13px', color: 'var(--text-muted)' }}>
+                  {selectedExportKeys.length} of {Object.keys(result?.charts || {}).length} charts selected
+                </p>
+              </div>
+              <button onClick={() => setShowExportModal(false)} style={{ background: 'none', border: 'none', color: 'var(--text-muted)', cursor: 'pointer', fontSize: '20px', lineHeight: 1, padding: '2px 6px' }}>✕</button>
+            </div>
+            {/* Select All / None */}
+            <div style={{ display: 'flex', gap: '10px' }}>
+              <button
+                onClick={() => setSelectedExportKeys(Object.keys(result?.charts || {}))}
+                style={{
+                  padding: '6px 14px', borderRadius: '8px', fontSize: '12px', fontWeight: 600,
+                  border: '1px solid rgba(99,102,241,0.4)', background: 'rgba(99,102,241,0.1)',
+                  color: '#818cf8', cursor: 'pointer', letterSpacing: '0.03em',
+                }}
+              >Select All</button>
+              <button
+                onClick={() => setSelectedExportKeys([])}
+                style={{
+                  padding: '6px 14px', borderRadius: '8px', fontSize: '12px', fontWeight: 600,
+                  border: '1px solid rgba(255,255,255,0.1)', background: 'transparent',
+                  color: 'var(--text-muted)', cursor: 'pointer',
+                }}
+              >Select None</button>
+            </div>
+            {/* Chart list */}
+            <div style={{
+              display: 'flex', flexDirection: 'column', gap: '8px',
+              maxHeight: '340px', overflowY: 'auto', paddingRight: '4px',
+            }}>
+              {Object.entries(result?.charts || {}).map(([key, fig]) => {
+                const isChecked = selectedExportKeys.includes(key);
+                const chartType = (Array.isArray(fig?.data) ? fig.data[0]?.type : null) || key.split('_')[0];
+                const rawTitle = fig?.layout?.title?.text || fig?.layout?.title || '';
+                const displayTitle = (() => {
+                  let t = typeof rawTitle === 'string' ? rawTitle : String(rawTitle || key.replaceAll('_', ' '));
+                  t = t.replace(/^(timeseries|scatter|bar|freq|donut|pie|line|heatmap|histogram|box|violin)[\s_-]*/gi, '').trim();
+                  return t || key.replaceAll('_', ' ');
+                })();
+                const TYPE_BADGE = { scatter: '⬡ Scatter', heatmap: '▦ Heatmap', bar: '▬ Bar', histogram: '▤ Histogram', box: '⊡ Box', violin: '◈ Violin', pie: '◉ Pie', line: '⌇ Line', timeseries: '⌇ Time Series' };
+                const badgeLabel = TYPE_BADGE[chartType] || `◈ ${chartType}`;
+                return (
+                  <label
+                    key={key}
+                    style={{
+                      display: 'flex', alignItems: 'center', gap: '12px', padding: '10px 14px',
+                      borderRadius: '10px', cursor: 'pointer', userSelect: 'none',
+                      background: isChecked ? 'rgba(99,102,241,0.08)' : 'rgba(255,255,255,0.02)',
+                      border: `1px solid ${isChecked ? 'rgba(99,102,241,0.35)' : 'rgba(255,255,255,0.06)'}`,
+                      transition: 'all 0.15s ease',
+                    }}
+                  >
+                    <input
+                      type="checkbox"
+                      checked={isChecked}
+                      onChange={() =>
+                        setSelectedExportKeys(prev =>
+                          isChecked ? prev.filter(k => k !== key) : [...prev, key]
+                        )
+                      }
+                      style={{ width: '16px', height: '16px', accentColor: '#6366f1', cursor: 'pointer', flexShrink: 0 }}
+                    />
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      <div style={{ fontSize: '13px', fontWeight: 600, color: 'var(--text-main)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                        {displayTitle.charAt(0).toUpperCase() + displayTitle.slice(1)}
+                      </div>
+                      <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginTop: '2px' }}>{badgeLabel}</div>
+                    </div>
+                    {isChecked && <span style={{ color: '#6366f1', fontSize: '16px', flexShrink: 0 }}>✓</span>}
+                  </label>
+                );
+              })}
+            </div>
+            {/* Footer actions */}
+            <div style={{ display: 'flex', gap: '12px', justifyContent: 'flex-end', paddingTop: '4px', borderTop: '1px solid var(--border-subtle)' }}>
+              <button
+                onClick={() => setShowExportModal(false)}
+                style={{
+                  padding: '10px 20px', borderRadius: '10px', fontSize: '13px', fontWeight: 600,
+                  border: '1px solid rgba(255,255,255,0.12)', background: 'transparent',
+                  color: 'var(--text-muted)', cursor: 'pointer',
+                }}
+              >Cancel</button>
+              <button
+                onClick={() => exportPDF(selectedExportKeys)}
+                disabled={selectedExportKeys.length === 0}
+                style={{
+                  padding: '10px 24px', borderRadius: '10px', fontSize: '13px', fontWeight: 700,
+                  border: 'none', cursor: selectedExportKeys.length === 0 ? 'not-allowed' : 'pointer',
+                  background: selectedExportKeys.length === 0 ? 'rgba(99,102,241,0.3)' : 'linear-gradient(135deg, #6366f1, #4f46e5)',
+                  color: selectedExportKeys.length === 0 ? 'rgba(255,255,255,0.4)' : '#fff',
+                  boxShadow: selectedExportKeys.length > 0 ? '0 4px 16px rgba(99,102,241,0.4)' : 'none',
+                  transition: 'all 0.2s ease',
+                }}
+              >
+                ↓ Generate PDF ({selectedExportKeys.length} chart{selectedExportKeys.length !== 1 ? 's' : ''})
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
       {showHistory && (
         <div style={{ position: 'fixed', inset: 0, zIndex: 1000, display: 'flex', justifyContent: 'flex-end' }}>
           <div style={{ position: 'absolute', inset: 0, background: 'rgba(0,0,0,0.5)', backdropFilter: 'blur(6px)' }} onClick={() => setShowHistory(false)} />
@@ -2252,7 +2211,6 @@ export default function DataPulse({ user, onLogout }) {
               <h2 style={{ fontSize: '20px' }}>Analysis Vault</h2>
               <button onClick={() => setShowHistory(false)} style={{ background: 'none', border: 'none', color: 'var(--text-muted)', cursor: 'pointer', fontSize: '20px' }}>✕</button>
             </div>
-
             <div style={{ flex: 1, overflowY: 'auto' }} className="flex-col gap-12">
               {historyError && (
                 <div style={{ color: 'var(--error)', fontSize: '13px', padding: '12px', background: 'rgba(239,68,68,0.1)', borderRadius: '8px', border: '1px solid rgba(239,68,68,0.2)' }}>

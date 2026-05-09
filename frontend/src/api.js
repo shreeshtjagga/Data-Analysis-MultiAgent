@@ -1,20 +1,15 @@
 const BASE = "/api";
-
 let accessToken = null;
-
 export function setToken(token) {
   accessToken = token || null;
 }
-
 export function getToken() {
   return accessToken;
 }
-
 export function clearToken() {
   accessToken = null;
   fetch(`${BASE}/auth/logout`, { method: "POST", credentials: "include" }).catch(() => { });
 }
-
 async function refreshAccessToken() {
   try {
     const resp = await fetch(`${BASE}/auth/refresh`, {
@@ -32,7 +27,6 @@ async function refreshAccessToken() {
   }
   return false;
 }
-
 function getStatusMessage(status) {
   const messages = {
     400: "Bad Request",
@@ -48,10 +42,8 @@ function getStatusMessage(status) {
   };
   return messages[status] || `HTTP ${status}`;
 }
-
 function normalizeErrorDetail(body, fallback) {
   if (!body || typeof body !== 'object') return fallback;
-
   if (Array.isArray(body.detail)) {
     const errors = body.detail.map(err => {
       if (typeof err === 'object') {
@@ -62,36 +54,28 @@ function normalizeErrorDetail(body, fallback) {
     });
     return errors.join(' | ') || fallback;
   }
-
   if (typeof body.detail === 'string') {
     return body.detail;
   }
-
   if (typeof body.message === 'string') {
     return body.message;
   }
-
   return fallback;
 }
-
 async function apiFetch(path, options = {}) {
   const headers = { ...(options.headers || {}) };
-
   const token = getToken();
   if (token && options.withAuth !== false) {
     headers["Authorization"] = `Bearer ${token}`;
   }
-
   if (options.body && !(options.body instanceof FormData)) {
     headers["Content-Type"] = "application/json";
   }
-
   const response = await fetch(`${BASE}${path}`, {
     ...options,
     headers,
     credentials: options.credentials ?? "include",
   });
-
   if (response.status === 401 && !path.startsWith("/auth/login") && !path.startsWith("/auth/google") && !path.startsWith("/auth/refresh")) {
     const refreshed = await refreshAccessToken();
     if (refreshed) {
@@ -131,7 +115,6 @@ async function apiFetch(path, options = {}) {
     authErr.status = 401;
     throw authErr;
   }
-
   if (!response.ok) {
     let detail = `HTTP ${response.status}`;
     try {
@@ -141,11 +124,9 @@ async function apiFetch(path, options = {}) {
     }
     throw new Error(detail);
   }
-
   if (options.raw) return response;
   return response.json();
 }
-
 export async function apiRegister(email, password, name = null) {
   return apiFetch("/auth/register", {
     method: "POST",
@@ -153,7 +134,6 @@ export async function apiRegister(email, password, name = null) {
     body: JSON.stringify({ email, password, name }),
   });
 }
-
 export async function apiLogin(email, password) {
   return apiFetch("/auth/login", {
     method: "POST",
@@ -161,7 +141,6 @@ export async function apiLogin(email, password) {
     body: JSON.stringify({ email, password }),
   });
 }
-
 export async function apiSyncSession(accessToken, refreshToken) {
   return apiFetch("/auth/sync-session", {
     method: "POST",
@@ -169,7 +148,6 @@ export async function apiSyncSession(accessToken, refreshToken) {
     body: JSON.stringify({ access_token: accessToken, refresh_token: refreshToken }),
   });
 }
-
 export async function apiForgotPassword(email) {
   return apiFetch("/auth/forgot-password", {
     method: "POST",
@@ -178,24 +156,14 @@ export async function apiForgotPassword(email) {
   });
 }
 
-export async function apiResetPassword(token, newPassword) {
-  return apiFetch("/auth/reset-password", {
-    method: "POST",
-    withAuth: false,
-    body: JSON.stringify({ token, new_password: newPassword }),
-  });
-}
-
 export async function apiMe() {
   return apiFetch("/auth/me");
 }
-
 export async function apiAnalyze(file) {
   const form = new FormData();
   form.append("file", file);
   return apiFetch("/analyze", { method: "POST", body: form });
 }
-
 export async function apiChat(question, context = {}, history = []) {
   let safeContext = context;
   try {
@@ -209,19 +177,15 @@ export async function apiChat(question, context = {}, history = []) {
     body: chatBody,
   });
 }
-
 export async function apiHistory(limit = 20) {
   return apiFetch(`/history?limit=${limit}`);
 }
-
 export async function apiHistoryAnalysis(analysisId) {
   return apiFetch(`/history/${analysisId}`);
 }
-
 export async function apiDeleteAnalysis(analysisId) {
   return apiFetch(`/history/${analysisId}`, { method: "DELETE" });
 }
-
 export async function apiHealth() {
   return apiFetch("/health", { withAuth: false });
 }

@@ -7,50 +7,40 @@ import os
 from datetime import date, datetime
 from typing import Any, Optional, Tuple
 from urllib.parse import urlparse, urlunparse
-
 logger = logging.getLogger(__name__)
 
-
 def rewrite_local_dev_host(url: str, service_name: str) -> str:
-    app_env = os.getenv("APP_ENV", "production").lower()
-    if app_env != "development" or os.path.exists("/.dockerenv"):
+    app_env = os.getenv('APP_ENV', 'production').lower()
+    if app_env != 'development' or os.path.exists('/.dockerenv'):
         return url
-
     parsed = urlparse(url)
     if parsed.hostname != service_name:
         return url
-
     netloc = parsed.netloc
-    if "@" in netloc:
-        auth, host_port = netloc.rsplit("@", 1)
-        if host_port.startswith(f"{service_name}:"):
+    if '@' in netloc:
+        (auth, host_port) = netloc.rsplit('@', 1)
+        if host_port.startswith(f'{service_name}:'):
             netloc = f"{auth}@localhost:{host_port.split(':', 1)[1]}"
         elif host_port == service_name:
-            netloc = f"{auth}@localhost"
-    else:
-        if netloc.startswith(f"{service_name}:"):
-            netloc = f"localhost:{netloc.split(':', 1)[1]}"
-        elif netloc == service_name:
-            netloc = "localhost"
-
+            netloc = f'{auth}@localhost'
+    elif netloc.startswith(f'{service_name}:'):
+        netloc = f"localhost:{netloc.split(':', 1)[1]}"
+    elif netloc == service_name:
+        netloc = 'localhost'
     rewritten = urlunparse(parsed._replace(netloc=netloc))
-    logger.warning(
-        "%s host '%s' detected in local dev; using localhost instead",
-        service_name.upper(),
-        service_name,
-    )
+    logger.warning("%s host '%s' detected in local dev; using localhost instead", service_name.upper(), service_name)
     return rewritten
 
-
 def _parse_salary_range(series: pd.Series) -> pd.Series:
+
     def _to_mid(val):
         if pd.isna(val):
             return np.nan
-        s = str(val).lower().replace(",", "").replace("$", "").strip()
-        nums = re.findall(r"(\d+\.?\d*)k?", s)
-        multipliers = re.findall(r"(\d+\.?\d*)(k)", s)
+        s = str(val).lower().replace(',', '').replace('$', '').strip()
+        nums = re.findall('(\\d+\\.?\\d*)k?', s)
+        multipliers = re.findall('(\\d+\\.?\\d*)(k)', s)
         if multipliers:
-            parts = [float(n) * 1000 for n, _ in multipliers]
+            parts = [float(n) * 1000 for (n, _) in multipliers]
         elif nums:
             parts = [float(n) for n in nums]
         else:
@@ -58,90 +48,75 @@ def _parse_salary_range(series: pd.Series) -> pd.Series:
         return float(np.mean(parts))
     return series.apply(_to_mid)
 
-
 def _looks_like_salary_range(series: pd.Series) -> bool:
     sample = series.dropna().head(30).astype(str)
     if len(sample) == 0:
         return False
-    matched = sample.str.match(r"^\d+k?\s*[-–+]?\s*\d*k?$", na=False)
+    matched = sample.str.match('^\\d+k?\\s*[-–+]?\\s*\\d*k?$', na=False)
     return matched.sum() >= len(sample) * 0.5
-
-
-_NULL_STRINGS = frozenset({
-    "nan", "none", "null", "na", "n/a", "n\\a", "#n/a", "#na", "#null",
-    "nil", "undefined", "unknown", "missing", "-", "--", "---", "",
-    "not available", "not applicable", "no data", "no response", "nr",
-})
-
-_TRUE_STRINGS  = frozenset({"yes", "y", "true", "1", "on", "agree", "positive", "correct", "ok"})
-_FALSE_STRINGS = frozenset({"no", "n", "false", "0", "off", "disagree", "negative", "incorrect"})
-
-IMPUTE_MAX_NULL_RATIO = 0.60
-
+_NULL_STRINGS = frozenset({'nan', 'none', 'null', 'na', 'n/a', 'n\\a', '#n/a', '#na', '#null', 'nil', 'undefined', 'unknown', 'missing', '-', '--', '---', '', 'not available', 'not applicable', 'no data', 'no response', 'nr'})
+_TRUE_STRINGS = frozenset({'yes', 'y', 'true', '1', 'on', 'agree', 'positive', 'correct', 'ok'})
+_FALSE_STRINGS = frozenset({'no', 'n', 'false', '0', 'off', 'disagree', 'negative', 'incorrect'})
+IMPUTE_MAX_NULL_RATIO = 0.6
 
 def _normalize_null_strings(series: pd.Series) -> pd.Series:
     lower = series.astype(str).str.strip().str.lower()
     return series.where(~lower.isin(_NULL_STRINGS), other=np.nan)
 
-
 def _try_parse_currency(series: pd.Series) -> Tuple[Optional[pd.Series], bool]:
     sample = series.dropna().head(30).astype(str)
     if len(sample) == 0:
-        return None, False
-    currency_pat = re.compile(r"^[\$€£¥₹]?[\d,\.]+[kKmMbB]?$")
-    matched = sample.str.strip().str.match(r"^[\$€£¥₹]?[\d,\.]+[kKmMbB]?\s*$", na=False)
+        return (None, False)
+    currency_pat = re.compile('^[\\$€£¥₹]?[\\d,\\.]+[kKmMbB]?$')
+    matched = sample.str.strip().str.match('^[\\$€£¥₹]?[\\d,\\.]+[kKmMbB]?\\s*$', na=False)
     if matched.sum() < len(sample) * 0.5:
-        return None, False
+        return (None, False)
 
     def _to_float(val):
         if pd.isna(val):
             return np.nan
-        s = re.sub(r"[\$€£¥₹,\s]", "", str(val).strip())
+        s = re.sub('[\\$€£¥₹,\\s]', '', str(val).strip())
         multiplier = 1
-        if s.endswith(("k", "K")):
-            s, multiplier = s[:-1], 1_000
-        elif s.endswith(("m", "M")):
-            s, multiplier = s[:-1], 1_000_000
-        elif s.endswith(("b", "B")):
-            s, multiplier = s[:-1], 1_000_000_000
+        if s.endswith(('k', 'K')):
+            (s, multiplier) = (s[:-1], 1000)
+        elif s.endswith(('m', 'M')):
+            (s, multiplier) = (s[:-1], 1000000)
+        elif s.endswith(('b', 'B')):
+            (s, multiplier) = (s[:-1], 1000000000)
         try:
             return float(s) * multiplier
         except ValueError:
             return np.nan
-
     parsed = series.apply(_to_float)
     valid_ratio = parsed.notna().sum() / max(len(series.dropna()), 1)
-    return parsed, valid_ratio > 0.5
-
+    return (parsed, valid_ratio > 0.5)
 
 def _try_parse_percentage(series: pd.Series) -> Tuple[Optional[pd.Series], bool]:
     sample = series.dropna().head(30).astype(str).str.strip()
     if len(sample) == 0:
-        return None, False
-    pct_pat = sample.str.match(r"^-?\d+\.?\d*\s*%$", na=False)
+        return (None, False)
+    pct_pat = sample.str.match('^-?\\d+\\.?\\d*\\s*%$', na=False)
     if pct_pat.sum() < len(sample) * 0.5:
-        return None, False
+        return (None, False)
 
     def _to_pct(val):
         if pd.isna(val):
             return np.nan
         try:
-            return float(str(val).replace("%", "").strip()) / 100
+            return float(str(val).replace('%', '').strip()) / 100
         except ValueError:
             return np.nan
-
     parsed = series.apply(_to_pct)
     valid_ratio = parsed.notna().sum() / max(len(series.dropna()), 1)
-    return parsed, valid_ratio > 0.5
-
+    return (parsed, valid_ratio > 0.5)
 
 def _try_parse_boolean(series: pd.Series) -> Tuple[Optional[pd.Series], bool]:
     sample = series.dropna().head(30).astype(str).str.strip().str.lower()
     if len(sample) == 0:
-        return None, False
+        return (None, False)
     known = sample.isin(_TRUE_STRINGS | _FALSE_STRINGS)
     if known.sum() < len(sample) * 0.8:
-        return None, False
+        return (None, False)
 
     def _to_bool(val):
         if pd.isna(val):
@@ -152,22 +127,19 @@ def _try_parse_boolean(series: pd.Series) -> Tuple[Optional[pd.Series], bool]:
         if s in _FALSE_STRINGS:
             return 0.0
         return np.nan
-
     parsed = series.apply(_to_bool)
     valid_ratio = parsed.notna().sum() / max(len(series.dropna()), 1)
-    return parsed, valid_ratio > 0.7
-
+    return (parsed, valid_ratio > 0.7)
 
 def _try_parse_mixed_numeric(series: pd.Series) -> Tuple[Optional[pd.Series], bool]:
     sample = series.dropna().head(50).astype(str)
     if len(sample) == 0:
-        return None, False
-    converted = pd.to_numeric(series, errors="coerce")
+        return (None, False)
+    converted = pd.to_numeric(series, errors='coerce')
     valid_ratio = converted.notna().sum() / max(len(series), 1)
-    if valid_ratio >= 0.60:
-        return converted, True
-    return None, False
-
+    if valid_ratio >= 0.6:
+        return (converted, True)
+    return (None, False)
 
 def clean_dataframe(df: pd.DataFrame) -> tuple[pd.DataFrame, list]:
     initial_rows = len(df)
@@ -176,15 +148,13 @@ def clean_dataframe(df: pd.DataFrame) -> tuple[pd.DataFrame, list]:
     df = df.drop_duplicates()
     dropped = initial_rows - len(df)
     if dropped > 0:
-        logger.info("Dropped %d duplicate rows", dropped)
-
-    for col in df.select_dtypes(include=["object"]).columns:
+        logger.info('Dropped %d duplicate rows', dropped)
+    for col in df.select_dtypes(include=['object']).columns:
         try:
             df[col] = df[col].astype(str).str.strip()
         except Exception as exc:
             logger.debug("Failed to strip string values for column '%s': %s", col, exc)
-
-    for col in list(df.select_dtypes(include=["object"]).columns):
+    for col in list(df.select_dtypes(include=['object']).columns):
         df[col] = _normalize_null_strings(df[col])
     num_cols_now = df.select_dtypes(include=[np.number]).columns
     for col in num_cols_now:
@@ -192,43 +162,36 @@ def clean_dataframe(df: pd.DataFrame) -> tuple[pd.DataFrame, list]:
         if inf_count > 0:
             df[col] = df[col].replace([np.inf, -np.inf], np.nan)
             logger.info("Replaced %d ±Inf values in '%s' with NaN", inf_count, col)
-
-    for col in list(df.select_dtypes(include=["object"]).columns):
+    for col in list(df.select_dtypes(include=['object']).columns):
         col_data = df[col].dropna()
         if len(col_data) == 0:
             continue
-
         if _looks_like_salary_range(df[col]):
             parsed = _parse_salary_range(df[col])
             if parsed.notna().sum() / max(len(df), 1) > 0.5:
                 df[col] = parsed
                 logger.info("Converted salary range '%s' to numeric midpoints", col)
                 continue
-
-        parsed_cur, ok = _try_parse_currency(df[col])
+        (parsed_cur, ok) = _try_parse_currency(df[col])
         if ok and parsed_cur is not None:
             df[col] = parsed_cur
             logger.info("Converted currency column '%s' to float", col)
             continue
-
-        parsed_pct, ok = _try_parse_percentage(df[col])
+        (parsed_pct, ok) = _try_parse_percentage(df[col])
         if ok and parsed_pct is not None:
             df[col] = parsed_pct
             logger.info("Converted percentage column '%s' to float ratio", col)
             continue
-
-        parsed_bool, ok = _try_parse_boolean(df[col])
+        (parsed_bool, ok) = _try_parse_boolean(df[col])
         if ok and parsed_bool is not None:
             df[col] = parsed_bool
             logger.info("Converted boolean-text column '%s' to 0/1 float", col)
             continue
-
-        parsed_mix, ok = _try_parse_mixed_numeric(df[col])
+        (parsed_mix, ok) = _try_parse_mixed_numeric(df[col])
         if ok and parsed_mix is not None:
             df[col] = parsed_mix
             logger.info("Coerced mixed-type column '%s' to numeric (noise → NaN)", col)
             continue
-
     for col in df.select_dtypes(include=[np.number]).columns:
         missing_count = int(df[col].isna().sum())
         null_ratio = missing_count / max(len(df), 1)
@@ -236,15 +199,10 @@ def clean_dataframe(df: pd.DataFrame) -> tuple[pd.DataFrame, list]:
             median_val = df[col].median()
             df[col] = df[col].fillna(median_val)
             logger.info("Filled %d missing in '%s' with median=%s", missing_count, col, median_val)
-            logs.append({
-                "column": col, "strategy": "median",
-                "fill_value": float(median_val) if pd.notna(median_val) else None,
-                "count": missing_count,
-            })
+            logs.append({'column': col, 'strategy': 'median', 'fill_value': float(median_val) if pd.notna(median_val) else None, 'count': missing_count})
         elif missing_count > 0:
             logger.info("Skipping imputation of '%s' (%.0f%% null — too sparse)", col, null_ratio * 100)
-
-    for col in df.select_dtypes(include=["object"]).columns:
+    for col in df.select_dtypes(include=['object']).columns:
         missing_count = int(df[col].isna().sum())
         null_ratio = missing_count / max(len(df), 1)
         if missing_count > 0 and null_ratio < IMPUTE_MAX_NULL_RATIO:
@@ -253,101 +211,58 @@ def clean_dataframe(df: pd.DataFrame) -> tuple[pd.DataFrame, list]:
                 fill = mode_val.iloc[0]
                 df[col] = df[col].fillna(fill)
                 logger.info("Filled %d missing in '%s' with mode='%s'", missing_count, col, fill)
-                logs.append({
-                    "column": col, "strategy": "mode",
-                    "fill_value": str(fill), "count": missing_count,
-                })
+                logs.append({'column': col, 'strategy': 'mode', 'fill_value': str(fill), 'count': missing_count})
         elif missing_count > 0:
             logger.info("Skipping imputation of '%s' (%.0f%% null — too sparse)", col, null_ratio * 100)
-
-    return df.reset_index(drop=True), logs
-
+    return (df.reset_index(drop=True), logs)
 
 def detect_column_types(df: pd.DataFrame) -> dict[str, str]:
     type_map: dict[str, str] = {}
     for col in df.columns:
         if pd.api.types.is_bool_dtype(df[col]):
-            type_map[col] = "boolean"
+            type_map[col] = 'boolean'
         elif pd.api.types.is_numeric_dtype(df[col]):
-            type_map[col] = "numeric"
+            type_map[col] = 'numeric'
         elif pd.api.types.is_datetime64_any_dtype(df[col]):
-            type_map[col] = "datetime"
+            type_map[col] = 'datetime'
         else:
             sample = df[col].dropna().head(50)
             if sample.empty:
-                type_map[col] = "categorical"
+                type_map[col] = 'categorical'
                 continue
-            time_pat = sample.astype(str).str.match(r"^\d{1,2}:\d{2}(:\d{2})?$", na=False)
+            time_pat = sample.astype(str).str.match('^\\d{1,2}:\\d{2}(:\\d{2})?$', na=False)
             if time_pat.sum() > len(sample) * 0.7:
-                type_map[col] = "duration"
+                type_map[col] = 'duration'
                 continue
             try:
-                pd.to_datetime(sample, format="mixed")
-                type_map[col] = "datetime"
+                pd.to_datetime(sample, format='mixed')
+                type_map[col] = 'datetime'
             except (ValueError, TypeError):
-                type_map[col] = "categorical"
+                type_map[col] = 'categorical'
     return type_map
+_SLIM_NUMERIC_KEYS = ('mean', 'median', 'std', 'min', 'max', 'skewness', 'count')
 
+def truncate_stats_for_llm(stats: dict, max_numeric_cols: int=10, max_correlations: int=5, max_categorical_cols: int=15) -> dict:
+    truncated = {'row_count': stats.get('row_count'), 'column_count': stats.get('column_count'), 'data_quality': stats.get('data_quality'), 'dataset_profile': stats.get('dataset_profile'), 'imputations': stats.get('imputations'), 'excluded_columns': stats.get('excluded_columns')}
+    numeric = stats.get('numeric_columns', {})
 
-_SLIM_NUMERIC_KEYS = ("mean", "median", "std", "min", "max", "skewness", "count")
-
-
-def truncate_stats_for_llm(
-    stats: dict,
-    max_numeric_cols: int = 10,
-    max_correlations: int = 5,
-    max_categorical_cols: int = 15,
-) -> dict:
-    truncated = {
-        "row_count": stats.get("row_count"),
-        "column_count": stats.get("column_count"),
-        "data_quality": stats.get("data_quality"),
-        "dataset_profile": stats.get("dataset_profile"),
-        "imputations": stats.get("imputations"),
-        "excluded_columns": stats.get("excluded_columns"),
-    }
-
-    numeric = stats.get("numeric_columns", {})
-    
     def _safe(v):
         try:
             val = float(v)
             return val if pd.notna(val) else 0.0
         except (TypeError, ValueError):
             return 0.0
-
-    items = sorted(
-        numeric.items(),
-        key=lambda kv: abs(_safe(kv[1].get("variance"))) * (1 + min(abs(_safe(kv[1].get("skewness"))), 3.0)),
-        reverse=True,
-    )
+    items = sorted(numeric.items(), key=lambda kv: abs(_safe(kv[1].get('variance'))) * (1 + min(abs(_safe(kv[1].get('skewness'))), 3.0)), reverse=True)
     selected = items[:max_numeric_cols]
-    truncated["numeric_columns"] = {
-        col: {k: v for k, v in data.items() if k in _SLIM_NUMERIC_KEYS}
-        for col, data in selected
-    }
+    truncated['numeric_columns'] = {col: {k: v for (k, v) in data.items() if k in _SLIM_NUMERIC_KEYS} for (col, data) in selected}
     if len(numeric) > max_numeric_cols:
-        truncated["numeric_columns_note"] = (
-            f"Showing top {max_numeric_cols} of {len(numeric)} by variance"
-        )
-
-    truncated["strong_correlations"] = stats.get("strong_correlations", [])[:max_correlations]
-    categorical = stats.get("categorical_columns", {})
-    truncated["categorical_columns"] = {
-        col: {
-            "unique_values": v.get("unique_values"),
-            "most_common": v.get("most_common"),
-        }
-        for col, v in list(categorical.items())[:max_categorical_cols]
-    }
-
-    outliers = stats.get("outliers", {})
-    truncated["outlier_counts"] = {
-        col: v.get("count", 0) for col, v in outliers.items()
-    }
-
+        truncated['numeric_columns_note'] = f'Showing top {max_numeric_cols} of {len(numeric)} by variance'
+    truncated['strong_correlations'] = stats.get('strong_correlations', [])[:max_correlations]
+    categorical = stats.get('categorical_columns', {})
+    truncated['categorical_columns'] = {col: {'unique_values': v.get('unique_values'), 'most_common': v.get('most_common')} for (col, v) in list(categorical.items())[:max_categorical_cols]}
+    outliers = stats.get('outliers', {})
+    truncated['outlier_counts'] = {col: v.get('count', 0) for (col, v) in outliers.items()}
     return truncated
-
 
 def json_default(obj: Any) -> Any:
     if isinstance(obj, np.ndarray):
@@ -364,22 +279,21 @@ def json_default(obj: Any) -> Any:
     if isinstance(obj, set):
         return list(obj)
     if isinstance(obj, bytes):
-        return obj.decode("utf-8", errors="replace")
+        return obj.decode('utf-8', errors='replace')
     if isinstance(obj, complex):
         return abs(obj)
     return str(obj)
 
-
 def sanitize_for_json(value: Any) -> Any:
     if isinstance(value, dict):
-        return {str(k): sanitize_for_json(v) for k, v in value.items()}
+        return {str(k): sanitize_for_json(v) for (k, v) in value.items()}
     if isinstance(value, list):
         return [sanitize_for_json(v) for v in value]
     if isinstance(value, tuple):
         return [sanitize_for_json(v) for v in value]
     if isinstance(value, (pd.Timestamp, datetime, date)):
         return value.isoformat()
-    if isinstance(value, float) and (value != value):
+    if isinstance(value, float) and value != value:
         return None
     if isinstance(value, float):
         return value if math.isfinite(value) else None
@@ -391,47 +305,15 @@ def sanitize_for_json(value: Any) -> Any:
     return value
 
 def build_chat_context_pack(stats: dict, insights: dict) -> dict:
-    numeric = stats.get("numeric_columns", {})
-    categorical = stats.get("categorical_columns", {})
-    profile = stats.get("dataset_profile", {})
-    quality = stats.get("data_quality", {})
-    outliers = stats.get("outliers", {})
-    correlations = stats.get("strong_correlations", [])[:8]
-
+    numeric = stats.get('numeric_columns', {})
+    categorical = stats.get('categorical_columns', {})
+    profile = stats.get('dataset_profile', {})
+    quality = stats.get('data_quality', {})
+    outliers = stats.get('outliers', {})
+    correlations = stats.get('strong_correlations', [])[:8]
     col_narratives: dict = {}
-
-    for col, data in list(numeric.items())[:20]:
-        col_narratives[col] = {
-            "type": "numeric",
-            "mean": round(data.get("mean", 0), 3),
-            "median": round(data.get("median", 0), 3),
-            "min": round(data.get("min", 0), 3),
-            "max": round(data.get("max", 0), 3),
-            "std": round(data.get("std", 0), 3),
-            "skew": round(data.get("skewness", 0), 2),
-            "outlier_count": outliers.get(col, {}).get("count", 0),
-        }
-
-    for col, data in list(categorical.items())[:15]:
-        col_narratives[col] = {
-            "type": "categorical",
-            "unique_count": data.get("unique_values", 0),
-            "top_value": data.get("most_common"),
-            "top_value_pct": round(
-                data.get("most_common_count", 0)
-                / max(stats.get("row_count", 1), 1) * 100, 1
-            ),
-            "top_5": data.get("top_5_values", {}),
-            "least_common": data.get("least_common"),
-        }
-
-    return {
-        "profile": profile,
-        "quality": quality,
-        "row_count": stats.get("row_count"),
-        "column_count": stats.get("column_count"),
-        "columns": col_narratives,
-        "correlations": correlations,
-        "key_findings": insights.get("findings", [])[:5],
-        "headline": insights.get("headline", ""),
-    }
+    for (col, data) in list(numeric.items())[:20]:
+        col_narratives[col] = {'type': 'numeric', 'mean': round(data.get('mean', 0), 3), 'median': round(data.get('median', 0), 3), 'min': round(data.get('min', 0), 3), 'max': round(data.get('max', 0), 3), 'std': round(data.get('std', 0), 3), 'skew': round(data.get('skewness', 0), 2), 'outlier_count': outliers.get(col, {}).get('count', 0)}
+    for (col, data) in list(categorical.items())[:15]:
+        col_narratives[col] = {'type': 'categorical', 'unique_count': data.get('unique_values', 0), 'top_value': data.get('most_common'), 'top_value_pct': round(data.get('most_common_count', 0) / max(stats.get('row_count', 1), 1) * 100, 1), 'top_5': data.get('top_5_values', {}), 'least_common': data.get('least_common')}
+    return {'profile': profile, 'quality': quality, 'row_count': stats.get('row_count'), 'column_count': stats.get('column_count'), 'columns': col_narratives, 'correlations': correlations, 'key_findings': insights.get('findings', [])[:5], 'headline': insights.get('headline', '')}

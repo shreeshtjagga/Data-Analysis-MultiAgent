@@ -5,14 +5,12 @@ import Login from "./pages/Login.jsx";
 import DataPulse from "./pages/DataPulseDashboard.jsx";
 import ErrorBoundary from "./components/ErrorBoundary.jsx";
 import AuthCallback from "./pages/AuthCallback.jsx";
-
 export default function App() {
   const [authState, setAuthState] = useState({
     checked: false,
     user: null,
   });
   const navigate = useNavigate();
-
   useEffect(() => {
     const token = getToken();
     if (!token) {
@@ -26,19 +24,16 @@ export default function App() {
         setAuthState({ checked: true, user: null });
       });
   }, []);
-
   const handleLogin = (user, token) => {
     setToken(token);
     setAuthState({ checked: true, user });
-    navigate("/");
+    navigate("/", { replace: true });
   };
-
   const handleLogout = () => {
     clearToken();
     setAuthState({ checked: true, user: null });
     navigate("/login");
   };
-
   if (!authState.checked) {
     return (
       <div
@@ -59,7 +54,6 @@ export default function App() {
       </div>
     );
   }
-
   return (
     <Routes>
       <Route
@@ -93,9 +87,9 @@ export default function App() {
       <Route
         path="/reset-password"
         element={
-          authState.user
-            ? <Navigate to="/" replace />
-            : <Login onLogin={handleLogin} />
+          /* Always accessible — Supabase recovery sessions count as logged-in,
+             so redirecting away would prevent the user from resetting their password. */
+          <Login onLogin={handleLogin} />
         }
       />
       <Route
