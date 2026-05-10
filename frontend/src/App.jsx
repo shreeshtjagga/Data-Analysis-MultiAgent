@@ -1,9 +1,8 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, Component } from "react";
 import { Navigate, Route, Routes, useNavigate } from "react-router-dom";
 import { getToken, setToken, clearToken, apiMe } from "./api.js";
 import Login from "./pages/Login.jsx";
 import DataPulse from "./pages/DataPulseDashboard.jsx";
-import ErrorBoundary from "./components/ErrorBoundary.jsx";
 import AuthCallback from "./pages/AuthCallback.jsx";
 export default function App() {
   const [authState, setAuthState] = useState({
@@ -87,8 +86,7 @@ export default function App() {
       <Route
         path="/reset-password"
         element={
-          /* Always accessible — Supabase recovery sessions count as logged-in,
-             so redirecting away would prevent the user from resetting their password. */
+          
           <Login onLogin={handleLogin} />
         }
       />
@@ -107,4 +105,56 @@ export default function App() {
       <Route path="*" element={<Navigate to="/" replace />} />
     </Routes>
   );
+}
+
+class ErrorBoundary extends Component {
+  constructor(props) {
+    super(props);
+    this.state = { hasError: false, message: "" };
+  }
+  static getDerivedStateFromError(error) {
+    return {
+      hasError: true,
+      message: error?.message || "Unexpected dashboard render error",
+    };
+  }
+  componentDidCatch(error, info) {
+    console.error("Dashboard render error:", error, info);
+  }
+  render() {
+    if (this.state.hasError) {
+      return (
+        <div
+          style={{
+            minHeight: "100vh",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            background: "var(--bg-deep)",
+            color: "var(--text-main)",
+            padding: "24px",
+          }}
+        >
+          <div
+            style={{
+              maxWidth: "720px",
+              width: "100%",
+              border: "1px solid rgba(239,68,68,0.35)",
+              background: "rgba(13, 18, 32, 0.75)",
+              borderRadius: "12px",
+              padding: "24px",
+            }}
+          >
+            <h3 style={{ marginTop: 0, marginBottom: "10px", color: "#fca5a5" }}>
+              Dashboard Render Error
+            </h3>
+            <p style={{ margin: 0, color: "var(--text-muted)" }}>
+              {this.state.message}
+            </p>
+          </div>
+        </div>
+      );
+    }
+    return this.props.children;
+  }
 }

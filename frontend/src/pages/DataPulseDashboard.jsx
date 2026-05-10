@@ -378,8 +378,8 @@ function renderMarkdown(text) {
       elements.push(<div key={ki++} style={{ height: '5px' }} />);
       return;
     }
-    // Bullet: • or - or *
-    const bulletMatch = line.match(/^[•\-\*]\s+(.*)$/);
+    
+    const bulletMatch = line.match(/^[•\-*]\s+(.*)$/);
     if (bulletMatch) {
       elements.push(
         <div key={ki++} style={{ display: 'flex', gap: '8px', alignItems: 'flex-start', marginTop: '3px' }}>
@@ -389,7 +389,7 @@ function renderMarkdown(text) {
       );
       return;
     }
-    // Numbered: 1. text
+    
     const numMatch = line.match(/^(\d+)\.\s+(.*)$/);
     if (numMatch) {
       elements.push(
@@ -400,7 +400,7 @@ function renderMarkdown(text) {
       );
       return;
     }
-    // Plain line (may contain bold)
+    
     elements.push(
       <p key={ki++} style={{ margin: 0, marginTop: i === 0 ? 0 : '4px', lineHeight: 1.55 }}>
         {_parseBoldInline(line)}
@@ -516,15 +516,14 @@ const ChatBubble = memo(({ m, PlotComponent, result, stopPageZoomOnCtrlWheel, on
                  parsedJson = JSON.parse(maybeJson);
              }
           } catch (e) {
-             // Fallback
+             parsedJson = null;
           }
 
           let hasChart = false;
           let inlineChartJSX = null;
           const CHART_TAG_RE = /\[CHART:\s*([^\]]+)\]/g;
           let tagM;
-          
-          // Generate inline chart if a tag is found anywhere in the text
+
           while ((tagM = CHART_TAG_RE.exec(cleanText)) !== null) {
             hasChart = true;
             const key = tagM[1].trim();
@@ -606,7 +605,7 @@ const ChatBubble = memo(({ m, PlotComponent, result, stopPageZoomOnCtrlWheel, on
                   )}
                 </div>
               );
-              break; // Only render one inline chart for now to match old behavior
+              break; 
             }
           }
 
@@ -646,7 +645,6 @@ const ChatBubble = memo(({ m, PlotComponent, result, stopPageZoomOnCtrlWheel, on
             );
           }
 
-          // Fallback Markdown + Chart flow if JSON parsing failed entirely
           const finalCleanText = cleanText.replace(/\[CHART:\s*[^\]]+\]/g, '').replace(/[ \t]{2,}/g, ' ').trim();
           return (
             <>
@@ -1307,26 +1305,21 @@ export default function DataPulse({ user, onLogout }) {
       setHistorySelectLoading(null);
     }
   };
-  const openExportModal = useCallback(() => {
-    if (!result) return;
-    const allKeys = Object.keys(result.charts || {});
-    setSelectedExportKeys(allKeys);
-    setShowExportModal(true);
-  }, [result]);
+
   const exportPDF = useCallback(async (keysToExport) => {
     if (!result) return;
     setShowExportModal(false);
     try {
       const { default: Plotly } = await import("plotly.js-dist-min");
       const doc = new jsPDF("l", "mm", "a4");
-      const pageWidth = doc.internal.pageSize.getWidth();  // ~297mm
-      const pageHeight = doc.internal.pageSize.getHeight(); // ~210mm
+      const pageWidth = doc.internal.pageSize.getWidth();  
+      const pageHeight = doc.internal.pageSize.getHeight(); 
       doc.setFillColor(236, 244, 243);
       doc.rect(0, 0, pageWidth, pageHeight, 'F');
       const margin = 12;
-      doc.setFont("times", "bold"); // Serif font for dashboard title
+      doc.setFont("times", "bold"); 
       doc.setFontSize(22);
-      doc.setTextColor(34, 49, 63); // Dark slate
+      doc.setTextColor(34, 49, 63); 
       const displayTitle = fileName ? `${fileName.replace(/\.[^/.]+$/, "")} Dashboard` : "Analytics Dashboard";
       doc.text(truncateLabel(displayTitle, 45), margin, 20);
       doc.setFont("helvetica", "bolditalic");
@@ -1339,7 +1332,7 @@ export default function DataPulse({ user, onLogout }) {
         headlineText = typeof insights.headline === 'object' ? String(insights.headline.text || "") : String(insights.headline);
       }
       doc.setFont("helvetica", "bold");
-      doc.setFontSize(11); // Bold explicit heading
+      doc.setFontSize(11); 
       doc.setTextColor(30, 40, 40);
       doc.text("Executive Summary", margin, 26);
       doc.setFont("helvetica", "normal");
@@ -1637,6 +1630,7 @@ export default function DataPulse({ user, onLogout }) {
         <div className="topbar-actions">
             {phase !== "analyzing" && <button onClick={toggleHistory} className="topbar-btn">History</button>}
             {result && <button onClick={() => setShowExportModal(true)} className="topbar-btn">Download</button>}
+            <button onClick={onLogout} className="topbar-btn" style={{ marginLeft: '12px', background: 'rgba(239, 68, 68, 0.1)', color: 'var(--error)' }}>Logout</button>
           </div>
           <div style={{ fontSize: '14px', color: 'var(--text-muted)' }}>{user?.email}</div>
       </div>
@@ -2208,19 +2202,19 @@ export default function DataPulse({ user, onLogout }) {
       {}
       {showExportModal && (
         <div style={{ position: 'fixed', inset: 0, zIndex: 2000, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-          {/* Backdrop */}
+          {}
           <div
             onClick={() => setShowExportModal(false)}
             style={{ position: 'absolute', inset: 0, background: 'rgba(0,0,0,0.65)', backdropFilter: 'blur(8px)' }}
           />
-          {/* Modal */}
+          {}
           <div className="animate-fade-in" style={{
             position: 'relative', zIndex: 1, width: 'min(560px, 94vw)',
             background: 'var(--bg-card)', border: '1px solid rgba(99,102,241,0.25)',
             borderRadius: '20px', padding: '32px', display: 'flex', flexDirection: 'column', gap: '20px',
             boxShadow: '0 24px 60px rgba(0,0,0,0.6), 0 0 0 1px rgba(99,102,241,0.1)',
           }}>
-            {/* Header */}
+            {}
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
               <div>
                 <h2 style={{ fontSize: '18px', fontWeight: 700, margin: 0, color: 'var(--text-main)' }}>Export Dashboard PDF</h2>
@@ -2230,7 +2224,7 @@ export default function DataPulse({ user, onLogout }) {
               </div>
               <button onClick={() => setShowExportModal(false)} style={{ background: 'none', border: 'none', color: 'var(--text-muted)', cursor: 'pointer', fontSize: '20px', lineHeight: 1, padding: '2px 6px' }}>✕</button>
             </div>
-            {/* Select All / None */}
+            {}
             <div style={{ display: 'flex', gap: '10px' }}>
               <button
                 onClick={() => setSelectedExportKeys(Object.keys(result?.charts || {}))}
@@ -2249,7 +2243,7 @@ export default function DataPulse({ user, onLogout }) {
                 }}
               >Select None</button>
             </div>
-            {/* Chart list */}
+            {}
             <div style={{
               display: 'flex', flexDirection: 'column', gap: '8px',
               maxHeight: '340px', overflowY: 'auto', paddingRight: '4px',
@@ -2297,7 +2291,7 @@ export default function DataPulse({ user, onLogout }) {
                 );
               })}
             </div>
-            {/* Footer actions */}
+            {}
             <div style={{ display: 'flex', gap: '12px', justifyContent: 'flex-end', paddingTop: '4px', borderTop: '1px solid var(--border-subtle)' }}>
               <button
                 onClick={() => setShowExportModal(false)}

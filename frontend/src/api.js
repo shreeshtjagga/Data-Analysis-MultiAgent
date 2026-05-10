@@ -1,3 +1,11 @@
+import { createClient } from '@supabase/supabase-js'
+const supabaseUrl = import.meta.env.VITE_SUPABASE_URL
+const supabaseAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY
+if (!supabaseUrl || !supabaseAnonKey) {
+  console.error('Missing Supabase URL or Anon Key in environment variables')
+}
+export const supabase = createClient(supabaseUrl, supabaseAnonKey)
+
 const BASE = "/api";
 let accessToken = null;
 export function setToken(token) {
@@ -24,6 +32,7 @@ async function refreshAccessToken() {
       return true;
     }
   } catch (err) {
+    return false;
   }
   return false;
 }
@@ -104,6 +113,7 @@ async function apiFetch(path, options = {}) {
           const body = await retryResp.json();
           detail = normalizeErrorDetail(body, detail);
         } catch (_) {
+          console.warn("Failed to parse error response", _);
         }
         throw new Error(detail);
       }
@@ -121,6 +131,7 @@ async function apiFetch(path, options = {}) {
       const body = await response.json();
       detail = normalizeErrorDetail(body, detail);
     } catch (_) {
+      console.warn("Failed to parse error response", _);
     }
     throw new Error(detail);
   }
@@ -185,7 +196,4 @@ export async function apiHistoryAnalysis(analysisId) {
 }
 export async function apiDeleteAnalysis(analysisId) {
   return apiFetch(`/history/${analysisId}`, { method: "DELETE" });
-}
-export async function apiHealth() {
-  return apiFetch("/health", { withAuth: false });
 }

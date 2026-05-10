@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { supabase } from "../supabaseClient";
+import { supabase } from "../api.js";
 import { apiSyncSession } from "../api";
 import ParticleBackground from "../components/ParticleBackground";
 
@@ -8,14 +8,14 @@ export default function AuthCallback({ onLogin }) {
   const navigate = useNavigate();
   const [error, setError] = useState("");
   const [isRecovery, setIsRecovery] = useState(false);
-  const handledRef = useRef(false); // prevent double-fire
+  const handledRef = useRef(false); 
 
   useEffect(() => {
     if (handledRef.current) return;
     handledRef.current = true;
 
     const handleCallback = async () => {
-      // Check for OAuth errors in query string
+      
       const params = new URLSearchParams(window.location.search);
       const urlError = params.get("error");
       const urlErrorDesc = params.get("error_description");
@@ -26,7 +26,6 @@ export default function AuthCallback({ onLogin }) {
         return;
       }
 
-      // Supabase may have already parsed the hash and established a session
       try {
         const {
           data: { session },
@@ -36,8 +35,7 @@ export default function AuthCallback({ onLogin }) {
         if (sessionError) throw sessionError;
 
         if (session) {
-          // Check for password recovery in BOTH hash (implicit flow) and
-          // query string (PKCE flow — Supabase v2 default)
+
           const inHash   = window.location.hash.includes("type=recovery");
           const inSearch = window.location.search.includes("type=recovery");
           if (inHash || inSearch) {
@@ -45,7 +43,7 @@ export default function AuthCallback({ onLogin }) {
             navigate("/reset-password", { replace: true });
             return;
           }
-          // Normal OAuth sign-in — sync with our backend
+          
           const data = await apiSyncSession(
             session.access_token,
             session.refresh_token
@@ -55,11 +53,10 @@ export default function AuthCallback({ onLogin }) {
           return;
         }
 
-        // No session yet — listen for the auth state change event
         const { data: listener } = supabase.auth.onAuthStateChange(
           async (event, newSession) => {
             if (event === "PASSWORD_RECOVERY") {
-              // Supabase recovery link — redirect to reset form; session is live
+              
               listener.subscription.unsubscribe();
               setIsRecovery(true);
               navigate("/reset-password", { replace: true });
@@ -84,7 +81,6 @@ export default function AuthCallback({ onLogin }) {
           }
         );
 
-        // Safety timeout — if nothing fires in 6 s, show error
         const timeout = setTimeout(() => {
           listener.subscription.unsubscribe();
           setError("Authentication timed out. No session received.");
@@ -101,8 +97,7 @@ export default function AuthCallback({ onLogin }) {
     };
 
     handleCallback();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [navigate, onLogin]);
 
   return (
     <div

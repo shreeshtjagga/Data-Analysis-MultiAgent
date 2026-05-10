@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 import { apiLogin, apiRegister, apiForgotPassword } from "../api.js";
 import ParticleBackground from "../components/ParticleBackground.jsx";
-import { supabase } from "../supabaseClient.js";
+import { supabase } from "../api.js";
 function PasswordInput({ id, placeholder, value, onChange, onKeyDown, disabled, autoComplete }) {
   const [show, setShow] = useState(false);
   return (
@@ -223,7 +223,6 @@ function ResetPasswordForm({ onBackToLogin }) {
   const [success, setSuccess] = useState("");
   const [countdown, setCountdown] = useState(null);
 
-  // Start redirect countdown after success
   useEffect(() => {
     if (countdown === null) return;
     if (countdown <= 0) {
@@ -251,12 +250,10 @@ function ResetPasswordForm({ onBackToLogin }) {
     }
     setLoading(true);
     try {
-      // Supabase already has an active recovery session in the browser after
-      // the user clicked the reset link — updateUser() will use it directly.
+
       const { error: sbError } = await supabase.auth.updateUser({ password });
       if (sbError) throw sbError;
 
-      // Sign out the recovery session so user logs in fresh
       await supabase.auth.signOut();
 
       setSuccess("Password updated! Redirecting to login in 3 seconds…");
