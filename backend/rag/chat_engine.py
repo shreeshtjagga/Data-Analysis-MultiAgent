@@ -15,17 +15,18 @@ def _data_system_prompt(file_name: str, chart_keys: list[str]) -> str:
         f'You are Alex, a sharp senior data analyst working with the dataset "{file_name}".\n',
         'You talk like a real analyst — confident, precise, and direct.\n\n',
         '==== ANSWER FORMAT (MANDATORY) ====\n',
-        'Structure EVERY answer exactly like this:\n\n',
-        '**[Direct answer — the key number or fact in one sentence]**\n\n',
-        '• [Supporting detail — what drives that number, with exact value]\n',
-        '• [Second key data point with exact value]\n',
-        '• [Insight — something they did not ask but should know]\n',
-        '• Recommendation: [only when data clearly supports an action]\n\n',
+        'Structure EVERY answer exactly like this in JSON format:\n\n',
+        '{\n',
+        '  "direct_answer": "The key number or fact in one clear sentence.",\n',
+        '  "proactive_insight": "Interestingly, I noticed... [Something they did not ask but should know based on the data]",\n',
+        '  "confidence": 98,\n',
+        '  "suggestion": "Should we look at the trend over time?"\n',
+        '}\n\n',
         'FORMAT RULES:\n',
-        '- Lead with the direct answer in one sentence, formatted as a bold line.\n',
-        '- Use bullet points (starting with •) only for supporting details, maximum 3 bullets.\n',
-        '- Each bullet must contain at least one specific number.\n',
-        '- When mentioning any number, metric, or percentage, wrap it in **bold**.\n\n',
+        '- Output MUST be valid JSON and nothing else.\n',
+        '- The `confidence` must be an integer 1-100 based on data completeness.\n',
+        '- When mentioning any number, metric, or percentage, wrap it in **bold**.\n',
+        '- Do not include [CHART] tags in the JSON, they will be handled separately.\n\n',
         '==== GROUNDING CONTRACT — MANDATORY ====\n',
         'You have a CONTEXT block with pre-computed facts and a PANDAS RESULT block\n',
         'with exact numbers from the real data. These are the ONLY facts you may use.\n',
@@ -230,6 +231,8 @@ def _extract_chart_facts(fig_data: Any, chart_key: str) -> str:
 
 def _sanitize_llm_output(text: str) -> str:
     import re as _re
+    if '{' in text and '}' in text:
+        return text.strip()
     text = _re.sub('[=]{3,}[^=\\n]*[=]{3,}', '', text)
     text = _re.sub('RULE \\d+\\s*\\([^)]*\\)[^.]*\\.', '', text)
     text = _re.sub('RULE \\d+:', '', text)
@@ -260,7 +263,7 @@ async def answer_question(question: str, file_hash: str, file_name: str, stats: 
                     exec_result = safe_execute(code, df)
                     if exec_result['error'] is None:
                         formatted = format_result(exec_result['result'])
-                        confirm_msg = [{'role': 'system', 'content': _data_system_prompt(file_name, chart_keys)}, {'role': 'system', 'content': f"The user is asking you to confirm a previous answer. You re-ran the query and got this result:\nPANDAS RESULT (re-verified):\n{formatted}\n\nPrevious answer was: {last_answer[:300]}\n\nConfirm the result confidently. Say 'Yes, confirmed — ' then restate the key number. Do NOT change the answer."}, {'role': 'user', 'content': question}]
+                        confirm_msg = [{'role': 'system', 'content': _data_system_prompt(file_name, chart_keys)}, {'role': 'system', 'content': f"The user is asking you to confirm a previous answer. You re-ran the query and got this result:\nPANDAS RESULT (re-verified):\n{formatted}\n\nPrevious answer was: {last_answer[:300]}\n\nConfirm the result confidently. In the `direct_answer` JSON field, say 'Yes, confirmed — ' then restate the key number. Do NOT change the answer, make sure to output the required JSON format."}, {'role': 'user', 'content': question}]
                         completion = await asyncio.to_thread(groq_client.chat.completions.create, model=SYNTHESIS_MODEL, messages=confirm_msg, temperature=0, max_tokens=300)
                         answer = _sanitize_llm_output((completion.choices[0].message.content or '').strip())
                         return {'answer': answer, 'data_queried': True, 'new_chart': None}
@@ -333,7 +336,7 @@ async def answer_question(question: str, file_hash: str, file_name: str, stats: 
     has_chunks = bool(chunks)
     has_query = data_result is not None
     if not has_chunks and (not has_query) and (not static_ctx.strip()):
-        messages.append({'role': 'system', 'content': "WARNING: No relevant data was found for this question. You MUST respond with: 'That's not in this dataset.' Then suggest what the user CAN ask about."})
+        messages.append({'role': 'system', 'content': "WARNING: No relevant data was found for this question. You MUST respond in the required JSON format with direct_answer: 'That is not in this dataset.' Then suggest what the user CAN ask about in the `suggestion` field."})
     try:
         temp = 0.05 if data_result is not None else 0.1
         completion = await asyncio.to_thread(groq_client.chat.completions.create, model=SYNTHESIS_MODEL, messages=messages, temperature=temp, max_tokens=700)

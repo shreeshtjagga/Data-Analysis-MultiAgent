@@ -388,8 +388,75 @@ p, body { font-size: var(--font-body); font-weight: 400; color: var(--text-muted
 /* Custom Scrollbar */
 ::-webkit-scrollbar { width: 6px; height: 6px; }
 ::-webkit-scrollbar-track { background: var(--bg-deep); }
-::-webkit-scrollbar-thumb { background: rgba(99,102,241,0.3); border-radius: 3px; }
-::-webkit-scrollbar-thumb:hover { background: rgba(99,102,241,0.6); }
+::-webkit-scrollbar-thumb { background: rgba(99,102,241,0.3); }
+::-webkit-scrollbar-thumb:hover {
+  background: var(--primary-500);
+}
+
+/* =========================================================================
+   UX POLISH & MICRO-INTERACTIONS (Data Story & Dash)
+   ========================================================================= */
+
+/* Chart Card Hover */
+.chart-card {
+  transition: transform 0.2s ease, border-color 0.2s ease, box-shadow 0.2s ease;
+}
+.chart-card:hover {
+  transform: scale(1.01) translateY(-2px);
+  border-color: rgba(99,102,241, 0.4);
+  box-shadow: 0 10px 30px rgba(99,102,241, 0.15);
+}
+
+/* Completeness Pulse (Static Highlight) */
+.completeness-pulse {
+  border-color: rgba(16, 185, 129, 0.8) !important;
+  box-shadow: 0 0 15px rgba(16, 185, 129, 0.2) !important;
+}
+
+/* AI Typing Pulse */
+.ai-typing-pulse {
+  display: inline-flex;
+  gap: 4px;
+  align-items: center;
+}
+.ai-typing-pulse span {
+  width: 6px;
+  height: 6px;
+  background-color: var(--primary-500);
+  border-radius: 50%;
+  animation: typing-dot 1.4s infinite ease-in-out both;
+}
+.ai-typing-pulse span:nth-child(1) { animation-delay: -0.32s; }
+.ai-typing-pulse span:nth-child(2) { animation-delay: -0.16s; }
+@keyframes typing-dot {
+  0%, 80%, 100% { transform: scale(0); opacity: 0.4; }
+  40% { transform: scale(1); opacity: 1; }
+}
+
+/* Storytelling Pull Quote */
+.pull-quote {
+  font-size: 22px;
+  line-height: 1.5;
+  color: #fff;
+  font-family: 'Syne', sans-serif;
+  font-weight: 700;
+  border-left: 4px solid var(--primary-500);
+  padding-left: 20px;
+  margin-bottom: 24px;
+  background: linear-gradient(90deg, rgba(99,102,241,0.1) 0%, transparent 100%);
+  padding-top: 12px;
+  padding-bottom: 12px;
+  border-radius: 0 12px 12px 0;
+}
+
+/* Tab Fade In */
+.tab-content-fade-in {
+  animation: fade-in-up 0.4s ease-out forwards;
+}
+@keyframes fade-in-up {
+  0% { opacity: 0; transform: translateY(10px); }
+  100% { opacity: 1; transform: translateY(0); }
+}
 
 /* =========================================================================
    CHART FLIP CARD
@@ -777,3 +844,389 @@ p, body { font-size: var(--font-body); font-weight: 400; color: var(--text-muted
   cursor: grabbing !important;
 }
 
+/* =========================================================================
+   UI FIXES WEEK 1 & 2 + 3
+   ========================================================================= */
+
+.chart-footer {
+  font-size: 9px;
+  letter-spacing: 2px;
+  color: #1e2d45;
+  text-align: right;
+  padding: 8px 14px;
+  border-top: 1px solid #1e2d45;
+  margin-top: auto;
+}
+
+.charts-grid {
+  display: grid;
+  gap: 16px;
+  padding: 20px;
+}
+
+.chart-card {
+}
+
+.tabs-nav, .tab-nav {
+  display: flex;
+  border-bottom: 1px solid var(--border-subtle);
+  gap: 16px;
+  padding-bottom: 12px;
+}
+
+.tab-nav .tab, .tabs-nav .tab {
+  background: none;
+  border: none;
+  color: var(--text-muted);
+  font-weight: 500;
+  font-size: 14px;
+  cursor: pointer;
+  padding-bottom: 12px;
+  margin-bottom: -13px;
+  text-transform: capitalize;
+  letter-spacing: 0.05em;
+  transition: all 0.2s;
+}
+
+.tab-nav .tab.active, .tabs-nav .tab.active {
+  color: var(--text-main);
+  font-weight: 600;
+  border-bottom: 2px solid var(--primary-500);
+}
+
+.topbar-actions {
+  display: flex;
+  gap: 16px;
+}
+
+.topbar-btn {
+  background: none;
+  border: 1px solid var(--border-subtle);
+  border-radius: 6px;
+  padding: 6px 12px;
+  color: var(--text-main);
+  cursor: pointer;
+  font-weight: 600;
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  transition: all 0.2s;
+}
+
+.topbar-btn:hover {
+  background: rgba(99,102,241,0.08);
+  border-color: var(--primary-500);
+}
+
+.ai-message strong {
+  color: #e8edf5;
+  font-weight: 600;
+}
+
+.ai-message .stat-number {
+  font-family: 'DM Mono', monospace;
+  color: #00d4a8;
+  font-size: 15px;
+  font-weight: 700;
+}
+
+.kpi-card {
+  padding: 16px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 12px;
+  background: var(--bg-input);
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+}
+
+.kpi-label {
+  font-size: 11px;
+  color: var(--text-muted);
+  display: block;
+  margin-bottom: 4px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--primary-500);
+  margin-bottom: 8px;
+  margin-top: 20px;
+}
+
+.chart-back-description {
+  font-size: 15px;
+  color: #e2e8f0;
+  line-height: 1.65;
+}
+
+.chart-back-insight-item {
+  display: flex;
+  gap: 12px;
+  align-items: flex-start;
+  font-size: 14.5px;
+  color: var(--text-muted);
+  line-height: 1.6;
+  margin-bottom: 10px;
+}
+
+.chart-back-insight-dot {
+  width: 6px;
+  height: 6px;
+  min-width: 6px;
+  border-radius: 50%;
+  background: var(--primary-500);
+  box-shadow: 0 0 8px rgba(99, 102, 241, 0.7);
+  margin-top: 5px;
+}
+
+.chart-back-divider {
+  width: 100%;
+  height: 1px;
+  background: linear-gradient(90deg, transparent, rgba(99,102,241,0.25), transparent);
+  margin: 14px 0 0;
+}
+
+@keyframes flipIn {
+  from { opacity: 0; transform: scale(0.97); }
+  to   { opacity: 1; transform: scale(1); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .chart-flip-inner {
+    transition: none;
+  }
+
+  .chart-info-btn,
+  .chart-focus-btn,
+  .chart-action-btn {
+    transition: none;
+  }
+}
+
+/* =========================================================================
+   PLOTLY CURSOR OVERRIDE
+   Default cursor normally; mode-aware cursor only in spotlight
+   ========================================================================= */
+
+/* Force default cursor on ALL Plotly elements when NOT spotlighted */
+.chart-flip-wrapper:not(.chart-spotlighted) .js-plotly-plot .plotly,
+.chart-flip-wrapper:not(.chart-spotlighted) .js-plotly-plot .plotly svg,
+.chart-flip-wrapper:not(.chart-spotlighted) .js-plotly-plot .plotly .cursor-crosshair,
+.chart-flip-wrapper:not(.chart-spotlighted) .js-plotly-plot .plotly .cursor-move,
+.chart-flip-wrapper:not(.chart-spotlighted) .js-plotly-plot .plotly .cursor-pointer,
+.chart-flip-wrapper:not(.chart-spotlighted) .js-plotly-plot g.cursor-crosshair,
+.chart-flip-wrapper:not(.chart-spotlighted) .js-plotly-plot g.cursor-move,
+.chart-flip-wrapper:not(.chart-spotlighted) .js-plotly-plot rect {
+  cursor: default !important;
+}
+
+/* Spotlight + zoom mode → crosshair (+) to indicate drag-to-zoom */
+.chart-flip-wrapper.chart-spotlighted[data-mode="zoom"] .js-plotly-plot .plotly svg,
+.chart-flip-wrapper.chart-spotlighted[data-mode="zoom"] .js-plotly-plot g.cursor-crosshair,
+.chart-flip-wrapper.chart-spotlighted[data-mode="zoom"] .js-plotly-plot rect {
+  cursor: crosshair !important;
+}
+
+/* Spotlight + pan mode → grab hand to indicate dragging/panning */
+.chart-flip-wrapper.chart-spotlighted[data-mode="pan"] .js-plotly-plot .plotly svg,
+.chart-flip-wrapper.chart-spotlighted[data-mode="pan"] .js-plotly-plot g.cursor-crosshair,
+.chart-flip-wrapper.chart-spotlighted[data-mode="pan"] .js-plotly-plot g.cursor-move,
+.chart-flip-wrapper.chart-spotlighted[data-mode="pan"] .js-plotly-plot rect {
+  cursor: grab !important;
+}
+
+/* While actively dragging in pan mode, switch to grabbing */
+.chart-flip-wrapper.chart-spotlighted[data-mode="pan"] .js-plotly-plot g.cursor-move {
+  cursor: grabbing !important;
+}
+
+/* =========================================================================
+   UI FIXES WEEK 1 & 2 + 3
+   ========================================================================= */
+
+.chart-footer {
+  font-size: 9px;
+  letter-spacing: 2px;
+  color: #1e2d45;
+  text-align: right;
+  padding: 8px 14px;
+  border-top: 1px solid #1e2d45;
+  margin-top: auto;
+}
+
+.charts-grid {
+  display: grid;
+  gap: 16px;
+  padding: 20px;
+}
+
+.chart-card {
+}
+
+.tabs-nav, .tab-nav {
+  display: flex;
+  border-bottom: 1px solid var(--border-subtle);
+  gap: 16px;
+  padding-bottom: 12px;
+}
+
+.tab-nav .tab, .tabs-nav .tab {
+  background: none;
+  border: none;
+  color: var(--text-muted);
+  font-weight: 500;
+  font-size: 14px;
+  cursor: pointer;
+  padding-bottom: 12px;
+  margin-bottom: -13px;
+  text-transform: capitalize;
+  letter-spacing: 0.05em;
+  transition: all 0.2s;
+}
+
+.tab-nav .tab.active, .tabs-nav .tab.active {
+  color: var(--text-main);
+  font-weight: 600;
+  border-bottom: 2px solid var(--primary-500);
+}
+
+.topbar-actions {
+  display: flex;
+  gap: 16px;
+}
+
+.topbar-btn {
+  background: none;
+  border: 1px solid var(--border-subtle);
+  border-radius: 6px;
+  padding: 6px 12px;
+  color: var(--text-main);
+  cursor: pointer;
+  font-weight: 600;
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  transition: all 0.2s;
+}
+
+.topbar-btn:hover {
+  background: rgba(99,102,241,0.08);
+  border-color: var(--primary-500);
+}
+
+.ai-message strong {
+  color: #e8edf5;
+  font-weight: 600;
+}
+
+.ai-message .stat-number {
+  font-family: 'DM Mono', monospace;
+  color: #00d4a8;
+  font-size: 15px;
+  font-weight: 700;
+}
+
+.kpi-card {
+  padding: 16px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 12px;
+  background: var(--bg-input);
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+}
+
+.kpi-label {
+  font-size: 11px;
+  color: var(--text-muted);
+  display: block;
+  margin-bottom: 4px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  font-weight: 600;
+}
+
+.kpi-value {
+  font-size: 24px;
+  font-family: 'Inter', sans-serif;
+  font-weight: 800;
+  color: var(--text-main);
+  text-shadow: 0 0 10px rgba(255,255,255,0.1);
+  line-height: 1.2;
+}
+
+/* =========================================================================
+   UI/UX 9.5+ Upgrades
+   ========================================================================= */
+
+/* Chart card hover */
+.chart-card {
+  transition: transform 0.2s ease, 
+              border-color 0.2s ease,
+              box-shadow 0.2s ease;
+}
+.chart-card:hover {
+  transform: translateY(-2px);
+  border-color: #2a3f5f;
+  box-shadow: 0 8px 32px rgba(0,0,0,0.3);
+}
+
+/* Tab content fade */
+.tab-content {
+  animation: fadeInTab 0.25s ease forwards;
+}
+@keyframes fadeInTab {
+  from { opacity: 0; transform: translateY(6px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+/* AI Typing Pulse */
+.typing-dot {
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background-color: var(--primary-500);
+  animation: typingPulse 1.4s infinite ease-in-out both;
+  margin: 0 2px;
+}
+.typing-dot:nth-child(1) { animation-delay: -0.32s; }
+.typing-dot:nth-child(2) { animation-delay: -0.16s; }
+.typing-dot:nth-child(3) { animation-delay: 0s; }
+
+@keyframes typingPulse {
+  0%, 80%, 100% { transform: scale(0); opacity: 0.4; }
+  40% { transform: scale(1); opacity: 1; }
+}
+
+/* 100% Completeness Pulse */
+.completeness-pulse {
+  position: relative;
+  isolation: isolate;
+}
+.completeness-pulse::after {
+  content: '';
+  position: absolute;
+  top: -6px; left: -6px; right: -6px; bottom: -6px;
+  border-radius: inherit;
+  border: 2px solid #10b981;
+  animation: completenessGlow 2s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+  pointer-events: none;
+  z-index: -1;
+}
+@keyframes completenessGlow {
+  0% { transform: scale(0.95); opacity: 0.8; }
+  100% { transform: scale(1.15); opacity: 0; }
+}
+
+/* Top Finding Pull-Quote */
+.pull-quote {
+  font-family: 'Syne', sans-serif;
+  font-size: 18px;
+  line-height: 1.5;
+  color: #e8edf5;
+  border-left: 4px solid var(--primary-500);
+  padding: 16px 20px;
+  margin-bottom: 24px;
+  background: linear-gradient(90deg, rgba(99,102,241,0.08) 0%, transparent 100%);
+  border-radius: 0 8px 8px 0;
+}

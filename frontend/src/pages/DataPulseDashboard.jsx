@@ -409,7 +409,7 @@ function renderMarkdown(text) {
   });
   return elements;
 }
-const ChatBubble = memo(({ m, PlotComponent, result, stopPageZoomOnCtrlWheel }) => {
+const ChatBubble = memo(({ m, PlotComponent, result, stopPageZoomOnCtrlWheel, onSuggestionClick }) => {
   const [expandedChartKey, setExpandedChartKey] = useState(null);
   return (
     <div
@@ -504,17 +504,29 @@ const ChatBubble = memo(({ m, PlotComponent, result, stopPageZoomOnCtrlWheel }) 
         }}
       >
         {(() => {
-          if (m.role !== 'ai' || !m.text.includes('[CHART:')) {
+          if (m.role !== 'ai') {
             return renderMarkdown(m.text);
           }
-          const cleanText = m.text
-            .replace(/\[CHART:\s*[^\]]+\]/g, '')
-            .replace(/[ \t]{2,}/g, ' ')
-            .trim();
+
+          let cleanText = m.text;
+          let parsedJson = null;
+          try {
+             let maybeJson = cleanText.replace(/```json/g, '').replace(/```/g, '').trim();
+             if (maybeJson.startsWith('{') && maybeJson.endsWith('}')) {
+                 parsedJson = JSON.parse(maybeJson);
+             }
+          } catch (e) {
+             // Fallback
+          }
+
+          let hasChart = false;
           let inlineChartJSX = null;
           const CHART_TAG_RE = /\[CHART:\s*([^\]]+)\]/g;
           let tagM;
-          while ((tagM = CHART_TAG_RE.exec(m.text)) !== null) {
+          
+          // Generate inline chart if a tag is found anywhere in the text
+          while ((tagM = CHART_TAG_RE.exec(cleanText)) !== null) {
+            hasChart = true;
             const key = tagM[1].trim();
             if (result?.charts?.[key]) {
               const figRaw = result.charts[key];
@@ -535,7 +547,7 @@ const ChatBubble = memo(({ m, PlotComponent, result, stopPageZoomOnCtrlWheel }) 
                     </div>
                     <button onClick={() => setExpandedChartKey(key)} className="topbar-btn" style={{ padding: '4px 10px', fontSize: '11px', background: 'rgba(99,102,241,0.1)' }}>Expand</button>
                   </div>
-                  <div style={{ height: '120px', pointerEvents: 'none', opacity: 0.8 }} onWheel={stopPageZoomOnCtrlWheel}>
+                  <div style={{ height: '240px', pointerEvents: 'none', opacity: 0.95 }} onWheel={stopPageZoomOnCtrlWheel}>
                     <PlotComponent
                       data={cData.map(t => ({ ...t, textfont: { color: '#FFFFFF' } }))}
                       layout={{
@@ -547,10 +559,8 @@ const ChatBubble = memo(({ m, PlotComponent, result, stopPageZoomOnCtrlWheel }) 
                         autosize: true,
                         width: undefined,
                         dragmode: false,
-                        height: 120,
-                        margin: { r: 5, t: 5, b: 5, l: 5 },
-                        xaxis: { visible: false },
-                        yaxis: { visible: false },
+                        height: 240,
+                        margin: { r: 15, t: 15, b: 35, l: 35 },
                         title: { text: '' },
                         showlegend: false,
                       }}
@@ -561,8 +571,8 @@ const ChatBubble = memo(({ m, PlotComponent, result, stopPageZoomOnCtrlWheel }) 
                   </div>
                   {expandedChartKey === key && (
                     <div style={{ position: 'fixed', inset: 0, zIndex: 9999, background: 'rgba(0,0,0,0.85)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '40px' }} onClick={() => setExpandedChartKey(null)}>
-                      <div style={{ background: 'var(--bg-main)', border: '1px solid var(--border-subtle)', borderRadius: '16px', width: '90%', maxWidth: '1000px', height: '80vh', display: 'flex', flexDirection: 'column', overflow: 'hidden' }} onClick={e => e.stopPropagation()}>
-                        <div style={{ padding: '16px 24px', borderBottom: '1px solid var(--border-subtle)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                      <div style={{ background: 'var(--bg-deep)', border: '1px solid var(--border-subtle)', borderRadius: '16px', width: '90%', maxWidth: '1000px', height: '80vh', display: 'flex', flexDirection: 'column', overflow: 'hidden', boxShadow: '0 20px 50px rgba(0,0,0,0.6)' }} onClick={e => e.stopPropagation()}>
+                        <div style={{ padding: '16px 24px', borderBottom: '1px solid var(--border-subtle)', display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: 'var(--bg-card)' }}>
                           <strong style={{ fontSize: '16px', color: 'var(--text-main)' }}>{cLayout.title?.text || key.replace(/_/g, ' ')}</strong>
                           <button onClick={() => setExpandedChartKey(null)} style={{ background: 'none', border: 'none', color: 'var(--text-muted)', fontSize: '24px', cursor: 'pointer' }}>×</button>
                         </div>
@@ -577,7 +587,7 @@ const ChatBubble = memo(({ m, PlotComponent, result, stopPageZoomOnCtrlWheel }) 
                               font: { color: '#FFFFFF', family: "'Inter', sans-serif" },
                               autosize: true,
                               width: undefined,
-                              dragmode: cLayout?.dragmode || 'zoom',
+                              dragmode: 'zoom',
                               hoverlabel: { bgcolor: 'rgba(8,12,24,0.98)', font: { color: '#F8FAFC', size: 12 }, bordercolor: 'rgba(99,102,241,0.85)' },
                               height: undefined,
                               margin: { r: 24, t: 40, b: 60, l: 60 },
@@ -586,7 +596,7 @@ const ChatBubble = memo(({ m, PlotComponent, result, stopPageZoomOnCtrlWheel }) 
                               title: { text: '' },
                               legend: { orientation: 'h', yanchor: 'top', y: -0.15, xanchor: 'center', x: 0.5, font: { size: 12, color: 'rgba(255,255,255,0.7)' } },
                             }}
-                            config={{ ...PLOTLY_CONFIG, displayModeBar: true }}
+                            config={{ ...PLOTLY_CONFIG, displayModeBar: false, scrollZoom: true, doubleClick: 'reset' }}
                             useResizeHandler
                             style={{ width: '100%', height: '100%' }}
                           />
@@ -596,12 +606,51 @@ const ChatBubble = memo(({ m, PlotComponent, result, stopPageZoomOnCtrlWheel }) 
                   )}
                 </div>
               );
-              break;
+              break; // Only render one inline chart for now to match old behavior
             }
           }
+
+          if (parsedJson) {
+            const finalAnswerText = String(parsedJson.direct_answer || '').replace(/\[CHART:\s*[^\]]+\]/g, '').trim();
+            
+            return (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+                {finalAnswerText && (
+                  <div style={{ fontSize: '15px', color: 'var(--text-main)', lineHeight: 1.6, fontWeight: 500 }}>
+                    {_parseBoldInline(finalAnswerText)}
+                  </div>
+                )}
+                {inlineChartJSX}
+                {parsedJson.proactive_insight && (
+                  <div style={{ padding: '12px', background: 'rgba(99,102,241,0.08)', borderRadius: '8px', borderLeft: '3px solid var(--primary-500)', fontSize: '14px', lineHeight: 1.5 }}>
+                    <span style={{ color: 'var(--primary-500)', fontWeight: 700, marginRight: '6px' }}>Insight:</span>
+                    {_parseBoldInline(String(parsedJson.proactive_insight))}
+                  </div>
+                )}
+                {!hasChart && (parsedJson.confidence || parsedJson.suggestion) && (
+                  <div style={{ display: 'flex', gap: '12px', alignItems: 'center', marginTop: '4px', flexWrap: 'wrap' }}>
+                    {parsedJson.confidence && (
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '6px', background: 'rgba(0,0,0,0.2)', padding: '4px 8px', borderRadius: '4px', border: '1px solid var(--border-subtle)' }}>
+                        <div style={{ width: '8px', height: '8px', borderRadius: '50%', background: parsedJson.confidence > 85 ? 'var(--success)' : (parsedJson.confidence > 60 ? 'var(--warning)' : 'var(--error)'), animation: 'pulse 2s infinite' }} />
+                        <span style={{ fontSize: '11px', color: 'var(--text-muted)', fontFamily: "'DM Mono', monospace" }}>{parsedJson.confidence}% CONFIDENCE</span>
+                      </div>
+                    )}
+                    {parsedJson.suggestion && (
+                      <button onClick={() => onSuggestionClick && onSuggestionClick(parsedJson.suggestion)} style={{ background: 'none', border: 'none', color: 'var(--primary-500)', fontSize: '12px', cursor: 'pointer', padding: 0, textDecoration: 'underline' }}>
+                        Try: {parsedJson.suggestion}
+                      </button>
+                    )}
+                  </div>
+                )}
+              </div>
+            );
+          }
+
+          // Fallback Markdown + Chart flow if JSON parsing failed entirely
+          const finalCleanText = cleanText.replace(/\[CHART:\s*[^\]]+\]/g, '').replace(/[ \t]{2,}/g, ' ').trim();
           return (
             <>
-              {cleanText && renderMarkdown(cleanText)}
+              {finalCleanText && renderMarkdown(finalCleanText)}
               {inlineChartJSX}
             </>
           );
@@ -855,7 +904,7 @@ const ChartPanel = memo(({ result, PlotComponent }) => {
         return (
           <div
             key={key}
-            className={`chart-flip-wrapper ${flipped[key] ? 'flipped' : ''} ${isSpotlighted ? 'chart-spotlighted' : ''} ${isDimmed ? 'chart-dimmed' : ''}`}
+            className={`chart-flip-wrapper chart-card ${flipped[key] ? 'flipped' : ''} ${isSpotlighted ? 'chart-spotlighted' : ''} ${isDimmed ? 'chart-dimmed' : ''}`}
             data-mode={isSpotlighted ? chartMode : undefined}
             style={{
               gridColumn: isSpotlighted ? "1 / -1" : gridSpan,
@@ -1804,9 +1853,14 @@ export default function DataPulse({ user, onLogout }) {
                         PlotComponent={PlotComponent}
                         result={result}
                         stopPageZoomOnCtrlWheel={stopPageZoomOnCtrlWheel}
+                        onSuggestionClick={(q) => { setChatInput(q); setTimeout(() => document.getElementById('chat-send-btn')?.click(), 50); }}
                       />
                     ))}
-                    {chatLoading && <div style={{ fontSize: '13px', color: 'var(--primary-500)', fontFamily: "'Outfit', monospace" }}>Generating response...</div>}
+                    {chatLoading && (
+                      <div className="ai-typing-pulse" style={{ padding: '12px 18px', margin: '4px 0', fontSize: '13px', color: 'var(--primary-500)', fontFamily: "'Outfit', monospace" }}>
+                        Architecting response <span></span><span></span><span></span>
+                      </div>
+                    )}
                     {chatMsgs.length >= MAX_CHAT_MESSAGES && (
                       <div style={{ fontSize: '11px', color: 'var(--text-muted)', textAlign: 'center', padding: '4px 0', borderTop: '1px solid var(--border-subtle)', marginTop: '4px' }}>
                         Showing last {MAX_CHAT_MESSAGES} messages
@@ -1815,8 +1869,8 @@ export default function DataPulse({ user, onLogout }) {
                   </div>
                   <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
                     <div style={{ display: 'flex', gap: '12px' }}>
-                      <input className="input-field" value={chatInput} onChange={e => setChatInput(e.target.value)} onKeyDown={e => e.key === 'Enter' && sendChat()} style={{ flex: 1, fontSize: '14px' }} placeholder="Query data..." maxLength={1200} />
-                      <button className="btn-primary" onClick={sendChat} disabled={chatLoading} style={{ width: '44px', padding: 0 }}>»</button>
+                      <input className="input-field" value={chatInput} onChange={e => setChatInput(e.target.value)} onKeyDown={e => e.key === 'Enter' && document.getElementById('chat-send-btn')?.click()} style={{ flex: 1, fontSize: '14px' }} placeholder="Query data..." maxLength={1200} />
+                      <button id="chat-send-btn" className="btn-primary" onClick={sendChat} disabled={chatLoading} style={{ width: '44px', padding: 0 }}>»</button>
                     </div>
                     {chatInput.length > 900 && (
                       <div style={{ fontSize: '11px', textAlign: 'right', color: chatInput.length > 1100 ? 'var(--error)' : 'var(--text-muted)' }}>
@@ -1840,7 +1894,7 @@ export default function DataPulse({ user, onLogout }) {
                     {SECONDARY_TABS.map(t => <button key={t} onClick={() => setTab(t)} className={`tab ${tab === t ? 'active' : ''}`}>{t}</button>)}
                   </div>
                   {tab === "overview" && (
-                    <div className="flex-col gap-24">
+                    <div className="flex-col gap-24 tab-content-fade-in">
                       {headline && (
                         <div style={{ padding: '20px', background: 'rgba(99,102,241,0.05)', borderRadius: '12px', borderLeft: '4px solid var(--primary-500)' }}>
                           <strong style={{ fontSize: '12px', color: 'var(--primary-500)', textTransform: 'uppercase', display: 'block', marginBottom: '8px', letterSpacing: '0.1em' }}>Data Synopsis</strong>
@@ -1989,9 +2043,9 @@ export default function DataPulse({ user, onLogout }) {
                       </div>
                     </div>
                   )}
-                  {tab === "charts" && <ChartPanel result={result} PlotComponent={PlotComponent} />}
+                  {tab === "charts" && <div className="tab-content-fade-in"><ChartPanel result={result} PlotComponent={PlotComponent} /></div>}
                   {tab === "insights" && (
-                    <div className="flex-col gap-24">
+                    <div className="flex-col gap-24 tab-content-fade-in">
                       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '16px' }}>
                         <div style={{ padding: '18px', borderRadius: '12px', border: '1px solid var(--border-subtle)', background: 'var(--bg-input)' }}>
                           <strong style={{ fontSize: '12px', color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.08em' }}>Strong Correlations</strong>
@@ -2001,43 +2055,61 @@ export default function DataPulse({ user, onLogout }) {
                           <strong style={{ fontSize: '12px', color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.08em' }}>Columns With Outliers</strong>
                           <div style={{ marginTop: '8px', fontSize: '26px', color: 'var(--text-main)', fontFamily: "'Inter', sans-serif" }}>{outlierCols.length}</div>
                         </div>
-                        <div style={{ padding: '18px', borderRadius: '12px', border: '1px solid var(--border-subtle)', background: 'var(--bg-input)' }}>
+                        <div className={dq.completeness >= 99.5 ? "completeness-pulse" : ""} style={{ padding: '18px', borderRadius: '12px', border: '1px solid var(--border-subtle)', background: 'var(--bg-input)' }}>
                           <strong style={{ fontSize: '12px', color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.08em' }}>Data Completeness</strong>
                           <div style={{ marginTop: '8px', fontSize: '26px', color: 'var(--text-main)', fontFamily: "'Inter', sans-serif" }}>{formatPercent(dq.completeness || 100)}</div>
                         </div>
                       </div>
-                      <div style={{ padding: '20px', background: 'var(--bg-input)', borderRadius: '12px', border: '1px solid var(--border-subtle)' }}>
-                        <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '16px' }}>
-                          <div style={{
-                            width: '32px',
-                            height: '32px',
-                            borderRadius: '10px',
-                            border: '1px solid rgba(6,182,212,0.35)',
-                            background: 'rgba(6,182,212,0.08)',
-                            color: '#7dd3fc',
-                            display: 'flex',
-                            alignItems: 'center',
-                            justifyContent: 'center',
-                            flexShrink: 0,
-                          }}>
-                            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-                              <circle cx="11" cy="11" r="7" />
-                              <line x1="16.65" y1="16.65" x2="21" y2="21" />
-                            </svg>
-                          </div>
-                          <strong style={{ fontSize: '15px', color: 'var(--text-main)', fontFamily: "'Inter', sans-serif" }}>Analyst Findings</strong>
-                          <span style={{ marginLeft: 'auto', fontSize: '11px', padding: '3px 10px', borderRadius: '100px', background: 'rgba(6,182,212,0.1)', border: '1px solid rgba(6,182,212,0.25)', color: '#7dd3fc', textTransform: 'uppercase', letterSpacing: '0.08em' }}>AI Generated</span>
+                      <div style={{ border: '1px solid var(--border-subtle)', borderRadius: '12px', background: 'var(--bg-input)', overflow: 'hidden' }}>
+                        <div style={{ padding: '16px 20px', borderBottom: '1px solid var(--border-subtle)', background: 'rgba(255,255,255,0.02)' }}>
+                          <strong style={{ fontSize: '14px', color: 'var(--text-main)', letterSpacing: '0.05em', textTransform: 'uppercase', display: 'flex', alignItems: 'center', gap: '8px' }}>
+                            <span>📖</span> THE DATA STORY
+                          </strong>
                         </div>
-                        {findings.length ? findings.map((f, i) => (
-                            <div key={`ins-${i}`} style={{ marginBottom: '14px', padding: '14px 16px', borderRadius: '10px', background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(99,102,241,0.12)', display: 'flex', gap: '14px', alignItems: 'flex-start' }}>
-                              <div style={{ width: '26px', height: '26px', borderRadius: '50%', background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(255,255,255,0.12)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0, fontSize: '12px', fontWeight: 700, color: 'var(--text-muted)' }}>{i + 1}</div>
-                              <div style={{ fontSize: '14px', color: 'var(--text-main)', lineHeight: 1.6, paddingTop: '4px' }}>
-                                {f.split(/([₹$€£]?-?\d+(?:,\d{3})*(?:\.\d+)?(?:%|k|M|B)?)/g).map((part, index) => 
-                                  /^[₹$€£]?-?\d+(?:,\d{3})*(?:\.\d+)?(?:%|k|M|B)?$/.test(part) ? <strong key={index} style={{ color: '#00d4a8', fontWeight: 700 }}>{part}</strong> : part
-                                )}
-                              </div>
+                        {!findings.length ? (
+                          <div style={{ padding: '32px', color: 'var(--text-muted)', textAlign: 'center' }}>No analyst findings were generated for this dataset.</div>
+                        ) : (
+                          <div style={{ padding: '24px' }}>
+                            <div className="pull-quote">
+                              {findings[0].split(/([₹$€£]?-?\d+(?:,\d{3})*(?:\.\d+)?(?:%|k|M|B)?)/g).map((part, index) => 
+                                /^[₹$€£]?-?\d+(?:,\d{3})*(?:\.\d+)?(?:%|k|M|B)?$/.test(part) ? <strong key={index} style={{ color: '#00d4a8', fontWeight: 700 }}>{part}</strong> : part
+                              )}
                             </div>
-                        )) : <div style={{ fontSize: '14px', color: 'var(--text-muted)', fontStyle: 'italic' }}>No analyst findings were generated for this dataset.</div>}
+                            
+                            {findings.length > 1 && (
+                              <div style={{ marginBottom: '24px' }}>
+                                <strong style={{ fontSize: '12px', color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.1em', display: 'block', marginBottom: '12px' }}>WHY THIS MATTERS</strong>
+                                <p style={{ color: 'var(--text-main)', lineHeight: 1.6, fontSize: '15px' }}>
+                                  {findings.slice(1, 3).map((f, i) => (
+                                    <span key={i} style={{ display: 'block', marginBottom: '8px' }}>
+                                      {f.split(/([₹$€£]?-?\d+(?:,\d{3})*(?:\.\d+)?(?:%|k|M|B)?)/g).map((part, index) => 
+                                        /^[₹$€£]?-?\d+(?:,\d{3})*(?:\.\d+)?(?:%|k|M|B)?$/.test(part) ? <strong key={index} style={{ color: '#00d4a8', fontWeight: 700 }}>{part}</strong> : part
+                                      )}
+                                    </span>
+                                  ))}
+                                </p>
+                              </div>
+                            )}
+
+                            {findings.length > 3 && (
+                              <div>
+                                <strong style={{ fontSize: '12px', color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.1em', display: 'block', marginBottom: '12px' }}>WHAT TO WATCH</strong>
+                                <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                                  {findings.slice(3).map((info, i) => (
+                                    <div key={`watch-${i}`} style={{ display: 'flex', gap: '12px', alignItems: 'flex-start' }}>
+                                      <span style={{ color: 'var(--primary-500)', fontSize: '18px', lineHeight: '20px' }}>›</span>
+                                      <span style={{ color: 'var(--text-main)', lineHeight: 1.6, fontSize: '14.5px' }}>
+                                        {info.split(/([₹$€£]?-?\d+(?:,\d{3})*(?:\.\d+)?(?:%|k|M|B)?)/g).map((part, index) => 
+                                          /^[₹$€£]?-?\d+(?:,\d{3})*(?:\.\d+)?(?:%|k|M|B)?$/.test(part) ? <strong key={index} style={{ color: '#00d4a8', fontWeight: 700 }}>{part}</strong> : part
+                                        )}
+                                      </span>
+                                    </div>
+                                  ))}
+                                </div>
+                              </div>
+                            )}
+                          </div>
+                        )}
                       </div>
                       <div style={{ padding: '20px', background: 'var(--bg-input)', borderRadius: '12px', border: '1px solid var(--border-subtle)' }}>
                         <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '16px' }}>
