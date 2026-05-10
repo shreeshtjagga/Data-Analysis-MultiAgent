@@ -77,7 +77,7 @@ h2 { font-size: 24px; }
 h3 { font-size: clamp(17px, 1.1vw, 18px); font-weight: 600; color: var(--text-main); }
 p, body { font-size: var(--font-body); font-weight: 400; color: var(--text-muted); }
 .caption { font-size: var(--font-caption); font-weight: 500; color: var(--text-muted); }
-.font-mono { font-family: 'Outfit', monospace; }
+.font-mono { font-family: 'Inter', sans-serif; }
 
 /* =========================================================================
    LAYOUT & GRID SYSTEM

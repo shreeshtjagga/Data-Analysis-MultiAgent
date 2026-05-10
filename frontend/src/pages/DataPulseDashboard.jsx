@@ -632,7 +632,7 @@ const ChatBubble = memo(({ m, PlotComponent, result, stopPageZoomOnCtrlWheel, on
                     {parsedJson.confidence && (
                       <div style={{ display: 'flex', alignItems: 'center', gap: '6px', background: 'rgba(0,0,0,0.2)', padding: '4px 8px', borderRadius: '4px', border: '1px solid var(--border-subtle)' }}>
                         <div style={{ width: '8px', height: '8px', borderRadius: '50%', background: parsedJson.confidence > 85 ? 'var(--success)' : (parsedJson.confidence > 60 ? 'var(--warning)' : 'var(--error)'), animation: 'pulse 2s infinite' }} />
-                        <span style={{ fontSize: '11px', color: 'var(--text-muted)', fontFamily: "'DM Mono', monospace" }}>{parsedJson.confidence}% CONFIDENCE</span>
+                        <span style={{ fontSize: '11px', color: 'var(--text-muted)', fontFamily: "'Inter', sans-serif" }}>{parsedJson.confidence}% CONFIDENCE</span>
                       </div>
                     )}
                     {parsedJson.suggestion && (
@@ -1635,7 +1635,7 @@ export default function DataPulse({ user, onLogout }) {
           <strong style={{ fontSize: '18px', color: 'var(--text-main)', fontFamily: "'Inter', sans-serif" }}>DATA PULSE</strong>
         </div>
         <div className="topbar-actions">
-            <button onClick={toggleHistory} className="topbar-btn">History</button>
+            {phase !== "analyzing" && <button onClick={toggleHistory} className="topbar-btn">History</button>}
             {result && <button onClick={() => setShowExportModal(true)} className="topbar-btn">Download</button>}
           </div>
           <div style={{ fontSize: '14px', color: 'var(--text-muted)' }}>{user?.email}</div>
@@ -1740,7 +1740,7 @@ export default function DataPulse({ user, onLogout }) {
                   </div>
                   <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', minHeight: '60px', justifyContent: 'center' }}>
                     <span style={{ fontSize: '12px', color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '2px' }}>Active Agent Node</span>
-                    <strong style={{ fontSize: '16px', color: 'var(--primary-500)', fontFamily: "'Outfit', monospace", textShadow: '0 0 10px rgba(99,102,241,0.3)' }}>
+                    <strong style={{ fontSize: '16px', color: 'var(--primary-500)', fontFamily: "'Inter', sans-serif", textShadow: '0 0 10px rgba(99,102,241,0.3)' }}>
                       {agentLog[agentLog.length - 1] || "Analysis Pipeline running..."}
                     </strong>
                   </div>
@@ -1811,7 +1811,7 @@ export default function DataPulse({ user, onLogout }) {
               {phase === "done" && result && (
                 <div className="card flex-col gap-16" style={{ padding: '20px', flex: 1, display: 'flex', overflow: 'hidden' }}>
                   <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-                    <strong style={{ fontSize: '14px', color: 'var(--text-main)', fontFamily: 'Syne, sans-serif' }}>Expert Analyst Advisor</strong>
+                    <strong style={{ fontSize: '14px', color: 'var(--text-main)', fontFamily: "'Syne', sans-serif" }}>Expert Analyst Advisor</strong>
                     <span
                       title="This advisor only answers questions about the active dataset."
                       style={{
@@ -1857,7 +1857,7 @@ export default function DataPulse({ user, onLogout }) {
                       />
                     ))}
                     {chatLoading && (
-                      <div className="ai-typing-pulse" style={{ padding: '12px 18px', margin: '4px 0', fontSize: '13px', color: 'var(--primary-500)', fontFamily: "'Outfit', monospace" }}>
+                      <div className="ai-typing-pulse" style={{ padding: '12px 18px', margin: '4px 0', fontSize: '13px', color: 'var(--primary-500)', fontFamily: "'Inter', sans-serif" }}>
                         Architecting response <span></span><span></span><span></span>
                       </div>
                     )}
