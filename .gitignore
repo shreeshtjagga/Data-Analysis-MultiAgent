@@ -132,3 +132,9 @@ Data-Analysis-MultiAgent/
 # ─── Internal tool artifacts ─────────────────────────────────────────────────
 .antigravityignore
 .gemini/
+
+# ─── AI Artifacts ─────────────────────────────────────────────────────────────
+CONTEXT.md
+DECISIONS.md
+ERRORS.md
+TASKS.md
