@@ -171,6 +171,53 @@ def _build_all_candidates(df: pd.DataFrame, existing_chart_keys: list[str]) -> l
         _add('stacked_bar', small_cats[0], None, color=small_cats[1], title=f'{small_cats[0]} vs {small_cats[1]}')
     return candidates
 
+def _generate_grounded_reasoning(spec: dict, df: pd.DataFrame, is_requested: bool) -> str:
+    ct = spec.get('chart_type')
+    x = spec.get('x')
+    y = spec.get('y')
+    type_display = _TYPE_DISPLAY.get(ct, ct)
+    
+    fact = ""
+    try:
+        if ct in ('ranked_bar', 'bar', 'grouped_bar', 'box', 'violin') and x and y:
+            if pd.api.types.is_numeric_dtype(df[y]) and not pd.api.types.is_numeric_dtype(df[x]):
+                grouped = df.groupby(x)[y].mean().sort_values(ascending=False)
+                if not grouped.empty:
+                    top_cat = grouped.index[0]
+                    top_val = grouped.iloc[0]
+                    fact = f" For instance, '{top_cat}' has the highest average {y} at {top_val:,.2f}."
+        elif ct == 'scatter' and x and y:
+            corr = df[x].corr(df[y])
+            if pd.notna(corr):
+                direction = "positive" if corr > 0 else "negative"
+                strength = "strong" if abs(corr) > 0.5 else "moderate" if abs(corr) > 0.3 else "weak"
+                fact = f" There is a {strength} {direction} correlation (r={corr:.2f}) between them."
+        elif ct == 'histogram' and (x or y):
+            col = x or y
+            if pd.api.types.is_numeric_dtype(df[col]):
+                mean_val = df[col].mean()
+                fact = f" The average {col} is {mean_val:,.2f}."
+        elif ct in ('donut', 'pie', 'freq_bar') and (x or y):
+            col = x or y
+            counts = df[col].value_counts()
+            if not counts.empty:
+                top_cat = counts.index[0]
+                pct = (counts.iloc[0] / len(df)) * 100
+                fact = f" '{top_cat}' is the most common category ({pct:.1f}% of records)."
+        elif ct == 'line' and x and y:
+            if pd.api.types.is_numeric_dtype(df[y]):
+                trend = "upward" if df[y].iloc[-1] > df[y].iloc[0] else "downward"
+                fact = f" There appears to be an overall {trend} trend in {y} over time."
+    except Exception as e:
+        logger.debug("Failed to generate grounded reasoning fact: %s", e)
+        pass
+    
+    col_phrase = f"{y} by {x}" if x and y else x or y or "the dataset"
+    if is_requested:
+        return f"Showing a {type_display} of {col_phrase} as requested.{fact}"
+    else:
+        return f"Here is a {type_display} of {col_phrase} that hasn't been shown yet.{fact}"
+
 def suggest_novel_chart(df_records: list[dict], existing_chart_keys: list[str], user_request: str='', stats_summary: dict=None) -> dict:
     df = _records_to_df(df_records)
     if df.empty:
@@ -195,7 +242,8 @@ def suggest_novel_chart(df_records: list[dict], existing_chart_keys: list[str], 
             if type_candidates:
                 spec = type_candidates[0]
                 spec_clean = {k: v for (k, v) in spec.items() if k != '_key'}
-                return {'cannot_plot': False, 'spec': spec_clean, 'reasoning': f'Showing a {_TYPE_DISPLAY.get(rtype, rtype)} as requested.'}
+                reasoning = _generate_grounded_reasoning(spec, df, is_requested=True)
+                return {'cannot_plot': False, 'spec': spec_clean, 'reasoning': reasoning}
         type_names = [_TYPE_DISPLAY.get(t, t) for t in requested_types]
         type_str = ' or '.join(type_names)
         impossible_reasons = _explain_why_type_impossible(requested_types, df, numeric, categorical, existing_chart_keys)
@@ -205,18 +253,12 @@ def suggest_novel_chart(df_records: list[dict], existing_chart_keys: list[str], 
         if col_matched:
             spec = col_matched[0]
             spec_clean = {k: v for (k, v) in spec.items() if k != '_key'}
-            x = spec.get('x') or ''
-            y = spec.get('y') or ''
-            ct = spec['chart_type']
-            col_phrase = f'{y} by {x}' if x and y else x or y or 'the dataset'
-            return {'cannot_plot': False, 'spec': spec_clean, 'reasoning': f'Showing {col_phrase} as a {_TYPE_DISPLAY.get(ct, ct)}.'}
+            reasoning = _generate_grounded_reasoning(spec, df, is_requested=True)
+            return {'cannot_plot': False, 'spec': spec_clean, 'reasoning': reasoning}
     spec = all_candidates[0]
     spec_clean = {k: v for (k, v) in spec.items() if k != '_key'}
-    ct = spec['chart_type']
-    x = spec.get('x') or ''
-    y = spec.get('y') or ''
-    col_phrase = f'{y} by {x}' if x and y else x or y or 'the dataset'
-    return {'cannot_plot': False, 'spec': spec_clean, 'reasoning': f"Here is a {_TYPE_DISPLAY.get(ct, ct)} of {col_phrase} that hasn't been shown yet."}
+    reasoning = _generate_grounded_reasoning(spec, df, is_requested=False)
+    return {'cannot_plot': False, 'spec': spec_clean, 'reasoning': reasoning}
 
 def _explain_why_type_impossible(requested_types: list[str], df: pd.DataFrame, numeric: list[str], categorical: list[str], existing_keys: list[str]) -> Optional[str]:
     for rtype in requested_types:

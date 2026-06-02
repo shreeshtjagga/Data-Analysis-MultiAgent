@@ -10,7 +10,7 @@ function PasswordInput({ id, placeholder, value, onChange, onKeyDown, disabled, 
       <input
         id={id}
         className="input-field"
-        style={{ width: "100%", paddingRight: "55px", fontFamily: "'Outfit', monospace", backgroundColor: '#f1f5f9', color: '#0f172a' }}
+        style={{ width: "100%", paddingRight: "55px", fontFamily: "'Inter', sans-serif", backgroundColor: '#f1f5f9', color: '#0f172a' }}
         type={show ? "text" : "password"}
         placeholder={placeholder}
         value={value}
@@ -411,7 +411,7 @@ export default function Login({ onLogin }) {
       <div className="animate-fade-in" style={{ width: '100%', maxWidth: '550px', position: 'relative', zIndex: 1, backgroundColor: 'transparent', boxShadow: 'none', border: 'none', padding: '0' }}>
         <div style={{ textAlign: 'center', marginBottom: '32px' }}>
           <div style={{ color: 'var(--primary-500)', fontSize: '40px', marginBottom: '8px', textShadow: '0 0 20px rgba(99,102,241,0.7)' }}>◈</div>
-          <h2 style={{ fontFamily: "'Syne', sans-serif", fontSize: '28px', color: 'var(--text-main)', textShadow: '0 0 10px rgba(255,255,255,0.1)' }}>DATA PULSE</h2>
+          <h2 style={{ fontFamily: "'Inter', sans-serif", fontSize: '28px', fontWeight: 700, color: 'var(--text-main)', textShadow: '0 0 10px rgba(255,255,255,0.1)' }}>DATA PULSE</h2>
           <p className="caption" style={{ textTransform: 'uppercase', letterSpacing: '0.1em', marginTop: '4px', color: 'var(--text-muted)' }}>Secure Analytics Portal</p>
         </div>
         <div style={{ display: 'flex', borderBottom: '1px solid var(--border-subtle)', marginBottom: '32px' }}>

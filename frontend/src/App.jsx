@@ -43,7 +43,7 @@ export default function App() {
           alignItems: "center",
           justifyContent: "center",
           color: "var(--text-muted)",
-          fontFamily: "'Outfit', monospace",
+          fontFamily: "'Inter', sans-serif",
           fontSize: "14px",
           letterSpacing: "0.1em",
           textTransform: "uppercase"

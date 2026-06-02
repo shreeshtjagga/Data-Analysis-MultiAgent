@@ -489,7 +489,20 @@ def _classify_chat_intent(question: str) -> str:
     if len(q.split()) <= 4 and (not any((dw in q for dw in _DATA_INDICATOR))):
         if any((g in q for g in ('hello', 'hi', 'bye', 'hey', 'thanks', 'thank', 'ok', 'okay'))):
             return 'greeting'
-    _EXPLAIN = ('explain', 'what does this', 'what do these', 'tell me about this chart', 'tell me about the chart', 'interpret', 'what can i see', 'what am i looking at', 'why is', 'why are', 'what patterns', 'what trends', 'describe this chart', 'describe the chart', 'what does this chart', 'what does the chart', 'analyse the chart', 'analyze the chart', 'insight from the chart', 'insight from this', 'what does this plot', 'what does the plot', 'what does this graph', 'what does the graph', 'what is shown in', 'what is shown on')
+    _EXPLAIN = (
+        'explain', 'what does this', 'what do these', 'tell me about this chart', 'tell me about the chart',
+        'interpret', 'what can i see', 'what am i looking at', 'why is', 'why are', 'what patterns',
+        'what trends', 'describe this chart', 'describe the chart', 'what does this chart',
+        'what does the chart', 'analyse the chart', 'analyze the chart', 'insight from the chart',
+        'insight from this', 'what does this plot', 'what does the plot', 'what does this graph',
+        'what does the graph', 'what is shown in', 'what is shown on',
+        # additional natural phrasings
+        'above chart', 'above graph', 'above plot', 'last chart', 'this visualization',
+        'about this chart', 'about the chart', 'from this chart', 'from the chart',
+        'what chart shows', 'what graph shows', 'what plot shows',
+        'chart mean', 'graph mean', 'chart tell', 'graph tell',
+        'chart showing', 'chart show', 'reading the chart', 'read the chart',
+    )
     if any((p in q for p in _EXPLAIN)):
         return 'explain_chart'
     _NEED_WANT = ('i need graph', 'i need a graph', 'i need chart', 'i need a chart', 'i need plot', 'i need a plot', 'i need visualization', 'i want graph', 'i want a graph', 'i want chart', 'i want a chart', 'i want plot', 'i want a plot', 'need graph', 'need chart', 'need plot', 'want graph', 'want chart', 'want plot', 'show graph', 'show chart', 'show plot', 'show a graph', 'show a chart', 'show a plot', 'new chart', 'new plot', 'new graph', 'another chart', 'another plot', 'another graph', 'different chart', 'different plot', 'one more chart', 'one more plot', 'more charts', 'more plots', 'can you plot', 'can you chart', 'can you make a', 'can you generate', 'can you create', 'can you show me a', 'can you visualize', 'can you visualise', 'generate chart', 'generate graph', 'generate plot', 'create chart', 'create graph', 'create plot', 'make chart', 'make graph', 'make plot', 'make a chart', 'make a graph', 'make a plot', 'draw chart', 'draw graph', 'draw plot', 'show me a new', 'give me a chart', 'give me a plot', 'give me a graph', 'give me a scatter', 'give me a pie', 'give me a bar', 'give me a line', 'give me a histogram', 'give me a donut', 'give me a heatmap', 'show a pie', 'show a bar', 'show a scatter', 'show a line', 'show a histogram', 'show a donut', 'graph for', 'graph of', 'chart for', 'chart of', 'plot for', 'plot of', 'generate a', 'create a', 'build a', 'draw a', 'visualize ', 'visualise ')
@@ -710,68 +723,89 @@ async def chat_with_analysis(body: ChatRequest, user_id: int=Depends(get_current
             return {'answer': "There aren't any charts on the dashboard yet. If you'd like me to generate one, just ask!", 'data_queried': False, 'new_chart': None}
         q_lower = question.lower()
         matched_key = None
-        matched_chart_data = None
+
+        # Pass 1: exact key name substring match
         for key in existing_chart_keys:
             if key.lower() in q_lower:
                 matched_key = key
                 break
+
+        # Pass 2: chart-type keyword → 'in' partial key match (not startswith — too strict)
         if not matched_key:
-            chart_type_words = {'scatter': 'scatter', 'histogram': 'histogram', 'bar': 'ranked_bar', 'heatmap': 'heatmap', 'line': 'line', 'box': 'box', 'violin': 'violin', 'donut': 'donut', 'pie': 'donut', 'distribution': 'histogram', 'correlation': 'heatmap'}
-            for (word, prefix) in chart_type_words.items():
+            chart_type_map = {
+                'scatter':      ['scatter'],
+                'histogram':    ['histogram', 'distribution'],
+                'bar':          ['bar'],
+                'heatmap':      ['heatmap'],
+                'correlation':  ['heatmap', 'correlation'],
+                'overview':     ['heatmap', 'correlation', 'overview'],
+                'line':         ['line', 'trend'],
+                'box':          ['box'],
+                'violin':       ['violin'],
+                'donut':        ['donut'],
+                'pie':          ['donut', 'pie'],
+                'distribution': ['histogram', 'distribution'],
+            }
+            for word, prefixes in chart_type_map.items():
                 if word in q_lower:
-                    for key in existing_chart_keys:
-                        if key.lower().startswith(prefix):
-                            matched_key = key
+                    for prefix in prefixes:
+                        for key in existing_chart_keys:
+                            if prefix in key.lower():
+                                matched_key = key
+                                break
+                        if matched_key:
                             break
                 if matched_key:
                     break
-        if matched_key and isinstance(charts_data, dict) and (matched_key in charts_data):
-            _raw_from_context = charts_data[matched_key]
-            _needs_redis = _raw_from_context is True or _raw_from_context is None or isinstance(_raw_from_context, bool)
-            if _needs_redis and file_hash:
-                try:
-                    _cache_key = redis_cache.analysis_key(user_id, file_hash)
-                    _cached_analysis = await redis_cache.get(_cache_key)
-                    if isinstance(_cached_analysis, dict):
-                        _raw_from_context = _cached_analysis.get('charts', {}).get(matched_key)
-                except Exception as _redis_exc:
-                    logger.warning('Could not load chart from Redis for explain_chart: %s', _redis_exc)
-            if _raw_from_context and _raw_from_context is not True:
-                try:
-                    raw = _raw_from_context
-                    logger.debug("Parsing chart data for key '%s' (type=%s)", matched_key, type(raw).__name__)
-                    chart_fig = json.loads(raw) if isinstance(raw, str) else raw
-                    traces_info = []
-                    for trace in chart_fig.get('data', [])[:3]:
-                        ttype = trace.get('type', 'unknown')
-                        x_vals = list(trace.get('x') or [])[:8]
-                        y_vals = list(trace.get('y') or [])[:8]
-                        labels = list(trace.get('labels') or [])[:8]
-                        values = list(trace.get('values') or [])[:8]
-                        if labels and values:
-                            traces_info.append(f'{ttype}: labels={labels}, values={values}')
-                        elif x_vals or y_vals:
-                            traces_info.append(f'{ttype}: x={x_vals}, y={y_vals}')
-                    layout = chart_fig.get('layout', {})
-                    title_raw = layout.get('title', {})
-                    chart_title = (title_raw.get('text') if isinstance(title_raw, dict) else title_raw) or matched_key
-                    matched_chart_data = {'key': matched_key, 'title': chart_title, 'traces': traces_info}
-                except Exception as e:
-                    logger.warning('Could not parse chart data for key %s: %s', matched_key, e)
-        _explain_key = matched_key or (existing_chart_keys[0] if existing_chart_keys else '')
+
+        # Pass 3: token overlap scoring — dataset-agnostic, handles any column name
+        if not matched_key:
+            q_tokens = set(_re.sub(r'[^\w]', ' ', q_lower).split())
+            best_key, best_score = None, 0
+            for key in existing_chart_keys:
+                key_tokens = set(_re.sub(r'[^\w]', ' ', key.lower()).split())
+                score = len(q_tokens & key_tokens)
+                if score > best_score:
+                    best_score, best_key = score, key
+            if best_score > 0:
+                matched_key = best_key
+
+        # Pass 4: fallback to first chart (most prominent on dashboard)
+        _explain_key = matched_key or existing_chart_keys[0]
+
+        # Load chart data — try context first, then Redis once with the correct key
         _chart_raw = None
-        if _explain_key and file_hash:
+        if isinstance(charts_data, dict) and _explain_key in charts_data:
+            _raw = charts_data[_explain_key]
+            # True/None/bool means frontend sent a placeholder stub — need Redis
+            if _raw and _raw is not True:
+                _chart_raw = _raw
+
+        if not _chart_raw and file_hash:
             try:
-                _cache_key_expl = redis_cache.analysis_key(user_id, file_hash)
-                _cached_expl = await redis_cache.get(_cache_key_expl)
-                if isinstance(_cached_expl, dict):
-                    _chart_raw = _cached_expl.get('charts', {}).get(_explain_key)
-            except Exception as _expl_exc:
-                logger.warning('Redis lookup for _chart_raw failed: %s', _expl_exc)
+                _cache_key = redis_cache.analysis_key(user_id, file_hash)
+                _cached = await redis_cache.get(_cache_key)
+                if isinstance(_cached, dict):
+                    _chart_raw = _cached.get('charts', {}).get(_explain_key)
+            except Exception as _redis_exc:
+                logger.warning('Redis lookup for explain_chart failed: %s', _redis_exc)
+
         _explain_client = get_groq_client()
         if _explain_client and file_hash:
             _expl_redis = _get_cache_client()
-            explain_result = await answer_chart_explanation(question=question, chart_key=_explain_key, chart_data=_chart_raw, file_name=file_name, file_hash=file_hash, chart_keys=existing_chart_keys, conversation_history=body.history or [], groq_client=_explain_client, redis_client=_expl_redis)
+            explain_result = await answer_chart_explanation(
+                question=question,
+                chart_key=_explain_key,
+                chart_data=_chart_raw,
+                file_name=file_name,
+                file_hash=file_hash,
+                chart_keys=existing_chart_keys,
+                stats=stats,
+                insights=insights,
+                conversation_history=body.history or [],
+                groq_client=_explain_client,
+                redis_client=_expl_redis,
+            )
             return explain_result
         _tag = f'\n[CHART: {_explain_key}]' if _explain_key else ''
         return {'answer': f'Here is the chart from {file_name}.{_tag}', 'data_queried': False, 'new_chart': None}

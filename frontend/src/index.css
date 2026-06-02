@@ -58,8 +58,8 @@ body {
 }
 h1,
 h2 {
-  font-family: "Syne", sans-serif;
-  font-weight: 800;
+  font-family: "Inter", sans-serif;
+  font-weight: 700;
   letter-spacing: -0.02em;
   color: var(--text-main);
 }
@@ -171,7 +171,7 @@ body {
   transition:
     transform 0.2s ease,
     box-shadow 0.2s ease;
-  font-family: "Syne", sans-serif;
+  font-family: "Inter", sans-serif;
   font-weight: 700;
   font-size: clamp(13px, 0.9vw, 14px);
   letter-spacing: 0.08em;
@@ -315,7 +315,7 @@ body {
   transition: none;
   pointer-events: none;
   font-size: clamp(10px, 0.7vw, 11px);
-  font-family: "Outfit", monospace;
+  font-family: "Inter", sans-serif;
   padding: 4px 10px;
   border-radius: 20px;
   background: rgba(99, 102, 241, 0.1);
@@ -407,6 +407,14 @@ body {
   }
   to {
     transform: rotate(360deg);
+  }
+}
+@keyframes historyLoadSweep {
+  0% {
+    transform: translateX(-100%);
+  }
+  100% {
+    transform: translateX(260%);
   }
 }
 @keyframes hologramFloat {
@@ -554,7 +562,7 @@ body {
   font-size: 22px;
   line-height: 1.5;
   color: #fff;
-  font-family: "Syne", sans-serif;
+  font-family: "Inter", sans-serif;
   font-weight: 700;
   border-left: 4px solid var(--primary-500);
   padding-left: 20px;
@@ -594,12 +602,12 @@ body {
   isolation: isolate;
 }
 .chart-spotlight-backdrop {
-  position: absolute;
+  position: fixed;
   inset: 0;
-  z-index: 900;
-  background: rgba(6, 10, 20, 0.3);
-  backdrop-filter: blur(6px) saturate(0.9);
-  border-radius: 12px;
+  z-index: 1100;
+  background: rgba(6, 10, 20, 0.7);
+  backdrop-filter: blur(8px) saturate(0.9);
+  border-radius: 0;
 }
 .chart-flip-wrapper.chart-dimmed {
   filter: blur(3px) saturate(0.75);
@@ -607,8 +615,25 @@ body {
   pointer-events: none;
 }
 .chart-flip-wrapper.chart-spotlighted {
-  position: relative;
+  position: fixed;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%) !important;
   z-index: 1200;
+  max-height: 90vh;
+  margin: 0 !important;
+  box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.7);
+  animation: spotlightFadeIn 0.3s cubic-bezier(0.34, 1.56, 0.64, 1) forwards;
+}
+@keyframes spotlightFadeIn {
+  from {
+    opacity: 0;
+    transform: translate(-50%, -48%) scale(0.96);
+  }
+  to {
+    opacity: 1;
+    transform: translate(-50%, -50%) scale(1);
+  }
 }
 .chart-flip-inner {
   position: relative;

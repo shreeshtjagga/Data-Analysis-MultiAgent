@@ -347,12 +347,76 @@ async def answer_question(question: str, file_hash: str, file_name: str, stats: 
         answer = 'I hit a temporary error generating your answer. Please try again in a moment.'
     return {'answer': answer, 'data_queried': data_result is not None, 'new_chart': None}
 
-async def answer_chart_explanation(question: str, chart_key: str, chart_data: Any, file_name: str, file_hash: str, chart_keys: list[str], conversation_history: list[dict], groq_client, redis_client) -> dict:
+async def answer_chart_explanation(
+    question: str, chart_key: str, chart_data: Any,
+    file_name: str, file_hash: str, chart_keys: list[str],
+    stats: dict, insights: dict,
+    conversation_history: list[dict], groq_client, redis_client,
+) -> dict:
+    import re as _re
     from .indexer import retrieve_chunks
-    chart_facts = _extract_chart_facts(chart_data, chart_key)
+
+    # Self-healing key resolution: if chart_data is empty but chart_keys exist,
+    # re-score them against the question and pick the best match
+    resolved_key = chart_key
+    if not chart_data and chart_keys:
+        q_lower = question.lower()
+        q_tokens = set(_re.sub(r'[^\w]', ' ', q_lower).split())
+        best_key, best_score = chart_key, 0
+        for key in chart_keys:
+            key_tokens = set(_re.sub(r'[^\w]', ' ', key.lower()).split())
+            score = len(q_tokens & key_tokens)
+            if score > best_score:
+                best_score, best_key = score, key
+        if best_score > 0:
+            resolved_key = best_key
+            logger.info(
+                "answer_chart_explanation: re-resolved key '%s' → '%s' (score=%d)",
+                chart_key, resolved_key, best_score,
+            )
+
+    chart_facts = _extract_chart_facts(chart_data, resolved_key)
+
+    # Build compact stats context to ground the LLM (prevent generic hallucinations)
+    stats_lines: list[str] = []
+    num_cols = stats.get('numeric_columns') or {}
+    cat_cols = stats.get('categorical_columns') or {}
+    correlations = stats.get('strong_correlations') or stats.get('correlations') or []
+    if num_cols:
+        stats_lines.append('NUMERIC COLUMNS: ' + ', '.join(
+            f"{c}(mean={info.get('mean','?')}, min={info.get('min','?')}, max={info.get('max','?')})"
+            for c, info in list(num_cols.items())[:6]
+        ))
+    if cat_cols:
+        stats_lines.append('CATEGORICAL COLUMNS: ' + ', '.join(
+            f"{c}(top={list((info.get('top_5_values') or info.get('top_values') or {}).keys())[:3]})"
+            for c, info in list(cat_cols.items())[:4]
+        ))
+    if correlations:
+        stats_lines.append('KEY CORRELATIONS: ' + '; '.join(
+            f"{c.get('col1')}↔{c.get('col2')} r={c.get('correlation')}"
+            for c in correlations[:4]
+        ))
+    findings = (insights.get('key_findings') or insights.get('findings') or [])[:3]
+    if findings:
+        stats_lines.append('DATASET FINDINGS: ' + ' | '.join(str(f) for f in findings))
+    stats_context = '\n'.join(stats_lines)
+
     chunks = await retrieve_chunks(file_hash=file_hash, question=question, k=5, redis_client=redis_client)
-    extra_context = '\n'.join((c['text'] for c in chunks))[:2000]
-    messages = [{'role': 'system', 'content': _chart_system_prompt(file_name)}, {'role': 'system', 'content': f'CHART FACTS (use these exact numbers - never invent values):\n{chart_facts}\n\nADDITIONAL DATASET CONTEXT:\n{extra_context}'}]
+    extra_context = '\n'.join(c['text'] for c in chunks)[:1500]
+
+    messages = [
+        {'role': 'system', 'content': _chart_system_prompt(file_name)},
+        {
+            'role': 'system',
+            'content': (
+                f'CHART FACTS (use these exact numbers — never invent values):\n{chart_facts}\n\n'
+                f'DATASET STATS (for grounding proactive_insight — do not fabricate):\n{stats_context}\n\n'
+                f'ADDITIONAL CONTEXT FROM RAG:\n{extra_context}'
+            ),
+        },
+    ]
+
     _SAFE_ROLES = {'assistant', 'ai', 'user', 'human'}
     for msg in (conversation_history or [])[-4:]:
         raw_role = str(msg.get('role', '')).lower()
@@ -360,14 +424,23 @@ async def answer_chart_explanation(question: str, chart_key: str, chart_data: An
             continue
         role = 'assistant' if raw_role in ('assistant', 'ai') else 'user'
         messages.append({'role': role, 'content': str(msg.get('content', ''))[:800]})
+
     messages.append({'role': 'user', 'content': question})
+
     try:
-        completion = await asyncio.to_thread(groq_client.chat.completions.create, model=SYNTHESIS_MODEL, messages=messages, temperature=0.05, max_tokens=220)
+        completion = await asyncio.to_thread(
+            groq_client.chat.completions.create,
+            model=SYNTHESIS_MODEL,
+            messages=messages,
+            temperature=0.05,
+            max_tokens=260,
+        )
         answer = (completion.choices[0].message.content or '').strip()
-        if chart_key and '[CHART:' not in answer:
-            answer = f'{answer}\n[CHART: {chart_key}]'
+        if resolved_key and '[CHART:' not in answer:
+            answer = f'{answer}\n[CHART: {resolved_key}]'
     except Exception as exc:
         logger.error('Chart explanation synthesis failed: %s', exc)
-        chart_tag = f'\n[CHART: {chart_key}]' if chart_key else ''
-        answer = f'Here is the chart from {file_name}.{chart_tag}'
+        tag = f'\n[CHART: {resolved_key}]' if resolved_key else ''
+        answer = f'Here is the chart from {file_name}.{tag}'
+
     return {'answer': answer, 'data_queried': False, 'new_chart': None}
