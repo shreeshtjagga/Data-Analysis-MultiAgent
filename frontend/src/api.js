@@ -1,45 +1,23 @@
-/*
- * api.js
- * ──────
- * Thin wrapper around fetch() that:
- *  • Prefixes every URL with /api  (Vite proxy → FastAPI)
- *  • Injects `Authorization: Bearer <access_token>` when an in-memory token exists
- *  • Uses an HttpOnly refresh cookie for refresh tokens and will auto-refresh
- *    the access token when it expires
- *  • Throws a structured error on non-2xx responses
- *
- * Token persistence: access token is kept in-memory (lost on hard reload);
- * refresh tokens are stored in an HttpOnly cookie by the backend.
- */
+import { createClient } from '@supabase/supabase-js'
+const supabaseUrl = import.meta.env.VITE_SUPABASE_URL
+const supabaseAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY
+if (!supabaseUrl || !supabaseAnonKey) {
+  console.error('Missing Supabase URL or Anon Key in environment variables')
+}
+export const supabase = createClient(supabaseUrl, supabaseAnonKey)
 
-// We use "/api" for everything. 
-// Locally, Vite proxies this to http://localhost:8000
-// In Production, vercel.json proxies this to the Render backend.
 const BASE = "/api";
-
-// ── Token storage: in-memory access token + HttpOnly refresh cookie ───────
-
-// Access token is held only in memory (lost on hard refresh). Refresh tokens
-// are stored in an HttpOnly cookie set by the backend; we call /auth/refresh
-// to obtain a new access token when needed.
-
 let accessToken = null;
-
 export function setToken(token) {
   accessToken = token || null;
 }
-
 export function getToken() {
   return accessToken;
 }
-
 export function clearToken() {
   accessToken = null;
-  // Best-effort: ask backend to clear the HttpOnly refresh cookie.
-  // Fire-and-forget is intentional — we don't need to await this.
   fetch(`${BASE}/auth/logout`, { method: "POST", credentials: "include" }).catch(() => { });
 }
-
 async function refreshAccessToken() {
   try {
     const resp = await fetch(`${BASE}/auth/refresh`, {
@@ -54,13 +32,10 @@ async function refreshAccessToken() {
       return true;
     }
   } catch (err) {
-    // ignore
+    return false;
   }
   return false;
 }
-
-// ── Error handling helpers ────────────────────────────────────────────────────
-
 function getStatusMessage(status) {
   const messages = {
     400: "Bad Request",
@@ -76,11 +51,8 @@ function getStatusMessage(status) {
   };
   return messages[status] || `HTTP ${status}`;
 }
-
 function normalizeErrorDetail(body, fallback) {
   if (!body || typeof body !== 'object') return fallback;
-  
-  // Handle Pydantic validation error (detail is array of validation errors)
   if (Array.isArray(body.detail)) {
     const errors = body.detail.map(err => {
       if (typeof err === 'object') {
@@ -91,49 +63,31 @@ function normalizeErrorDetail(body, fallback) {
     });
     return errors.join(' | ') || fallback;
   }
-  
-  // Handle standard error response with 'detail' field
   if (typeof body.detail === 'string') {
     return body.detail;
   }
-  
-  // Handle 'message' field
   if (typeof body.message === 'string') {
     return body.message;
   }
-  
   return fallback;
 }
-
-// ── Core fetch helper ─────────────────────────────────────────────────────────
-
 async function apiFetch(path, options = {}) {
   const headers = { ...(options.headers || {}) };
-
-  // Attach JWT unless caller explicitly opts out
   const token = getToken();
   if (token && options.withAuth !== false) {
     headers["Authorization"] = `Bearer ${token}`;
   }
-
-  // Only set Content-Type for JSON bodies — let browser set it for FormData
   if (options.body && !(options.body instanceof FormData)) {
     headers["Content-Type"] = "application/json";
   }
-
   const response = await fetch(`${BASE}${path}`, {
     ...options,
     headers,
     credentials: options.credentials ?? "include",
   });
-
-  // If authorization fails on a PROTECTED route, clear token and log out.
-  // We ignore /auth/login and /auth/google so their specific error messages pass through.
   if (response.status === 401 && !path.startsWith("/auth/login") && !path.startsWith("/auth/google") && !path.startsWith("/auth/refresh")) {
-    // Attempt one refresh if the access token expired
     const refreshed = await refreshAccessToken();
     if (refreshed) {
-      // Retry original request once with new token
       const retryHeaders = { ...(options.headers || {}) };
       const token2 = getToken();
       if (token2 && options.withAuth !== false) {
@@ -159,7 +113,7 @@ async function apiFetch(path, options = {}) {
           const body = await retryResp.json();
           detail = normalizeErrorDetail(body, detail);
         } catch (_) {
-          // keep fallback detail
+          console.warn("Failed to parse error response", _);
         }
         throw new Error(detail);
       }
@@ -171,25 +125,19 @@ async function apiFetch(path, options = {}) {
     authErr.status = 401;
     throw authErr;
   }
-
   if (!response.ok) {
     let detail = `HTTP ${response.status}`;
     try {
       const body = await response.json();
       detail = normalizeErrorDetail(body, detail);
     } catch (_) {
-      // keep fallback detail
+      console.warn("Failed to parse error response", _);
     }
     throw new Error(detail);
   }
-
-  // Return raw Response for file downloads; parse JSON otherwise
   if (options.raw) return response;
   return response.json();
 }
-
-// ── Auth ──────────────────────────────────────────────────────────────────────
-
 export async function apiRegister(email, password, name = null) {
   return apiFetch("/auth/register", {
     method: "POST",
@@ -197,7 +145,6 @@ export async function apiRegister(email, password, name = null) {
     body: JSON.stringify({ email, password, name }),
   });
 }
-
 export async function apiLogin(email, password) {
   return apiFetch("/auth/login", {
     method: "POST",
@@ -205,15 +152,13 @@ export async function apiLogin(email, password) {
     body: JSON.stringify({ email, password }),
   });
 }
-
-export async function apiGoogleLogin(credential, clientId = null) {
-  return apiFetch("/auth/google", {
+export async function apiSyncSession(accessToken, refreshToken) {
+  return apiFetch("/auth/sync-session", {
     method: "POST",
     withAuth: false,
-    body: JSON.stringify({ credential, client_id: clientId }),
+    body: JSON.stringify({ access_token: accessToken, refresh_token: refreshToken }),
   });
 }
-
 export async function apiForgotPassword(email) {
   return apiFetch("/auth/forgot-password", {
     method: "POST",
@@ -222,62 +167,33 @@ export async function apiForgotPassword(email) {
   });
 }
 
-export async function apiResetPassword(token, newPassword) {
-  return apiFetch("/auth/reset-password", {
-    method: "POST",
-    withAuth: false,
-    body: JSON.stringify({ token, new_password: newPassword }),
-  });
-}
-
 export async function apiMe() {
   return apiFetch("/auth/me");
 }
-
-// ── Analysis ──────────────────────────────────────────────────────────────────
-
 export async function apiAnalyze(file) {
   const form = new FormData();
   form.append("file", file);
   return apiFetch("/analyze", { method: "POST", body: form });
 }
-
 export async function apiChat(question, context = {}, history = []) {
-  // FIX 31: Guard against circular references in context payloads.
   let safeContext = context;
   try {
     JSON.stringify(context);
   } catch (_) {
     safeContext = { ...(context || {}), charts: {} };
   }
-  let chatBody;
-  try {
-    chatBody = JSON.stringify({ question, context: safeContext, history });
-  } catch (err) {
-    throw err;
-  }
+  let chatBody = JSON.stringify({ question, context: safeContext, history });
   return apiFetch("/chat", {
     method: "POST",
     body: chatBody,
   });
 }
-
-// ── History ───────────────────────────────────────────────────────────────────
-
 export async function apiHistory(limit = 20) {
   return apiFetch(`/history?limit=${limit}`);
 }
-
 export async function apiHistoryAnalysis(analysisId) {
   return apiFetch(`/history/${analysisId}`);
 }
-
 export async function apiDeleteAnalysis(analysisId) {
   return apiFetch(`/history/${analysisId}`, { method: "DELETE" });
-}
-
-// ── Health ────────────────────────────────────────────────────────────────────
-
-export async function apiHealth() {
-  return apiFetch("/health", { withAuth: false });
 }

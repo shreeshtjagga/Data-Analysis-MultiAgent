@@ -22,13 +22,17 @@ orjson>=3.9.0        # fast JSON — NaN/Inf → null natively, ~10x stdlib spee
 sqlalchemy>=2.0.30
 asyncpg>=0.29.0
 
-# ─── Cache ────────────────────────────────────────────────────────────────────
+# ─── Cache (Upstash Redis — KEPT, Supabase has no Redis equivalent) ───────────
 redis>=5.0.0
 
-# ─── Auth ─────────────────────────────────────────────────────────────────────
-passlib[bcrypt]>=1.7.4
-bcrypt>=3.2.0,<4.0.0
-python-jose[cryptography]>=3.3.0
+# ─── Auth — Supabase (replaces python-jose, passlib, google-auth) ─────────────
+supabase>=2.4.0            # Supabase Python client for auth and DB
+
+# REMOVED (with reasons):
+# passlib[bcrypt]    → REMOVED: Supabase handles password hashing internally
+# bcrypt             → REMOVED: same reason, no longer store hashed passwords
+# python-jose        → REMOVED: Supabase manages JWT signing/verification
+# google-auth        → REMOVED: Supabase verifies Google tokens via Dashboard config
 
 # ─── Validation ───────────────────────────────────────────────────────────────
 pydantic>=2.7.0
@@ -39,6 +43,7 @@ groq>=0.9.0
 
 # ─── Config ───────────────────────────────────────────────────────────────────
 python-dotenv>=1.0.0
-
-google-auth>=2.29.0
 requests>=2.31.0
+
+# ─── RAG ──────────────────────────────────────────────────────────────────────
+pinecone>=5.0.0    # serverless vector DB + inference API (zero local ML)
