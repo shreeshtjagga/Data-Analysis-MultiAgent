@@ -10,6 +10,37 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_asyn
 from sqlalchemy.orm import DeclarativeBase, relationship
 logger = logging.getLogger(__name__)
 
+<<<<<<< HEAD
+=======
+
+# SQLite only auto-increments when the PK type is exactly INTEGER PRIMARY KEY.
+# Use BigInteger elsewhere, but transparently downgrade to Integer on SQLite.
+PK_TYPE = BigInteger().with_variant(Integer, "sqlite")
+
+
+def _strip_unsupported_params_from_url(database_url: str) -> str:
+    """Remove asyncpg-incompatible parameters from database URL."""
+    parsed = urlparse(database_url)
+    if not parsed.query:
+        return database_url
+    
+    # Parse query parameters
+    params = parse_qs(parsed.query, keep_blank_values=True)
+    
+    # Remove parameters that asyncpg doesn't support
+    unsupported_params = {'sslmode', 'channel_binding', 'gssencmode'}
+    for param in unsupported_params:
+        params.pop(param, None)
+    
+    # Reconstruct query string
+    new_query = urlencode(params, doseq=True)
+    
+    # Reconstruct URL
+    new_parsed = parsed._replace(query=new_query)
+    return urlunparse(new_parsed)
+
+
+>>>>>>> 353dae187ecc0b8c820894f8f192840c351ab417
 def _running_in_container() -> bool:
     return os.getenv('RUNNING_IN_DOCKER', 'false').lower() == 'true' or os.path.exists('/.dockerenv')
 
@@ -67,9 +98,15 @@ class Base(DeclarativeBase):
     pass
 
 class User(Base):
+<<<<<<< HEAD
     __tablename__ = 'users'
     id = Column(BigInteger, primary_key=True, autoincrement=True)
     supabase_id = Column(String(64), unique=True, nullable=True, index=True)
+=======
+    __tablename__ = "users"
+
+    id = Column(PK_TYPE, primary_key=True, autoincrement=True)
+>>>>>>> 353dae187ecc0b8c820894f8f192840c351ab417
     email = Column(String(255), unique=True, nullable=False, index=True)
     name = Column(String(255), nullable=True)
     password_hash = Column(String(255), nullable=True)
@@ -79,10 +116,20 @@ class User(Base):
     analyses = relationship('AnalysisHistory', back_populates='user', cascade='all, delete-orphan', lazy='select')
 
 class AnalysisHistory(Base):
+<<<<<<< HEAD
     __tablename__ = 'analysis_history'
     __table_args__ = (UniqueConstraint('user_id', 'file_hash', name='uq_user_file_hash'),)
     id = Column(BigInteger, primary_key=True, autoincrement=True)
     user_id = Column(BigInteger, ForeignKey('users.id', ondelete='CASCADE'), nullable=False, index=True)
+=======
+    __tablename__ = "analysis_history"
+    __table_args__ = (
+        UniqueConstraint("user_id", "file_hash", name="uq_user_file_hash"),
+    )
+
+    id = Column(PK_TYPE, primary_key=True, autoincrement=True)
+    user_id = Column(PK_TYPE, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+>>>>>>> 353dae187ecc0b8c820894f8f192840c351ab417
     file_name = Column(String(512), nullable=False)
     file_hash = Column(String(64), nullable=False, index=True)
     raw_data = Column(Text, nullable=True)
@@ -97,10 +144,24 @@ class AnalysisHistory(Base):
     metadata_row = relationship('AnalysisMetadata', back_populates='analysis', cascade='all, delete-orphan', uselist=False, lazy='select')
 
 class AnalysisMetadata(Base):
+<<<<<<< HEAD
     __tablename__ = 'analysis_metadata'
     id = Column(BigInteger, primary_key=True, autoincrement=True)
     analysis_id = Column(BigInteger, ForeignKey('analysis_history.id', ondelete='CASCADE'), nullable=False, unique=True, index=True)
     user_id = Column(BigInteger, ForeignKey('users.id', ondelete='CASCADE'), nullable=False, index=True)
+=======
+    __tablename__ = "analysis_metadata"
+
+    id = Column(PK_TYPE, primary_key=True, autoincrement=True)
+    analysis_id = Column(
+        PK_TYPE,
+        ForeignKey("analysis_history.id", ondelete="CASCADE"),
+        nullable=False,
+        unique=True,
+        index=True,
+    )
+    user_id = Column(PK_TYPE, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+>>>>>>> 353dae187ecc0b8c820894f8f192840c351ab417
     file_name = Column(String(512), nullable=False)
     file_size = Column(BigInteger, nullable=True)
     row_count = Column(Integer, nullable=True)

@@ -26,6 +26,7 @@ _supabase_admin: Client = create_client(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY)
 _supabase_public: Client = create_client(SUPABASE_URL, SUPABASE_ANON_KEY)
 
 
+<<<<<<< HEAD
 async def verify_access_token(token: str) -> Optional[dict]:
     """Validate a Supabase JWT and return {sub, email}, or None if invalid."""
     try:
@@ -37,6 +38,19 @@ async def verify_access_token(token: str) -> Optional[dict]:
     except Exception as exc:
         logger.debug('Supabase token verification failed: %s', exc)
         return None
+=======
+JWT_SECRET = os.getenv("JWT_SECRET", "change_this_secret_in_production")
+JWT_ALGORITHM = os.getenv("JWT_ALGORITHM", "HS256")
+JWT_EXPIRE_MINUTES = int(os.getenv("JWT_EXPIRE_MINUTES", "1440"))  # 24 h
+
+APP_ENV = os.getenv("APP_ENV", "production")
+REGISTER_CHECK_DELIVERABILITY = APP_ENV != "development"
+if APP_ENV == "production" and JWT_SECRET == "change_this_secret_in_production":
+    raise RuntimeError("CRITICAL: Default JWT_SECRET is being used in production!")
+
+
+pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
+>>>>>>> 353dae187ecc0b8c820894f8f192840c351ab417
 
 
 def normalize_email(email: str, *, check_deliverability: bool = False) -> Optional[str]:
@@ -82,23 +96,183 @@ async def _get_or_create_profile(
     return user
 
 
+<<<<<<< HEAD
 async def register_user(
     db: AsyncSession,
     email: str,
     password: str,
     name: Optional[str] = None,
 ) -> dict:
+=======
+def hash_password(plain: str) -> str:
+    return pwd_context.hash(plain)
+
+
+def verify_password(plain: str, hashed: str) -> bool:
+    try:
+        return pwd_context.verify(plain, hashed)
+    except Exception as exc:
+        logger.error("Password verification error: %s", exc)
+        return False
+
+
+
+def create_access_token(user_id: int, email: str) -> str:
+    expire = datetime.now(tz=timezone.utc) + timedelta(minutes=JWT_EXPIRE_MINUTES)
+    payload = {
+        "sub": str(user_id),
+        "email": email,
+        "exp": expire,
+        "iat": datetime.now(tz=timezone.utc),
+    }
+    return jwt.encode(payload, JWT_SECRET, algorithm=JWT_ALGORITHM)
+
+
+def verify_access_token(token: str) -> Optional[dict]:
+    try:
+        payload = jwt.decode(token, JWT_SECRET, algorithms=[JWT_ALGORITHM])
+        user_id: str = payload.get("sub")
+        email: str = payload.get("email")
+        if user_id is None or email is None:
+            return None
+        return {"sub": user_id, "email": email}
+    except JWTError as exc:
+        logger.debug("JWT verification failed: %s", exc)
+        return None
+
+
+REFRESH_SECRET = os.getenv("REFRESH_SECRET", JWT_SECRET)
+REFRESH_EXPIRE_DAYS = int(os.getenv("REFRESH_EXPIRE_DAYS", "7"))
+PASSWORD_RESET_SECRET = os.getenv("PASSWORD_RESET_SECRET", JWT_SECRET)
+PASSWORD_RESET_EXPIRE_MINUTES = int(os.getenv("PASSWORD_RESET_EXPIRE_MINUTES", "30"))
+
+
+def create_refresh_token(user_id: int, email: str) -> str:
+    expire = datetime.now(tz=timezone.utc) + timedelta(days=REFRESH_EXPIRE_DAYS)
+    payload = {
+        "sub": str(user_id),
+        "email": email,
+        "exp": expire,
+        "iat": datetime.now(tz=timezone.utc),
+        "typ": "refresh",
+    }
+    return jwt.encode(payload, REFRESH_SECRET, algorithm=JWT_ALGORITHM)
+
+
+def verify_refresh_token(token: str) -> Optional[dict]:
+    try:
+        payload = jwt.decode(token, REFRESH_SECRET, algorithms=[JWT_ALGORITHM])
+        # Ensure token type is refresh
+        if payload.get("typ") != "refresh":
+            return None
+        user_id: str = payload.get("sub")
+        email: str = payload.get("email")
+        if user_id is None or email is None:
+            return None
+        return {"sub": user_id, "email": email}
+    except JWTError as exc:
+        logger.debug("Refresh token verification failed: %s", exc)
+        return None
+
+
+def create_password_reset_token(email: str) -> str:
+    expire = datetime.now(tz=timezone.utc) + timedelta(minutes=PASSWORD_RESET_EXPIRE_MINUTES)
+    payload = {
+        "email": email,
+        "exp": expire,
+        "iat": datetime.now(tz=timezone.utc),
+        "typ": "pwd_reset",
+    }
+    return jwt.encode(payload, PASSWORD_RESET_SECRET, algorithm=JWT_ALGORITHM)
+
+
+def verify_password_reset_token(token: str) -> Optional[str]:
+    try:
+        payload = jwt.decode(token, PASSWORD_RESET_SECRET, algorithms=[JWT_ALGORITHM])
+        if payload.get("typ") != "pwd_reset":
+            return None
+        email = payload.get("email")
+        if not email:
+            return None
+        return str(email)
+    except JWTError as exc:
+        logger.debug("Password reset token verification failed: %s", exc)
+        return None
+
+
+def _send_password_reset_email(to_email: str, reset_link: str) -> bool:
+    smtp_host = os.getenv("SMTP_HOST", "").strip()
+    smtp_port = int(os.getenv("SMTP_PORT", "587"))
+    smtp_user = os.getenv("SMTP_USER", "").strip()
+    smtp_password = os.getenv("SMTP_PASSWORD", "")
+    smtp_use_tls = os.getenv("SMTP_USE_TLS", "true").lower() == "true"
+    mail_from = os.getenv("MAIL_FROM", smtp_user).strip()
+
+    if not smtp_host or not mail_from:
+        logger.warning("SMTP not configured; skipping password reset email dispatch")
+        return False
+
+    message = EmailMessage()
+    message["Subject"] = "DataPulse password reset"
+    message["From"] = mail_from
+    message["To"] = to_email
+    message.set_content(
+        "We received a request to reset your DataPulse password.\n\n"
+        f"Reset link: {reset_link}\n\n"
+        f"This link expires in {PASSWORD_RESET_EXPIRE_MINUTES} minutes.\n"
+        "If you did not request this, you can ignore this email."
+    )
+
+    try:
+        with smtplib.SMTP(smtp_host, smtp_port, timeout=10) as server:
+            if smtp_use_tls:
+                server.starttls()
+            if smtp_user and smtp_password:
+                server.login(smtp_user, smtp_password)
+            server.send_message(message)
+        return True
+    except Exception as exc:
+        logger.exception("Failed to send password reset email: %s", exc)
+        return False
+
+
+def _frontend_base_url() -> str:
+    configured = os.getenv("FRONTEND_URL", "").strip().rstrip("/")
+    if configured:
+        return configured
+
+    cors_origins = os.getenv("CORS_ORIGINS", "")
+    for origin in cors_origins.split(","):
+        origin = origin.strip().rstrip("/")
+        if origin:
+            return origin
+
+    return "http://localhost:5173"
+
+
+
+async def register_user(db: AsyncSession, email: str, password: str, name: Optional[str] = None) -> dict:
+>>>>>>> 353dae187ecc0b8c820894f8f192840c351ab417
     if not email or not password:
         return {'success': False, 'message': 'Email and password are required'}
 
+<<<<<<< HEAD
     normalized_email = normalize_email(email, check_deliverability=False)
     if not normalized_email:
         return {'success': False, 'message': 'Please enter a valid email address'}
+=======
+    normalized_email = normalize_email(email, check_deliverability=REGISTER_CHECK_DELIVERABILITY)
+    if not normalized_email:
+        if REGISTER_CHECK_DELIVERABILITY:
+            return {"success": False, "message": "Please enter a valid, deliverable email address"}
+        return {"success": False, "message": "Please enter a valid email address"}
+>>>>>>> 353dae187ecc0b8c820894f8f192840c351ab417
 
     if len(password) < 6:
         return {'success': False, 'message': 'Password must be at least 6 characters'}
 
     try:
+<<<<<<< HEAD
         resp = await asyncio.to_thread(
             _supabase_admin.auth.admin.create_user,
             {
@@ -117,6 +291,18 @@ async def register_user(
             return {'success': False, 'message': 'Email already registered. Please log in instead.'}
         logger.error('Supabase register_user failed: %s', exc)
         return {'success': False, 'message': 'Registration failed. Please try again.'}
+=======
+        await db.flush()
+        await db.refresh(user)
+        await db.commit()
+    except IntegrityError as exc:
+        await db.rollback()
+        logger.exception("User registration failed for %s", normalized_email)
+        detail = str(getattr(exc, "orig", exc)).lower()
+        if "email" in detail and ("unique" in detail or "duplicate" in detail):
+            return {"success": False, "message": "Email already registered. Please log in instead."}
+        return {"success": False, "message": "Could not create account due to a database error. Please try again."}
+>>>>>>> 353dae187ecc0b8c820894f8f192840c351ab417
 
     try:
         user = await _get_or_create_profile(db, str(supabase_user.id), normalized_email, name)
@@ -242,7 +428,25 @@ async def request_password_reset(db: AsyncSession, email: str) -> dict:
     except Exception as exc:
         logger.warning('Password reset request failed (non-fatal): %s', exc)
 
+<<<<<<< HEAD
     return {'success': True, 'message': generic_message, 'email_sent': True}
+=======
+    token = create_password_reset_token(user.email)
+    frontend_url = _frontend_base_url()
+    reset_link = f"{frontend_url}/reset-password?token={token}"
+
+    sent = _send_password_reset_email(user.email, reset_link)
+    app_env = os.getenv("APP_ENV", "production")
+    expose_debug = os.getenv("EXPOSE_RESET_TOKEN_IN_DEV", "false").lower() == "true"
+    debug_token = token if (app_env == "development" and (expose_debug or not sent)) else None
+
+    return {
+        "success": True,
+        "message": generic_message,
+        "debug_reset_token": debug_token,
+        "email_sent": sent,
+    }
+>>>>>>> 353dae187ecc0b8c820894f8f192840c351ab417
 
 
 async def reset_password_with_token(db: AsyncSession, token: str, new_password: str) -> dict:
