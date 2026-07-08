@@ -29,6 +29,7 @@ JWT_ALGORITHM = os.getenv("JWT_ALGORITHM", "HS256")
 JWT_EXPIRE_MINUTES = int(os.getenv("JWT_EXPIRE_MINUTES", "1440"))  # 24 h
 
 APP_ENV = os.getenv("APP_ENV", "production")
+REGISTER_CHECK_DELIVERABILITY = APP_ENV != "development"
 if APP_ENV == "production" and JWT_SECRET == "change_this_secret_in_production":
     raise RuntimeError("CRITICAL: Default JWT_SECRET is being used in production!")
 
@@ -180,14 +181,30 @@ def _send_password_reset_email(to_email: str, reset_link: str) -> bool:
         return False
 
 
+def _frontend_base_url() -> str:
+    configured = os.getenv("FRONTEND_URL", "").strip().rstrip("/")
+    if configured:
+        return configured
+
+    cors_origins = os.getenv("CORS_ORIGINS", "")
+    for origin in cors_origins.split(","):
+        origin = origin.strip().rstrip("/")
+        if origin:
+            return origin
+
+    return "http://localhost:5173"
+
+
 
 async def register_user(db: AsyncSession, email: str, password: str, name: Optional[str] = None) -> dict:
     if not email or not password:
         return {"success": False, "message": "Email and password are required"}
 
-    normalized_email = normalize_email(email, check_deliverability=True)
+    normalized_email = normalize_email(email, check_deliverability=REGISTER_CHECK_DELIVERABILITY)
     if not normalized_email:
-        return {"success": False, "message": "Please enter a valid, deliverable email address"}
+        if REGISTER_CHECK_DELIVERABILITY:
+            return {"success": False, "message": "Please enter a valid, deliverable email address"}
+        return {"success": False, "message": "Please enter a valid email address"}
 
     if len(password) < 6:
         return {"success": False, "message": "Password must be at least 6 characters"}
@@ -202,9 +219,13 @@ async def register_user(db: AsyncSession, email: str, password: str, name: Optio
         await db.flush()
         await db.refresh(user)
         await db.commit()
-    except IntegrityError:
+    except IntegrityError as exc:
         await db.rollback()
-        return {"success": False, "message": "Email already registered. Please log in instead."}
+        logger.exception("User registration failed for %s", normalized_email)
+        detail = str(getattr(exc, "orig", exc)).lower()
+        if "email" in detail and ("unique" in detail or "duplicate" in detail):
+            return {"success": False, "message": "Email already registered. Please log in instead."}
+        return {"success": False, "message": "Could not create account due to a database error. Please try again."}
 
     logger.info("User registered: %s (id=%d)", normalized_email, user.id)
     return {
@@ -331,7 +352,7 @@ async def request_password_reset(db: AsyncSession, email: str) -> dict:
         return {"success": True, "message": generic_message}
 
     token = create_password_reset_token(user.email)
-    frontend_url = os.getenv("FRONTEND_URL", "http://localhost:5173").strip().rstrip("/")
+    frontend_url = _frontend_base_url()
     reset_link = f"{frontend_url}/reset-password?token={token}"
 
     sent = _send_password_reset_email(user.email, reset_link)

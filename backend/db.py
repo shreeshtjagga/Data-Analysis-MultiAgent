@@ -21,6 +21,11 @@ from .core.utils import rewrite_local_dev_host
 logger = logging.getLogger(__name__)
 
 
+# SQLite only auto-increments when the PK type is exactly INTEGER PRIMARY KEY.
+# Use BigInteger elsewhere, but transparently downgrade to Integer on SQLite.
+PK_TYPE = BigInteger().with_variant(Integer, "sqlite")
+
+
 def _strip_unsupported_params_from_url(database_url: str) -> str:
     """Remove asyncpg-incompatible parameters from database URL."""
     parsed = urlparse(database_url)
@@ -130,7 +135,7 @@ class Base(DeclarativeBase):
 class User(Base):
     __tablename__ = "users"
 
-    id = Column(BigInteger, primary_key=True, autoincrement=True)
+    id = Column(PK_TYPE, primary_key=True, autoincrement=True)
     email = Column(String(255), unique=True, nullable=False, index=True)
     name = Column(String(255), nullable=True)
     password_hash = Column(String(255), nullable=False)
@@ -157,8 +162,8 @@ class AnalysisHistory(Base):
         UniqueConstraint("user_id", "file_hash", name="uq_user_file_hash"),
     )
 
-    id = Column(BigInteger, primary_key=True, autoincrement=True)
-    user_id = Column(BigInteger, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    id = Column(PK_TYPE, primary_key=True, autoincrement=True)
+    user_id = Column(PK_TYPE, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
     file_name = Column(String(512), nullable=False)
     file_hash = Column(String(64), nullable=False, index=True)
 
@@ -185,15 +190,15 @@ class AnalysisHistory(Base):
 class AnalysisMetadata(Base):
     __tablename__ = "analysis_metadata"
 
-    id = Column(BigInteger, primary_key=True, autoincrement=True)
+    id = Column(PK_TYPE, primary_key=True, autoincrement=True)
     analysis_id = Column(
-        BigInteger,
+        PK_TYPE,
         ForeignKey("analysis_history.id", ondelete="CASCADE"),
         nullable=False,
         unique=True,
         index=True,
     )
-    user_id = Column(BigInteger, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    user_id = Column(PK_TYPE, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
     file_name = Column(String(512), nullable=False)
     file_size = Column(BigInteger, nullable=True)
     row_count = Column(Integer, nullable=True)
