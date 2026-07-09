@@ -140,23 +140,23 @@ def _build_all_candidates(df: pd.DataFrame, existing_chart_keys: list[str]) -> l
             _add('ranked_bar', cat, num, title=f'Top {cat} by {num}')
     for cat in categorical:
         nu = df[cat].nunique(dropna=True)
-        if 2 <= nu <= 20:
+        if 2 <= nu <= 50:
             for num in numeric:
                 _add('grouped_bar', cat, num, title=f'Average {num} by {cat}')
     for c in numeric:
         _add('histogram', c, None, title=f'Distribution of {c}')
     for cat in categorical:
         nu = df[cat].nunique(dropna=True)
-        if 2 <= nu <= 8:
+        if 2 <= nu <= 20:
             _add('donut', cat, None, title=f'Composition of {cat}')
     for cat in categorical:
         nu = df[cat].nunique(dropna=True)
-        if 2 <= nu <= 15:
+        if 2 <= nu <= 40:
             for num in numeric:
                 _add('box', cat, num, title=f'{num} distribution by {cat}')
     for cat in categorical:
         nu = df[cat].nunique(dropna=True)
-        if 2 <= nu <= 6:
+        if 2 <= nu <= 15:
             for num in numeric:
                 _add('violin', cat, num, title=f'{num} by {cat}')
     for cat in categorical:
@@ -166,7 +166,7 @@ def _build_all_candidates(df: pd.DataFrame, existing_chart_keys: list[str]) -> l
     for dt in datetime_cols:
         for num in numeric[:3]:
             _add('line', dt, num, title=f'{num} over time')
-    small_cats = [c for c in categorical if 2 <= df[c].nunique(dropna=True) <= 8]
+    small_cats = [c for c in categorical if 2 <= df[c].nunique(dropna=True) <= 16]
     if len(small_cats) >= 2:
         _add('stacked_bar', small_cats[0], None, color=small_cats[1], title=f'{small_cats[0]} vs {small_cats[1]}')
     return candidates
@@ -263,9 +263,9 @@ def suggest_novel_chart(df_records: list[dict], existing_chart_keys: list[str], 
 def _explain_why_type_impossible(requested_types: list[str], df: pd.DataFrame, numeric: list[str], categorical: list[str], existing_keys: list[str]) -> Optional[str]:
     for rtype in requested_types:
         if rtype in ('donut', 'pie'):
-            low_card = [c for c in categorical if 2 <= df[c].nunique(dropna=True) <= 8]
+            low_card = [c for c in categorical if 2 <= df[c].nunique(dropna=True) <= 20]
             if not low_card:
-                return f"A pie/donut chart requires a categorical column with 2-8 unique values. The categorical columns in this dataset have too many unique values ({', '.join((f'{c} ({df[c].nunique()})' for c in categorical[:3]))})."
+                return f"A pie/donut chart requires a categorical column with 2-20 unique values. The categorical columns in this dataset have too many unique values ({', '.join((f'{c} ({df[c].nunique()})' for c in categorical[:3]))})."
         elif rtype == 'scatter':
             if len(numeric) < 2:
                 return f"A scatter plot requires at least 2 numeric columns. This dataset only has {len(numeric)}: {', '.join(numeric)}."

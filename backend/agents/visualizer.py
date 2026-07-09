@@ -17,7 +17,7 @@ from ..core.llm_client import get_groq_client
 logger = logging.getLogger(__name__)
 COLOR_PALETTE = px.colors.qualitative.Bold
 TEMPLATE = 'plotly_white'
-MAX_OUTPUT_CHARTS = 8
+MAX_OUTPUT_CHARTS = 20
 _SCATTER_MAX_ROWS = 3000
 _HIST_MAX_ROWS = 8000
 _TS_MAX_POINTS = 600
@@ -221,7 +221,7 @@ def _build_grouped_bar(df: pd.DataFrame, cat_col: str, num_col: str, title: str,
     if not pd.api.types.is_numeric_dtype(df[num_col]):
         return None
     n_cats = df[cat_col].nunique(dropna=True)
-    if not 2 <= n_cats <= 40:
+    if not 2 <= n_cats <= 100:
         return None
     comp = min(_completeness(df[cat_col]), _completeness(df[num_col]))
     if comp < 0.4:
@@ -362,7 +362,7 @@ def _build_box(df: pd.DataFrame, cat_col: str, num_col: str, title: str='') -> O
     if not pd.api.types.is_numeric_dtype(df[num_col]):
         return None
     n_cats = df[cat_col].nunique(dropna=True)
-    if not 2 <= n_cats <= 20:
+    if not 2 <= n_cats <= 50:
         return None
     comp = min(_completeness(df[cat_col]), _completeness(df[num_col]))
     if comp < 0.4:
@@ -380,7 +380,7 @@ def _build_violin(df: pd.DataFrame, cat_col: str, num_col: str, title: str='') -
     if not pd.api.types.is_numeric_dtype(df[num_col]):
         return None
     n_cats = df[cat_col].nunique(dropna=True)
-    if not 2 <= n_cats <= 6:
+    if not 2 <= n_cats <= 15:
         return None
     comp = min(_completeness(df[cat_col]), _completeness(df[num_col]))
     if comp < 0.4:
@@ -396,7 +396,7 @@ def _build_donut(df: pd.DataFrame, cat_col: str, title: str='') -> Optional[Char
     if cat_col not in df.columns:
         return None
     n = df[cat_col].nunique(dropna=True)
-    if not 2 <= n <= 8:
+    if not 2 <= n <= 20:
         return None
     comp = _completeness(df[cat_col])
     if comp < 0.6:
@@ -439,7 +439,7 @@ def _build_stacked_bar(df: pd.DataFrame, x_col: str, cat_col: str, num_col: Opti
         return None
     nx = df[x_col].nunique(dropna=True)
     nc = df[cat_col].nunique(dropna=True)
-    if not (2 <= nx <= 15 and 2 <= nc <= 8):
+    if not (2 <= nx <= 30 and 2 <= nc <= 15):
         return None
     if num_col and num_col in df.columns and pd.api.types.is_numeric_dtype(df[num_col]):
         agg = 'sum' if _should_sum(num_col, df[num_col]) else 'mean'
@@ -458,7 +458,7 @@ def _build_freq_bar(df: pd.DataFrame, cat_col: str, title: str='') -> Optional[C
     if cat_col not in df.columns:
         return None
     n = df[cat_col].nunique(dropna=True)
-    if not 2 <= n <= 50:
+    if not 2 <= n <= 150:
         return None
     comp = _completeness(df[cat_col])
     if comp < 0.5:
@@ -563,7 +563,7 @@ def _execute_plan(df: pd.DataFrame, plan: list[dict], cols: dict, stats: dict) -
             chart = _build_heatmap(df, cols['num'], title=ttl)
         elif ct in ('donut', 'pie') and x:
             if x not in df.columns:
-                x_fallback = next((c for c in cols['cat'] if 2 <= df[c].nunique(dropna=True) <= 8), None)
+                x_fallback = next((c for c in cols['cat'] if 2 <= df[c].nunique(dropna=True) <= 20), None)
                 if x_fallback:
                     logger.debug('LLM donut x=%r is not a column — falling back to %r', x, x_fallback)
                     x = x_fallback
@@ -689,7 +689,7 @@ def _heuristic_plan(df: pd.DataFrame, cols: dict, stats: dict) -> list[Chart]:
             _add(_build_violin(df, best_cat, num[1]))
         elif 2 <= n_cats <= 15:
             _add(_build_box(df, best_cat, num[1]))
-    small_cats = [c for c in cat if 2 <= df[c].nunique(dropna=True) <= 8]
+    small_cats = [c for c in cat if 2 <= df[c].nunique(dropna=True) <= 15]
     if len(small_cats) >= 2:
         _add(_build_stacked_bar(df, small_cats[0], small_cats[1]))
     if not charts:
@@ -720,7 +720,7 @@ def _apply_analytical_bonus(charts: list[Chart]) -> list[Chart]:
     return charts
 
 def _deduplicate_and_select(charts: list[Chart]) -> dict[str, go.Figure]:
-    family_limits = {'heatmap': 1, 'line': 2, 'scatter': 1, 'histogram': 2, 'box': 1, 'violin': 1, 'donut': 2, 'bar': 3, 'likert': 1, 'stacked': 1, 'ranked': 2, 'grouped': 2, 'freq': 2}
+    family_limits = {'heatmap': 2, 'line': 4, 'scatter': 4, 'histogram': 4, 'box': 3, 'violin': 3, 'donut': 4, 'bar': 5, 'likert': 3, 'stacked': 4, 'ranked': 4, 'grouped': 4, 'freq': 4}
 
     def _family(key: str) -> str:
         for f in family_limits:
@@ -738,7 +738,7 @@ def _deduplicate_and_select(charts: list[Chart]) -> dict[str, go.Figure]:
         if pair in seen_pairs and len(pair) > 1:
             continue
         fam = _family(c.key)
-        if family_count.get(fam, 0) >= family_limits.get(fam, 2):
+        if family_count.get(fam, 0) >= family_limits.get(fam, 5):
             continue
         seen_keys.add(c.key)
         seen_pairs.add(pair)

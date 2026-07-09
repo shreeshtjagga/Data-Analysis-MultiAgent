@@ -663,6 +663,18 @@ const ChatBubble = memo(({ m, PlotComponent, result, stopPageZoomOnCtrlWheel, on
             }
           }
 
+          let codeBlockJSX = null;
+          if (m.code) {
+            codeBlockJSX = (
+              <details style={{ marginTop: '8px', background: 'rgba(0,0,0,0.2)', borderRadius: '8px', padding: '8px', border: '1px solid rgba(255,255,255,0.1)' }}>
+                <summary style={{ fontSize: '12px', cursor: 'pointer', color: 'var(--text-muted)', userSelect: 'none', fontWeight: 600 }}>Show Python Code</summary>
+                <pre style={{ margin: '8px 0 0 0', padding: '12px', background: 'rgba(0,0,0,0.5)', borderRadius: '6px', overflowX: 'auto', fontSize: '12px', color: '#a5b4fc', fontFamily: 'monospace', whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
+                  <code>{m.code}</code>
+                </pre>
+              </details>
+            );
+          }
+
           if (parsedJson) {
             const finalAnswerText = String(parsedJson.direct_answer || '').replace(/\[CHART:\s*[^\]]+\]/g, '').trim();
 
@@ -674,6 +686,7 @@ const ChatBubble = memo(({ m, PlotComponent, result, stopPageZoomOnCtrlWheel, on
                   </div>
                 )}
                 {inlineChartJSX}
+                {codeBlockJSX}
                 {parsedJson.proactive_insight && (
                   <div style={{ padding: '12px', background: 'rgba(99,102,241,0.08)', borderRadius: '8px', borderLeft: '3px solid var(--primary-500)', fontSize: '14px', lineHeight: 1.5 }}>
                     <span style={{ color: 'var(--primary-500)', fontWeight: 700, marginRight: '6px' }}>Insight:</span>
@@ -704,6 +717,7 @@ const ChatBubble = memo(({ m, PlotComponent, result, stopPageZoomOnCtrlWheel, on
             <>
               {finalCleanText && renderMarkdown(finalCleanText)}
               {inlineChartJSX}
+              {codeBlockJSX}
             </>
           );
         })()}
@@ -1685,6 +1699,7 @@ export default function DataPulse({ user, onLogout }) {
         role: "ai",
         text: cleanAnswer,
         newChart: resp?.new_chart?.fig ? resp.new_chart : null,
+        code: resp?.code || null,
       }].slice(-MAX_CHAT_MESSAGES));
     } catch (err) {
       const detail = err?.message || "Unable to reach AI";

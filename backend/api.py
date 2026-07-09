@@ -638,19 +638,19 @@ async def chat_with_analysis(body: ChatRequest, user_id: int=Depends(get_current
     intent = _classify_chat_intent(question)
     logger.info("Chat intent classified as '%s' for question: %s", intent, question[:80])
     if intent == 'off_topic':
-        return {'answer': "I'm a data analysis assistant focused on your dataset. I can help you analyze trends, summarize data, and build charts, but I can't answer off-topic questions or write general code.", 'data_queried': False, 'new_chart': None}
+        return {'answer': "Hey, I'm really only good at crunching numbers from your dataset! I can help with trends, stats, charts — but general questions are a bit out of my league 😅", 'data_queried': False, 'new_chart': None}
     if intent == 'greeting':
         _q = question.lower()
         if any((t in _q for t in ('bye', 'goodbye', 'see you', 'later', 'cya'))):
-            msg = f'Goodbye! Your analysis of {file_name} is saved in History. Come back anytime.'
+            msg = f'See ya! Your {file_name} analysis is saved in History whenever you need it. 👋'
         elif any((t in _q for t in ('thanks', 'thank you', 'thx', 'ty', 'thank'))):
-            msg = f'Happy to help! Let me know if you have more questions about {file_name}.'
+            msg = f'No problem! Hit me up if you have more questions about {file_name}. 🙌'
         elif any((t in _q for t in ('who are you',))):
-            msg = "I'm your AI data analyst. I answer questions about your dataset, find correlations, and generate charts on demand."
+            msg = "I'm your data buddy! I can answer questions about your dataset, spot patterns, and whip up charts on the fly."
         elif any((t in _q for t in ('how are you',))):
-            msg = 'Running smoothly! Ready to dig into your data whenever you are.'
+            msg = 'Doing great! Ready to dig into your data whenever you are. 💪'
         else:
-            msg = f"Hello! I'm your AI analyst for '{file_name}'. Ask me about statistics, relationships, trends — or say 'generate a chart' to create a new visualization."
+            msg = f"Hey there! 👋 I'm here to help you explore '{file_name}'. Ask me anything about the data, or just say 'generate a chart' and I'll make one for you!"
         return {'answer': msg, 'data_queried': False, 'new_chart': None}
     if intent == 'generate_chart':
         from .agents.plot_generator import generate_on_demand_chart, suggest_novel_chart
@@ -815,3 +815,77 @@ async def chat_with_analysis(body: ChatRequest, user_id: int=Depends(get_current
         ans_result = await answer_question(question=question, file_hash=file_hash, file_name=file_name, stats=stats, insights=insights, chart_keys=existing_chart_keys, conversation_history=body.history or [], groq_client=_data_client, redis_client=_data_redis)
         return ans_result
     return {'answer': f"The dataset '{file_name}' has {stats.get('row_count', '?')} rows and {stats.get('column_count', '?')} columns. I need a valid Groq API key to answer specific questions about it.", 'data_queried': False, 'new_chart': None}
+
+class AnalyzeQueryRequest(BaseModel):
+    file_hash: str
+    question: str
+    file_name: str = "dataset"
+    chart_keys: list[str] = []
+    history: list[dict] = []
+
+@app.post('/api/analyze', tags=['analysis'])
+async def analyze_query_loop(body: AnalyzeQueryRequest, user_id: int = Depends(get_current_user_id), db: AsyncSession = Depends(get_db)):
+    from .core.data_agent import _load_df
+    from .rag.pandas_executor import execute_pandas_with_retry, build_rich_context, format_result
+    from .rag.chat_engine import _data_system_prompt, _sanitize_llm_output
+    import time
+    
+    # 1. Load DataFrame
+    df, load_err = _load_df(body.file_hash)
+    if df is None or df.empty:
+        raise HTTPException(status_code=400, detail=f"Could not load dataset: {load_err}")
+        
+    groq_client = get_groq_client()
+    if not groq_client:
+        raise HTTPException(status_code=500, detail="LLM client not configured")
+        
+    # 2. Generate code, execute, and retry automatically (the Loop)
+    logger.info("Starting internal analyze loop for question: %s", body.question)
+    exec_result = await execute_pandas_with_retry(body.question, df, groq_client, max_retries=3)
+    
+    if exec_result['error']:
+        # The loop failed after retries. We can't answer with pandas.
+        return {"success": False, "error": exec_result['error'], "code": exec_result.get('code')}
+        
+    # 3. Validation and Synthesis (Verify -> Answer)
+    formatted = format_result(exec_result['result'])
+    rich_ctx = build_rich_context(exec_result['result'], df, body.question)
+    
+    messages = [
+        {'role': 'system', 'content': _data_system_prompt(body.file_name, body.chart_keys)},
+        {'role': 'system', 'content': f'PANDAS RESULT (computed from the REAL dataset — trust these numbers 100%):\n{formatted}\n\nADDITIONAL CONTEXT:\n{json.dumps(rich_ctx, default=str)}'}
+    ]
+    
+    _SAFE_ROLES = {'assistant', 'ai', 'user', 'human'}
+    for msg in (body.history or [])[-4:]:
+        raw_role = str(msg.get('role', '')).lower()
+        if raw_role not in _SAFE_ROLES:
+            continue
+        role = 'assistant' if raw_role in ('assistant', 'ai') else 'user'
+        messages.append({'role': role, 'content': str(msg.get('content', ''))[:800]})
+        
+    messages.append({'role': 'user', 'content': body.question})
+    
+    try:
+        completion = await asyncio.to_thread(
+            groq_client.chat.completions.create, 
+            model=SYNTHESIS_MODEL, 
+            messages=messages, 
+            temperature=0.05, 
+            max_tokens=500
+        )
+        answer = _sanitize_llm_output((completion.choices[0].message.content or '').strip())
+        new_chart = None
+        if exec_result.get('fig_dict'):
+            new_chart = {'id': f'gen_{int(time.time())}', 'fig': exec_result['fig_dict']}
+            
+        return {
+            "success": True, 
+            "answer": answer, 
+            "data_queried": True, 
+            "new_chart": new_chart, 
+            "code": exec_result['code']
+        }
+    except Exception as exc:
+        logger.error('Analyze API synthesis failed: %s', exc)
+        return {"success": False, "error": str(exc), "code": exec_result['code']}

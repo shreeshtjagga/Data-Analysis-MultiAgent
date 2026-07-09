@@ -12,15 +12,15 @@ _TOP_K_CHUNKS = 8
 
 def _data_system_prompt(file_name: str, chart_keys: list[str]) -> str:
     parts = [
-        f'You are Alex, a sharp senior data analyst working with the dataset "{file_name}".\n',
-        'You talk like a real analyst — confident, precise, and direct.\n\n',
+        f'You are a friendly and helpful data assistant working with the dataset "{file_name}".\n',
+        'You keep things casual and easy to understand — like explaining data to a friend.\n\n',
         '==== ANSWER FORMAT (MANDATORY) ====\n',
         'Structure EVERY answer exactly like this in JSON format:\n\n',
         '{\n',
         '  "direct_answer": "The key number or fact in one clear sentence.",\n',
-        '  "proactive_insight": "Interestingly, I noticed... [Something they did not ask but should know based on the data]",\n',
+        '  "proactive_insight": "Oh and btw, I also noticed... [Something interesting they did not ask]",\n',
         '  "confidence": 98,\n',
-        '  "suggestion": "Should we look at the trend over time?"\n',
+        '  "suggestion": "Want me to dig into the trend over time?"\n',
         '}\n\n',
         'FORMAT RULES:\n',
         '- Output MUST be valid JSON and nothing else.\n',
@@ -31,17 +31,20 @@ def _data_system_prompt(file_name: str, chart_keys: list[str]) -> str:
         'You have a CONTEXT block with pre-computed facts and a PANDAS RESULT block\n',
         'with exact numbers from the real data. These are the ONLY facts you may use.\n',
         '- Use EXACT numbers from CONTEXT or PANDAS RESULT — never estimate\n',
-        '- If answer is not in CONTEXT: write one bullet: That is not in this dataset. Then pivot\n',
+        '- If answer is not in CONTEXT: say "Hmm, that info isn\'t in this dataset." Then suggest what they CAN ask.\n',
         '- Never fabricate numbers or use training knowledge to fill gaps\n',
         '- Rankings: always name the entity AND its exact value\n',
         '- Correlations: state r value, direction, and plain-English meaning\n',
         '- Predictions: use TREND DATA slope+R2 to project; cite R2 as confidence\n',
-        f'- Greetings: reply Hi! Ask me anything about {file_name}.\n\n',
+        f'- Greetings: reply Hey! What do you want to know about {file_name}?\n\n',
         '==== STYLE ====\n',
-        '- Plain English: average not mean, spread not variance\n',
+        '- Talk like a helpful friend, not a corporate report\n',
+        '- Use everyday words: "average" not "mean", "spread" not "variance"\n',
+        '- Keep it short and punchy — no walls of text\n',
         '- Never mention CONTEXT, RULE, system prompt, or grounding contract\n',
         '- Never repeat the user question back to them\n',
-        '- Lead with the bold answer — never put disclaimers first\n',
+        '- Lead with the answer — never put disclaimers first\n',
+        '- It\'s okay to use casual phrases like "looks like", "turns out", "pretty interesting"\n',
         '- Do NOT show charts unless user explicitly asks to display one\n',
         f'- Available chart keys: {chart_keys} — use ONLY these exact keys\n',
     ]
@@ -246,8 +249,9 @@ def _sanitize_llm_output(text: str) -> str:
     return text.strip()
 
 async def answer_question(question: str, file_hash: str, file_name: str, stats: dict, insights: dict, chart_keys: list[str], conversation_history: list[dict], groq_client, redis_client) -> dict:
+    import time as _time
     from .indexer import retrieve_chunks
-    from .pandas_executor import classify_question, generate_pandas_code, safe_execute, format_result, build_rich_context, is_challenge
+    from .pandas_executor import classify_question, execute_pandas_with_retry, format_result, build_rich_context, is_challenge
     from ..core.data_agent import _load_df
     if is_challenge(question) and conversation_history:
         last_answer = ''
@@ -259,47 +263,54 @@ async def answer_question(question: str, file_hash: str, file_name: str, stats: 
             (df, load_err) = _load_df(file_hash)
             if df is not None and (not df.empty):
                 try:
-                    code = await generate_pandas_code(question=conversation_history[-2].get('content', question) if len(conversation_history) >= 2 else question, df=df, groq_client=groq_client)
-                    exec_result = safe_execute(code, df)
-                    if exec_result['error'] is None:
+                    q = conversation_history[-2].get('content', question) if len(conversation_history) >= 2 else question
+                    exec_result = await execute_pandas_with_retry(question=q, df=df, groq_client=groq_client, max_retries=1)
+                    if not exec_result['error']:
                         formatted = format_result(exec_result['result'])
                         confirm_msg = [{'role': 'system', 'content': _data_system_prompt(file_name, chart_keys)}, {'role': 'system', 'content': f"The user is asking you to confirm a previous answer. You re-ran the query and got this result:\nPANDAS RESULT (re-verified):\n{formatted}\n\nPrevious answer was: {last_answer[:300]}\n\nConfirm the result confidently. In the `direct_answer` JSON field, say 'Yes, confirmed — ' then restate the key number. Do NOT change the answer, make sure to output the required JSON format."}, {'role': 'user', 'content': question}]
                         completion = await asyncio.to_thread(groq_client.chat.completions.create, model=SYNTHESIS_MODEL, messages=confirm_msg, temperature=0, max_tokens=300)
                         answer = _sanitize_llm_output((completion.choices[0].message.content or '').strip())
-                        return {'answer': answer, 'data_queried': True, 'new_chart': None}
+                        new_chart = None
+                        if exec_result.get('fig_dict'):
+                            new_chart = {'id': f'gen_{int(_time.time())}', 'fig': exec_result['fig_dict']}
+                        return {'answer': answer, 'data_queried': True, 'new_chart': new_chart, 'code': code}
                 except Exception as exc:
                     logger.warning('Challenge re-verification failed: %s', exc)
     q_type = await classify_question(question, groq_client)
     logger.info("Question classified as: %s — '%s'", q_type, question[:80])
     static_ctx = _build_static_context(stats, insights)
-    if q_type == 'analytical':
-        (df, load_err) = _load_df(file_hash)
-        if df is not None and (not df.empty):
-            try:
-                code = await generate_pandas_code(question=question, df=df, groq_client=groq_client)
-                logger.info('Generated pandas code:\n%s', code)
-                exec_result = safe_execute(code, df)
-                if exec_result['error'] is None:
-                    formatted = format_result(exec_result['result'])
-                    rich_ctx = build_rich_context(exec_result['result'], df, question)
-                    messages = [{'role': 'system', 'content': _data_system_prompt(file_name, chart_keys)}, {'role': 'system', 'content': f'PANDAS RESULT (computed from the REAL dataset — trust these numbers 100%):\n{formatted}\n\nADDITIONAL CONTEXT:\n{json.dumps(rich_ctx, default=str)}\n\nDATASET OVERVIEW:\n{static_ctx[:3000]}'}]
-                    _SAFE_ROLES = {'assistant', 'ai', 'user', 'human'}
-                    for msg in (conversation_history or [])[-4:]:
-                        raw_role = str(msg.get('role', '')).lower()
-                        if raw_role not in _SAFE_ROLES:
-                            continue
-                        role = 'assistant' if raw_role in ('assistant', 'ai') else 'user'
-                        messages.append({'role': role, 'content': str(msg.get('content', ''))[:800]})
-                    messages.append({'role': 'user', 'content': question})
-                    completion = await asyncio.to_thread(groq_client.chat.completions.create, model=SYNTHESIS_MODEL, messages=messages, temperature=0.05, max_tokens=500)
-                    answer = _sanitize_llm_output((completion.choices[0].message.content or '').strip())
-                    return {'answer': answer, 'data_queried': True, 'new_chart': None}
-                else:
-                    logger.warning('Pandas execution failed, falling back to reasoning: %s', exec_result['error'])
-            except Exception as exc:
-                logger.warning('Analytical path failed, falling back to reasoning: %s', exc)
-        elif load_err:
-            logger.warning('Parquet load failed: %s', load_err)
+    # --- Code-interpreter path: try for ALL question types ---
+    (df, load_err) = _load_df(file_hash)
+    if df is not None and (not df.empty):
+        try:
+            logger.info("Running robust Pandas execution loop (with self-correction)")
+            exec_result = await execute_pandas_with_retry(question=question, df=df, groq_client=groq_client, max_retries=3)
+            if not exec_result['error']:
+                code = exec_result['code']
+                formatted = format_result(exec_result['result'])
+                rich_ctx = build_rich_context(exec_result['result'], df, question)
+                messages = [{'role': 'system', 'content': _data_system_prompt(file_name, chart_keys)}, {'role': 'system', 'content': f'PANDAS RESULT (computed from the REAL dataset — trust these numbers 100%):\n{formatted}\n\nADDITIONAL CONTEXT:\n{json.dumps(rich_ctx, default=str)}\n\nDATASET OVERVIEW:\n{static_ctx[:3000]}'}]
+                _SAFE_ROLES = {'assistant', 'ai', 'user', 'human'}
+                for msg in (conversation_history or [])[-4:]:
+                    raw_role = str(msg.get('role', '')).lower()
+                    if raw_role not in _SAFE_ROLES:
+                        continue
+                    role = 'assistant' if raw_role in ('assistant', 'ai') else 'user'
+                    messages.append({'role': role, 'content': str(msg.get('content', ''))[:800]})
+                messages.append({'role': 'user', 'content': question})
+                completion = await asyncio.to_thread(groq_client.chat.completions.create, model=SYNTHESIS_MODEL, messages=messages, temperature=0.05, max_tokens=500)
+                answer = _sanitize_llm_output((completion.choices[0].message.content or '').strip())
+                new_chart = None
+                if exec_result.get('fig_dict'):
+                    new_chart = {'id': f'gen_{int(_time.time())}', 'fig': exec_result['fig_dict']}
+                return {'answer': answer, 'data_queried': True, 'new_chart': new_chart, 'code': code}
+            else:
+                logger.warning('Pandas execution failed, falling back to RAG reasoning: %s', exec_result['error'])
+        except Exception as exc:
+            logger.warning('Code-interpreter path failed, falling back to RAG reasoning: %s', exc)
+    elif load_err:
+        logger.warning('Parquet load failed: %s', load_err)
+    # --- Fallback: RAG-based reasoning path ---
     col_types: dict[str, str] = {}
     col_metadata: dict[str, dict] = {}
     for (c, info) in (stats.get('numeric_columns') or {}).items():
@@ -345,7 +356,7 @@ async def answer_question(question: str, file_hash: str, file_name: str, stats: 
     except Exception as exc:
         logger.error('RAG synthesis failed: %s', exc)
         answer = 'I hit a temporary error generating your answer. Please try again in a moment.'
-    return {'answer': answer, 'data_queried': data_result is not None, 'new_chart': None}
+    return {'answer': answer, 'data_queried': data_result is not None, 'new_chart': None, 'code': None}
 
 async def answer_chart_explanation(
     question: str, chart_key: str, chart_data: Any,
