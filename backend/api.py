@@ -39,7 +39,7 @@ from .rag.indexer import build_rag_index, retrieve_chunks
 from .rag.chat_engine import answer_question, answer_chart_explanation
 from .rag.pinecone_client import ping as pinecone_ping
 from .core.llm_client import get_groq_client
-from .db import get_db, init_db, User as _User, AnalysisHistory as _AnalysisHistory
+from .db import get_db, init_db, AsyncSessionLocal, User as _User, AnalysisHistory as _AnalysisHistory
 from .models.schemas import AnalysisListResponse, AuthResponse, ChatRequest, DeleteResponse, ForgotPasswordRequest, ForgotPasswordResponse, SyncSessionRequest, HealthResponse, ResetPasswordRequest, TokenResponse, UserLogin, UserRegister, UserResponse
 configure_logging()
 logger = logging.getLogger(__name__)
@@ -98,9 +98,29 @@ app.add_middleware(CORSMiddleware, allow_origins=origins, allow_credentials=True
 @app.middleware('http')
 async def add_security_headers(request: Request, call_next):
     response = await call_next(request)
+    # ── Core security headers ──
     response.headers['X-Content-Type-Options'] = 'nosniff'
     response.headers['X-Frame-Options'] = 'DENY'
     response.headers['X-XSS-Protection'] = '1; mode=block'
+    response.headers['Referrer-Policy'] = 'strict-origin-when-cross-origin'
+    response.headers['Permissions-Policy'] = 'camera=(), microphone=(), geolocation=(), payment=()'
+    response.headers['X-Permitted-Cross-Domain-Policies'] = 'none'
+    # ── Content Security Policy ──
+    csp_directives = [
+        "default-src 'self'",
+        "script-src 'self' 'unsafe-inline' 'unsafe-eval' https://cdn.plot.ly",
+        "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com",
+        "font-src 'self' https://fonts.gstatic.com",
+        "connect-src 'self' https://*.supabase.co wss://*.supabase.co",
+        "img-src 'self' data: blob: https:",
+        "frame-ancestors 'none'",
+        "base-uri 'self'",
+        "form-action 'self'",
+    ]
+    response.headers['Content-Security-Policy'] = '; '.join(csp_directives)
+    # ── HSTS (only in production to avoid localhost issues) ──
+    if APP_ENV == 'production':
+        response.headers['Strict-Transport-Security'] = 'max-age=31536000; includeSubDomains; preload'
     return response
 
 @app.exception_handler(Exception)
@@ -117,26 +137,35 @@ async def get_current_user_id(credentials: Annotated[HTTPAuthorizationCredential
     payload = await verify_access_token(token)
     if payload is None:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail='Invalid or expired token', headers={'WWW-Authenticate': 'Bearer'})
-    result = await db.execute(_sa_select(_User).where(
-        or_(_User.supabase_id == payload['sub'], _User.email == payload['email'])
-    ))
-    user = result.scalar_one_or_none()
-    if user is None:
-        # Auto-create local profile for valid Supabase users (e.g., new OAuth users)
-        try:
-            user = _User(supabase_id=payload['sub'], email=payload['email'], name=payload['email'].split('@')[0])
-            db.add(user)
-            await db.commit()
-            await db.refresh(user)
-            logger.info('Auto-created local profile for Supabase user: %s', payload['email'])
-        except Exception as exc:
-            await db.rollback()
-            logger.error('Failed to auto-create profile for %s: %s', payload['email'], exc)
-            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail='User profile unavailable', headers={'WWW-Authenticate': 'Bearer'})
-    elif not user.supabase_id:
-        user.supabase_id = payload['sub']
-        await db.commit()
-    return user.id
+    try:
+        result = await asyncio.wait_for(
+            db.execute(_sa_select(_User).where(or_(_User.supabase_id == payload['sub'], _User.email == payload['email']))),
+            timeout=5.0
+        )
+        user = result.scalar_one_or_none()
+        if user is None:
+            try:
+                user = _User(supabase_id=payload['sub'], email=payload['email'], name=payload['email'].split('@')[0])
+                db.add(user)
+                await asyncio.wait_for(db.commit(), timeout=5.0)
+                await asyncio.wait_for(db.refresh(user), timeout=5.0)
+                logger.info('Auto-created local profile for Supabase user: %s', payload['email'])
+            except Exception as exc:
+                await db.rollback()
+                logger.error('Failed to auto-create profile for %s: %s', payload['email'], exc)
+                raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail='Database temporarily unavailable. Please try again.')
+        elif not user.supabase_id:
+            try:
+                user.supabase_id = payload['sub']
+                await asyncio.wait_for(db.commit(), timeout=5.0)
+            except Exception:
+                await db.rollback()
+        return user.id
+    except HTTPException:
+        raise
+    except (asyncio.TimeoutError, Exception) as exc:
+        logger.error('get_current_user_id DB error (token=%s...): %s', token[:20], exc)
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail='Database temporarily unavailable. Please try again in a moment.')
 
 async def check_ip_rate_limit(request: Request):
     client_ip = request.client.host if request.client else 'unknown'
@@ -204,27 +233,50 @@ async def reset_password(body: ResetPasswordRequest, db: AsyncSession=Depends(ge
     return AuthResponse(success=True, message=result['message'])
 
 @app.post('/auth/sync-session', response_model=TokenResponse, tags=['auth'])
-async def sync_session(body: SyncSessionRequest, db: AsyncSession=Depends(get_db), response: Response=None):
+async def sync_session(body: SyncSessionRequest, response: Response=None):
+    # 1. Verify the Supabase token first — this is the critical step
     payload = await verify_access_token(body.access_token)
     if payload is None:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail='Invalid or expired access token')
-    result = await db.execute(_sa_select(_User).where(or_(_User.supabase_id == payload['sub'], _User.email == payload['email'])))
-    user = result.scalar_one_or_none()
-    if user is None:
-        user = _User(supabase_id=payload['sub'], email=payload['email'], name=payload['email'].split('@')[0])
-        db.add(user)
-        await db.commit()
-        await db.refresh(user)
-    elif not user.supabase_id:
-        user.supabase_id = payload['sub']
-        await db.commit()
-        await db.refresh(user)
+
+    # 2. Try to sync with local DB — but don't block login if DB is unavailable
+    user_id = 0
+    user_name = payload['email'].split('@')[0]
+    user_email = payload['email']
+    user_created_at = datetime.now(tz=timezone.utc)
+    user_updated_at = datetime.now(tz=timezone.utc)
+
+    try:
+        async with AsyncSessionLocal() as db:
+            result = await asyncio.wait_for(
+                db.execute(_sa_select(_User).where(or_(_User.supabase_id == payload['sub'], _User.email == payload['email']))),
+                timeout=5.0
+            )
+            user = result.scalar_one_or_none()
+            if user is None:
+                user = _User(supabase_id=payload['sub'], email=payload['email'], name=payload['email'].split('@')[0])
+                db.add(user)
+                await asyncio.wait_for(db.commit(), timeout=5.0)
+                await asyncio.wait_for(db.refresh(user), timeout=5.0)
+            elif not user.supabase_id:
+                user.supabase_id = payload['sub']
+                await asyncio.wait_for(db.commit(), timeout=5.0)
+                await asyncio.wait_for(db.refresh(user), timeout=5.0)
+            user_id = user.id
+            user_name = user.name
+            user_email = user.email
+            user_created_at = user.created_at
+            user_updated_at = user.updated_at
+    except Exception as exc:
+        logger.warning('sync_session: DB sync failed (non-fatal, using Supabase data): %s', exc)
+
     if response is not None and body.refresh_token:
         response.set_cookie(key='datapulse_refresh', value=body.refresh_token, httponly=True, secure=APP_ENV == 'production', samesite='lax', max_age=7 * 24 * 3600, path='/')
-    return TokenResponse(access_token=body.access_token, token_type='bearer', user=UserResponse(id=user.id, name=user.name, email=user.email, created_at=user.created_at, updated_at=user.updated_at))
+    return TokenResponse(access_token=body.access_token, token_type='bearer', user=UserResponse(id=user_id, name=user_name, email=user_email, created_at=user_created_at, updated_at=user_updated_at))
+
 
 @app.post('/auth/refresh', response_model=TokenResponse, tags=['auth'])
-async def refresh_token_route(request: Request, response: Response, db: AsyncSession=Depends(get_db)):
+async def refresh_token_route(request: Request, response: Response):
     token = request.cookies.get('datapulse_refresh')
     if not token:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail='Missing refresh token')
@@ -236,11 +288,22 @@ async def refresh_token_route(request: Request, response: Response, db: AsyncSes
     payload = await verify_access_token(new_session['access_token'])
     if payload is None:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail='Token verification failed after refresh')
-    result = await db.execute(_sa_select(_User).where(_User.supabase_id == payload['sub']))
-    user = result.scalar_one_or_none()
-    if user is None:
-        raise HTTPException(status_code=404, detail='User not found')
-    return TokenResponse(access_token=new_session['access_token'], token_type='bearer', user=UserResponse(id=user.id, name=user.name, email=user.email, created_at=user.created_at, updated_at=user.updated_at))
+    # Try DB lookup — fall back to token payload if DB is unavailable
+    user_id, user_name, user_email = 0, payload['email'].split('@')[0], payload['email']
+    user_created_at = user_updated_at = datetime.now(tz=timezone.utc)
+    try:
+        async with AsyncSessionLocal() as db:
+            result = await asyncio.wait_for(
+                db.execute(_sa_select(_User).where(_User.supabase_id == payload['sub'])),
+                timeout=5.0
+            )
+            user = result.scalar_one_or_none()
+            if user:
+                user_id, user_name, user_email = user.id, user.name, user.email
+                user_created_at, user_updated_at = user.created_at, user.updated_at
+    except Exception as exc:
+        logger.warning('refresh_token_route: DB lookup failed (non-fatal): %s', exc)
+    return TokenResponse(access_token=new_session['access_token'], token_type='bearer', user=UserResponse(id=user_id, name=user_name, email=user_email, created_at=user_created_at, updated_at=user_updated_at))
 
 @app.post('/auth/logout', tags=['auth'])
 async def logout(response: Response):
@@ -248,11 +311,33 @@ async def logout(response: Response):
     return {'success': True, 'message': 'Logged out'}
 
 @app.get('/auth/me', response_model=UserResponse, tags=['auth'])
-async def me(user_id: Annotated[int, Depends(get_current_user_id)], db: AsyncSession=Depends(get_db)):
-    user = await get_user_by_id(db, user_id)
-    if user is None:
-        raise HTTPException(status_code=404, detail='User not found')
-    return UserResponse(id=user.id, name=user.name, email=user.email, created_at=user.created_at, updated_at=user.updated_at)
+async def me(credentials: Annotated[HTTPAuthorizationCredentials, Depends(security)]):
+    """Returns current user — DB-resilient: falls back to token payload if DB is unavailable."""
+    token = credentials.credentials
+    payload = await verify_access_token(token)
+    if payload is None:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail='Invalid or expired token')
+    # Defaults from token (always available, even if DB is down)
+    user_id = 0
+    user_name = payload['email'].split('@')[0]
+    user_email = payload['email']
+    user_created_at = user_updated_at = datetime.now(tz=timezone.utc)
+    try:
+        async with AsyncSessionLocal() as db:
+            result = await asyncio.wait_for(
+                db.execute(_sa_select(_User).where(or_(_User.supabase_id == payload['sub'], _User.email == payload['email']))),
+                timeout=5.0
+            )
+            user = result.scalar_one_or_none()
+            if user:
+                user_id = user.id
+                user_name = user.name
+                user_email = user.email
+                user_created_at = user.created_at
+                user_updated_at = user.updated_at
+    except Exception as exc:
+        logger.warning('auth/me: DB lookup failed, using token payload (non-fatal): %s', exc)
+    return UserResponse(id=user_id, name=user_name, email=user_email, created_at=user_created_at, updated_at=user_updated_at)
 
 
 def persist_full_data_backend(df: pd.DataFrame, file_hash: str) -> None:
@@ -364,7 +449,15 @@ async def analyze(background_tasks: BackgroundTasks, file: UploadFile=File(...),
     except Exception as exc:
         if isinstance(exc, HTTPException):
             raise exc
-        raise HTTPException(status_code=422, detail=f'Could not parse file: {exc}')
+        _raw_exc = str(exc).lower()
+        if 'codec' in _raw_exc or 'encoding' in _raw_exc or 'decode' in _raw_exc:
+            raise HTTPException(status_code=422, detail='Could not read the file — the encoding is not supported. Try saving your file as UTF-8 CSV.')
+        elif 'column' in _raw_exc or 'header' in _raw_exc:
+            raise HTTPException(status_code=422, detail='Could not parse the file headers. Make sure the first row contains column names.')
+        elif 'empty' in _raw_exc:
+            raise HTTPException(status_code=422, detail='The uploaded file appears to be empty.')
+        else:
+            raise HTTPException(status_code=422, detail='Could not read the file. Make sure it is a valid CSV or Excel file with data.')
     (row_count, column_count) = df.shape
     if row_count > MAX_ANALYZE_ROWS:
         raise HTTPException(status_code=413, detail=f'Dataset has {row_count} rows. Maximum allowed is {MAX_ANALYZE_ROWS}.')

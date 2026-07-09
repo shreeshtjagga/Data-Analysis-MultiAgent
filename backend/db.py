@@ -39,7 +39,26 @@ if DATABASE_URL.startswith('postgres://'):
     DATABASE_URL = DATABASE_URL.replace('postgres://', 'postgresql+asyncpg://', 1)
 elif DATABASE_URL.startswith('postgresql://'):
     DATABASE_URL = DATABASE_URL.replace('postgresql://', 'postgresql+asyncpg://', 1)
+
+# asyncpg mis-parses usernames with a dot (e.g. postgres.projectref from Supabase pooler).
+# URL-encode the dot in the username portion so it is passed through correctly.
+try:
+    from urllib.parse import urlparse as _up, urlunparse as _uu
+    _parsed = _up(DATABASE_URL)
+    if _parsed.username and '.' in _parsed.username:
+        _encoded_user = _parsed.username.replace('.', '%2E')
+        _netloc = _parsed.netloc.replace(
+            _parsed.username,
+            _encoded_user,
+            1
+        )
+        DATABASE_URL = _uu(_parsed._replace(netloc=_netloc))
+        logger.debug('Encoded pooler username: %s', _encoded_user)
+except Exception as _e:
+    logger.warning('Could not encode pooler username: %s', _e)
+
 DATABASE_URL = _rewrite_local_dev_db_host(DATABASE_URL)
+
 
 def _strip_url_params(url: str) -> str:
     parsed = urlparse(url)
@@ -52,7 +71,7 @@ def _strip_url_params(url: str) -> str:
     return urlunparse(parsed._replace(query=new_query))
 DATABASE_URL = _strip_url_params(DATABASE_URL)
 _db_ssl_mode = os.getenv('DB_SSL', 'false').lower()
-_connect_args: dict = {'statement_cache_size': 0}
+_connect_args: dict = {'statement_cache_size': 0, 'timeout': 5}
 if _db_ssl_mode == 'require':
     _connect_args['ssl'] = 'require'
 elif _db_ssl_mode == 'true':
@@ -60,7 +79,7 @@ elif _db_ssl_mode == 'true':
     _ssl_ctx.check_hostname = False
     _ssl_ctx.verify_mode = ssl.CERT_NONE
     _connect_args['ssl'] = _ssl_ctx
-engine = create_async_engine(DATABASE_URL, echo=os.getenv('APP_ENV', 'production') == 'development', pool_pre_ping=True, pool_size=3, max_overflow=5, pool_recycle=300, pool_timeout=30, connect_args=_connect_args)
+engine = create_async_engine(DATABASE_URL, echo=os.getenv('APP_ENV', 'production') == 'development', pool_pre_ping=True, pool_size=3, max_overflow=5, pool_recycle=300, pool_timeout=5, connect_args=_connect_args)
 AsyncSessionLocal = async_sessionmaker(bind=engine, class_=AsyncSession, expire_on_commit=False, autoflush=False, autocommit=False)
 
 class Base(DeclarativeBase):

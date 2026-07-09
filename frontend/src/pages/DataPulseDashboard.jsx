@@ -1361,8 +1361,26 @@ export default function DataPulse({ user, onLogout }) {
       }, 600);
     } catch (err) {
       clearStageTimers();
-      log(`Core Failure: ${err.message}`);
-      setAnalysisError(err.message || "Analysis failed");
+      const raw = err?.message || "";
+      log(`Core Failure: ${raw}`);
+      // Sanitize raw backend/DB errors — never show internal details to users
+      let userMsg = "Analysis failed. Please try again or upload a different file.";
+      if (raw.includes("413") || raw.toLowerCase().includes("too large") || raw.toLowerCase().includes("file size")) {
+        userMsg = "File is too large. Maximum size is 10 MB.";
+      } else if (raw.includes("400") || raw.toLowerCase().includes("invalid") || raw.toLowerCase().includes("could not parse")) {
+        userMsg = "Could not read the file. Make sure it's a valid CSV or Excel file.";
+      } else if (raw.includes("413") || raw.toLowerCase().includes("rows") || raw.toLowerCase().includes("columns")) {
+        userMsg = "Dataset is too large to analyze. Please reduce the number of rows or columns.";
+      } else if (raw.includes("401") || raw.toLowerCase().includes("session expired") || raw.toLowerCase().includes("unauthorized")) {
+        userMsg = "Your session has expired. Please log in again.";
+      } else if (raw.includes("503") || raw.toLowerCase().includes("database") || raw.toLowerCase().includes("unavailable")) {
+        userMsg = "Service temporarily unavailable. Please try again in a moment.";
+      } else if (raw.includes("429") || raw.toLowerCase().includes("rate")) {
+        userMsg = "Too many requests. Please wait a moment before trying again.";
+      } else if (raw.includes("500")) {
+        userMsg = "An unexpected server error occurred. Please try again.";
+      }
+      setAnalysisError(userMsg);
     }
   }, [log]);
   const onFile = useCallback((file) => analyzeFile(file), [analyzeFile]);
@@ -1389,7 +1407,8 @@ export default function DataPulse({ user, onLogout }) {
       const list = Array.isArray(data) ? data : (Array.isArray(data?.analyses) ? data.analyses : []);
       setHistory(list);
     } catch (err) {
-      setHistoryError(err.message);
+      setHistoryError(err?.message?.includes("401") || err?.message?.toLowerCase().includes("session") ? "Session expired — please log in again." : "Could not load history. Check your connection and try again.");
+
       setHistory([]);
     } finally {
       setHistoryLoading(false);
@@ -1687,9 +1706,26 @@ export default function DataPulse({ user, onLogout }) {
         newChart: resp?.new_chart?.fig ? resp.new_chart : null,
       }].slice(-MAX_CHAT_MESSAGES));
     } catch (err) {
-      const detail = err?.message || "Unable to reach AI";
+      const raw = err?.message || "";
+      // Show backend's own message if it's already user-friendly (rate limit, session, etc.)
+      // Otherwise show a clean generic fallback
+      const userMsg =
+        raw.includes("429") || raw.toLowerCase().includes("too many")
+          ? "You're sending messages too fast. Please wait a moment and try again."
+          : raw.includes("401") || raw.toLowerCase().includes("session expired")
+          ? "Your session has expired. Please refresh the page and log in again."
+          : raw.includes("403")
+          ? "Access denied to this dataset."
+          : raw.includes("413") || raw.toLowerCase().includes("too long")
+          ? "Your message is too long. Please shorten it and try again."
+          : raw.includes("503") || raw.toLowerCase().includes("unavailable")
+          ? "The AI service is temporarily unavailable. Please try again in a moment."
+          : raw.length > 0 && raw.length < 200
+          ? raw  // backend already gave a short, readable message
+          : "Something went wrong. Please try again.";
       const errMsgId = `msg-${Date.now()}-e`;
-      setChatMsgs((p) => [...p, { id: errMsgId, role: "ai", text: `Chat error: ${detail}`, newChart: null }].slice(-MAX_CHAT_MESSAGES));
+      setChatMsgs((p) => [...p, { id: errMsgId, role: "ai", text: userMsg, newChart: null }].slice(-MAX_CHAT_MESSAGES));
+
     } finally {
       setChatLoading(false);
     }
@@ -1737,7 +1773,8 @@ export default function DataPulse({ user, onLogout }) {
     { label: "Completeness", val: formatPercent(dq.completeness || 100) },
   ];
   return (
-    <div style={{ height: '100vh', display: 'flex', flexDirection: 'column', position: 'relative', overflow: 'hidden' }}>
+    <div className="dashboard-reveal" style={{ height: '100vh', display: 'flex', flexDirection: 'column', position: 'relative', overflow: 'hidden' }}>
+
       <ParticleBackground
         noExclude={false}
         exclusionSelectors={phase === "done"
@@ -1841,10 +1878,11 @@ export default function DataPulse({ user, onLogout }) {
           <div className="animate-fade-in" style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', textAlign: 'center', maxWidth: '800px', margin: '0 auto', height: '100%', width: '100%' }}>
             {analysisError ? (
               <div className="card flex-col align-center justify-center animate-fade-in" style={{ padding: '60px', textAlign: 'center', border: '1px solid rgba(239,68,68,0.2)', background: 'rgba(13,18,32,0.6)', width: '100%' }}>
-                <div style={{ fontSize: '56px', color: 'var(--error)', marginBottom: '24px' }}>⚠</div>
-                <h3 style={{ color: 'var(--text-main)', marginBottom: '12px', fontSize: '24px' }}>Analysis Protocol Interrupted</h3>
-                <p style={{ color: 'var(--error)', fontSize: '15px', maxWidth: '500px', marginBottom: '32px', margin: '0 auto 32px auto', lineHeight: 1.6 }}>{analysisError}</p>
-                <button className="btn-primary" style={{ padding: '12px 32px', fontSize: '15px', margin: '0 auto' }} onClick={() => { setPhase("upload"); setAnalysisError(""); }}>Upload New Dataset</button>
+                <div style={{ fontSize: '56px', marginBottom: '24px' }}>⚠️</div>
+                <h3 style={{ color: 'var(--text-main)', marginBottom: '12px', fontSize: '22px' }}>Analysis Failed</h3>
+                <p style={{ color: 'var(--text-muted)', fontSize: '15px', maxWidth: '480px', margin: '0 auto 8px auto', lineHeight: 1.6 }}>{analysisError}</p>
+                <p style={{ color: 'rgba(148,163,184,0.5)', fontSize: '12px', marginBottom: '32px' }}>Check the file format and try again, or upload a different dataset.</p>
+                <button className="btn-primary" style={{ padding: '12px 32px', fontSize: '14px', margin: '0 auto' }} onClick={() => { setPhase("upload"); setAnalysisError(""); }}>Upload New Dataset</button>
               </div>
             ) : (
               <div style={{ width: '100%', maxWidth: '600px', display: 'flex', flexDirection: 'column', alignItems: 'center' }}>
@@ -1872,9 +1910,9 @@ export default function DataPulse({ user, onLogout }) {
             )}
           </div>
         ) : (
-          <div className="grid-12 animate-fade-in" style={{ alignItems: 'start', width: '100%', flex: 1, overflow: 'hidden', height: '100%' }}>
+          <div className="grid-12 animate-fade-in dashboard-grid">
             { }
-            <div className="col-4 flex-col gap-24" style={{ height: '100%', overflowY: 'auto', paddingRight: '12px' }}>
+            <div className="col-4 flex-col gap-24 dashboard-sidebar">
               <div
                 onClick={() => fileRef.current?.click()}
                 style={{
@@ -1949,7 +1987,7 @@ export default function DataPulse({ user, onLogout }) {
                       }}
                     >Dataset Scope</span>
                   </div>
-                  <div ref={chatContainerRef} style={{ flex: 1, overflowY: "auto", display: "flex", flexDirection: "column", gap: "12px", background: 'var(--bg-input)', padding: '16px', borderRadius: '12px', border: '1px solid var(--border-subtle)' }}>
+                  <div ref={chatContainerRef} className="chat-container">
                     {chatMsgs.length === 0 ? (
                       <div style={{ margin: 'auto', display: 'flex', flexDirection: 'column', gap: '16px', width: '100%', maxWidth: '340px' }}>
                         <div style={{ background: 'linear-gradient(180deg, rgba(99,102,241,0.08), rgba(6,9,18,0.05))', border: '1px solid rgba(99,102,241,0.2)', borderRadius: '12px', padding: '16px 18px', textAlign: 'center' }}>
@@ -2004,7 +2042,7 @@ export default function DataPulse({ user, onLogout }) {
               )}
             </div>
             { }
-            <div className="col-8" style={{ height: '100%', overflowY: 'auto', paddingRight: '12px', paddingBottom: '32px', display: 'flex', flexDirection: 'column' }}>
+            <div className="col-8 dashboard-main">
               {!result ? (
                 <div className="card animate-fade-in" style={{ minHeight: '500px', display: 'flex', alignItems: 'center', justifyContent: 'center', width: '100%' }}>
                   <p style={{ color: 'var(--text-muted)' }}>Synchronizing data... Standby.</p>
@@ -2544,9 +2582,25 @@ export default function DataPulse({ user, onLogout }) {
                                   </>
                                 ) : 'Load'}
                               </button>
-                              <button onClick={(e) => { e.stopPropagation(); deleteItem(item.analysis_id); }} disabled={isDisabled} style={{ padding: '6px 10px', background: 'transparent', color: 'var(--error)', border: '1px solid rgba(239,68,68,0.3)', borderRadius: '6px', cursor: isDisabled ? 'not-allowed' : 'pointer', opacity: isAnyLoading ? 0.5 : 1 }}>
-                                {isThisDeleting ? "..." : "🗑"}
+                              <button
+                                className="history-delete-btn"
+                                onClick={(e) => { e.stopPropagation(); deleteItem(item.analysis_id); }}
+                                disabled={isDisabled}
+                                title="Delete Analysis"
+                                style={{ opacity: isAnyLoading && !isThisDeleting ? 0.5 : 1 }}
+                              >
+                                {isThisDeleting ? (
+                                  <span style={{ fontSize: '10px', fontWeight: 'bold' }}>...</span>
+                                ) : (
+                                  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ width: '15px', height: '15px' }}>
+                                    <polyline points="3 6 5 6 21 6"></polyline>
+                                    <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path>
+                                    <line x1="10" y1="11" x2="10" y2="17"></line>
+                                    <line x1="14" y1="11" x2="14" y2="17"></line>
+                                  </svg>
+                                )}
                               </button>
+
                             </div>
                           </div>
                         </div>
