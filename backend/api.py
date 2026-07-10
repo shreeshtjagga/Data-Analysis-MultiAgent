@@ -661,10 +661,6 @@ def _classify_chat_intent(question: str) -> str:
             return 'explain_chart'
     return 'data_question'
 
-from collections import OrderedDict
-_DATASET_CACHE = OrderedDict()
-_MAX_CACHE_SIZE = 3
-
 @app.post('/chat', tags=['analysis'])
 async def chat_with_analysis(body: ChatRequest, user_id: int=Depends(get_current_user_id), db: AsyncSession=Depends(get_db)):
     try:
@@ -726,24 +722,13 @@ async def chat_with_analysis(body: ChatRequest, user_id: int=Depends(get_current
             raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail='Could not verify dataset access. Please try again.')
     df_records: list = []
     using_preview_only = False
-    
-    # Try local memory cache first (instantaneous)
-    if file_hash and file_hash in _DATASET_CACHE:
-        df_records = _DATASET_CACHE[file_hash]
-        _DATASET_CACHE.move_to_end(file_hash)
-        logger.info('Chat: Cache hit in-memory for file %s', file_hash[:8])
-        
-    if not df_records and file_hash and ENABLE_DISK_CACHE:
+    if file_hash and ENABLE_DISK_CACHE:
         try:
             assert _re.match('^[a-f0-9]{64}$', file_hash), 'Invalid file hash'
             storage_path = os.path.join(_PARQUET_STORAGE_DIR, f'{file_hash}.parquet')
             if os.path.exists(storage_path):
                 df_full = pd.read_parquet(storage_path)
                 df_records = df_full.to_dict('records')
-                # Save to memory cache
-                _DATASET_CACHE[file_hash] = df_records
-                if len(_DATASET_CACHE) > _MAX_CACHE_SIZE:
-                    _DATASET_CACHE.popitem(last=False)
                 logger.info('Chat: Loaded %d rows from Parquet for on-demand chart gen', len(df_full))
             else:
                 using_preview_only = True
@@ -767,10 +752,6 @@ async def chat_with_analysis(body: ChatRequest, user_id: int=Depends(get_current
                 if isinstance(_db_records, list) and _db_records:
                     df_records = _db_records
                     using_preview_only = False
-                    # Save to memory cache
-                    _DATASET_CACHE[file_hash] = df_records
-                    if len(_DATASET_CACHE) > _MAX_CACHE_SIZE:
-                        _DATASET_CACHE.popitem(last=False)
                     logger.info('Chat: Loaded %d rows from DB clean_data fallback', len(df_records))
         except Exception as _db_exc:
             logger.warning('Chat: DB clean_data fallback failed: %s', _db_exc)
@@ -805,12 +786,8 @@ async def chat_with_analysis(body: ChatRequest, user_id: int=Depends(get_current
         chart_df_records = df_records
         filter_label = ''
         if df_records:
-            import difflib
             q_lower = question.lower()
             _chart_df = pd.DataFrame(df_records)
-            _applied_filters = []
-            
-            # 1. Year filter
             _year_match = _re.search('(?:in\\s+)?(?:year|yr)\\s*(\\d{4})', q_lower)
             if not _year_match:
                 _year_match = _re.search('(?:for|of|from)\\s+(\\d{4})\\s*(?:only)?', q_lower)
@@ -836,44 +813,28 @@ async def chat_with_analysis(body: ChatRequest, user_id: int=Depends(get_current
                             _chart_df[_year_col] = pd.to_datetime(_chart_df[_year_col], errors='coerce')
                             _filtered = _chart_df[_chart_df[_year_col].dt.year == _target_year]
                         if len(_filtered) > 0:
-                            _chart_df = _filtered
-                            _applied_filters.append(f'year {_target_year}')
+                            chart_df_records = _filtered.to_dict('records')
+                            filter_label = f' (filtered to year {_target_year})'
                             logger.info("Chart filter: %d rows for year %d from column '%s'", len(_filtered), _target_year, _year_col)
                     except Exception as _filt_exc:
                         logger.warning('Year filter failed: %s', _filt_exc)
-
-            # 2. Categorical filters (fuzzy matched)
-            _q_words = [w.strip('?,.!-()\"\'').lower() for w in q_lower.split() if len(w.strip('?,.!-()\"\'')) > 2]
-            _cat_cols = stats.get('categorical_columns') or {}
-            for (_cat_name, _cat_info) in _cat_cols.items():
-                _top_vals = _cat_info.get('top_5_values') or _cat_info.get('top_values') or {}
-                _matched_val = None
-                for _val_name in _top_vals:
-                    _val_lower = str(_val_name).lower()
-                    if _val_lower in q_lower:
-                        _matched_val = _val_name
+            if not filter_label:
+                _cat_cols = stats.get('categorical_columns') or {}
+                for (_cat_name, _cat_info) in _cat_cols.items():
+                    _top_vals = _cat_info.get('top_5_values') or _cat_info.get('top_values') or {}
+                    for _val_name in _top_vals:
+                        if str(_val_name).lower() in q_lower and len(str(_val_name)) > 2:
+                            try:
+                                _filtered = _chart_df[_chart_df[_cat_name].astype(str).str.lower() == str(_val_name).lower()]
+                                if len(_filtered) > 5:
+                                    chart_df_records = _filtered.to_dict('records')
+                                    filter_label = f' (filtered to {_val_name})'
+                                    logger.info("Chart filter: %d rows for %s='%s'", len(_filtered), _cat_name, _val_name)
+                                    break
+                            except Exception:
+                                pass
+                    if filter_label:
                         break
-                    for qw in _q_words:
-                        if len(qw) > 3 and len(_val_lower) > 3:
-                            matches = difflib.get_close_matches(qw, [_val_lower], n=1, cutoff=0.8)
-                            if matches:
-                                _matched_val = _val_name
-                                break
-                    if _matched_val:
-                        break
-                if _matched_val:
-                    try:
-                        _filtered = _chart_df[_chart_df[_cat_name].astype(str).str.lower() == str(_matched_val).lower()]
-                        if len(_filtered) > 2:
-                            _chart_df = _filtered
-                            _applied_filters.append(str(_matched_val))
-                            logger.info("Chart filter: %d rows for %s='%s'", len(_filtered), _cat_name, _matched_val)
-                    except Exception:
-                        pass
-            
-            if _applied_filters:
-                chart_df_records = _chart_df.to_dict('records')
-                filter_label = f" (filtered to {', '.join(_applied_filters)})"
         # ── Custom chart parsing: user explicitly specifies chart type and/or columns ──
         # Handles: "histogram of price", "scatter of price vs mileage",
         #          "bar chart of brand by revenue", "line chart of year vs sales"

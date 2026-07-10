@@ -2336,8 +2336,17 @@ export default function DataPulse({ user, onLogout }) {
                                         transition: 'color 0.15s ease',
                                       }}
                                     >
-                                      {k}
-                                      <span style={{ opacity: isActive ? 1 : 0.35, fontSize: '9px', marginLeft: '5px', verticalAlign: 'middle' }}>{icon}</span>
+                                      <div style={{ display: 'inline-flex', alignItems: 'center', gap: '6px' }}>
+                                        <span>{k}</span>
+                                        <span style={{ 
+                                          opacity: isActive ? 1 : 0.25, 
+                                          fontSize: '12px', 
+                                          color: isActive ? '#818cf8' : 'var(--text-muted)',
+                                          transition: 'all 0.15s ease',
+                                        }}>
+                                          {icon}
+                                        </span>
+                                      </div>
                                     </th>
                                   );
                                 })}

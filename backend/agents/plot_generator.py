@@ -9,10 +9,7 @@ from .visualizer import _build_box, _build_donut, _build_freq_bar, _build_groupe
 logger = logging.getLogger(__name__)
 SUPPORTED_CHART_TYPES = frozenset({'scatter', 'histogram', 'ranked_bar', 'grouped_bar', 'bar', 'box', 'violin', 'donut', 'pie', 'line', 'heatmap', 'freq_bar', 'stacked_bar'})
 _TYPE_DISPLAY = {'scatter': 'Scatter plot', 'histogram': 'Histogram', 'ranked_bar': 'Ranked bar chart', 'grouped_bar': 'Grouped bar chart', 'bar': 'Bar chart', 'box': 'Box plot', 'violin': 'Violin plot', 'donut': 'Donut chart', 'pie': 'Pie chart', 'line': 'Line chart', 'heatmap': 'Heatmap', 'freq_bar': 'Frequency bar chart', 'stacked_bar': 'Stacked bar chart'}
-_KEYWORD_TO_CHART_TYPES = {
-    'pie': ['donut', 'pie'], 'donut': ['donut', 'pie'], 'scatter': ['scatter'], 'histogram': ['histogram'], 'distribution': ['histogram', 'box', 'violin'], 'bar': ['ranked_bar', 'grouped_bar', 'freq_bar', 'bar'], 'ranked': ['ranked_bar'], 'grouped': ['grouped_bar'], 'heatmap': ['heatmap'], 'correlation': ['heatmap', 'scatter'], 'box': ['box'], 'violin': ['violin'], 'line': ['line'], 'trend': ['line'], 'time': ['line'], 'frequency': ['freq_bar'], 'stacked': ['stacked_bar'],
-    'sales': ['freq_bar', 'ranked_bar', 'donut'], 'popular': ['freq_bar', 'ranked_bar', 'donut'], 'popularity': ['freq_bar', 'ranked_bar', 'donut'], 'count': ['freq_bar', 'ranked_bar', 'donut'], 'number of': ['freq_bar', 'ranked_bar', 'donut']
-}
+_KEYWORD_TO_CHART_TYPES = {'pie': ['donut', 'pie'], 'donut': ['donut', 'pie'], 'scatter': ['scatter'], 'histogram': ['histogram'], 'distribution': ['histogram', 'box', 'violin'], 'bar': ['ranked_bar', 'grouped_bar', 'freq_bar', 'bar'], 'ranked': ['ranked_bar'], 'grouped': ['grouped_bar'], 'heatmap': ['heatmap'], 'correlation': ['heatmap', 'scatter'], 'box': ['box'], 'violin': ['violin'], 'line': ['line'], 'trend': ['line'], 'time': ['line'], 'frequency': ['freq_bar'], 'stacked': ['stacked_bar']}
 
 def _records_to_df(records: list[dict]) -> pd.DataFrame:
     if not records:
