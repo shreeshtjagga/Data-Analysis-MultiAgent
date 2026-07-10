@@ -288,7 +288,14 @@ def _build_scatter(df: pd.DataFrame, x_col: str, y_col: str, color_col: Optional
     plot_df = _sample(df, _SCATTER_MAX_ROWS, stratify_col=color_use)
     sampled_note = f'  [{_SCATTER_MAX_ROWS:,} sampled]' if len(df) > _SCATTER_MAX_ROWS else ''
     chart_title = title or f'{x_col} vs {y_col}  (r={r:.2f}){sampled_note}'
-    trendline = 'ols' if len(plot_df) <= 3000 else None
+    has_statsmodels = False
+    try:
+        import statsmodels
+        has_statsmodels = True
+    except ImportError:
+        logger.warning('statsmodels is not installed. Drawing scatter plot without trendline.')
+        
+    trendline = 'ols' if (len(plot_df) <= 3000 and has_statsmodels) else None
     fig = px.scatter(plot_df, x=x_col, y=y_col, color=color_use, title=chart_title, trendline=trendline, opacity=0.65)
     score = abs(r) * 55 + min(len(pair) / 20, 20) + comp * 20
     return Chart(key=f'scatter_{x_col}_{y_col}', fig=_style(fig, 460), score=score, cols={x_col, y_col})

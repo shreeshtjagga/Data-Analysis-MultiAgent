@@ -835,6 +835,107 @@ async def chat_with_analysis(body: ChatRequest, user_id: int=Depends(get_current
                                 pass
                     if filter_label:
                         break
+        # ── Custom chart parsing: user explicitly specifies chart type and/or columns ──
+        # Handles: "histogram of price", "scatter of price vs mileage",
+        #          "bar chart of brand by revenue", "line chart of year vs sales"
+        def _parse_explicit_chart_spec(question: str, df_records: list) -> dict | None:
+            """Try to extract an explicit chart spec from the user's question."""
+            if not df_records:
+                return None
+            q = question.lower()
+            _df_cols = list(pd.DataFrame(df_records[:1]).columns)
+            _col_lower = {c.lower().replace('_', ' '): c for c in _df_cols}
+            _col_lower.update({c.lower(): c for c in _df_cols})
+
+            def _find_col(text: str):
+                text = text.strip().lower()
+                if text in _col_lower:
+                    return _col_lower[text]
+                # partial match
+                for norm, orig in _col_lower.items():
+                    if text in norm or norm in text:
+                        return orig
+                return None
+
+            # Map chart type keywords
+            _CHART_TYPE_MAP = {
+                'histogram': 'histogram', 'distribution': 'histogram',
+                'scatter': 'scatter', 'scatter plot': 'scatter',
+                'bar chart': 'ranked_bar', 'bar graph': 'ranked_bar', 'bar': 'ranked_bar',
+                'heatmap': 'heatmap', 'correlation heatmap': 'heatmap',
+                'box plot': 'box', 'box': 'box',
+                'violin': 'violin', 'violin plot': 'violin',
+                'pie chart': 'donut', 'pie': 'donut', 'donut': 'donut',
+                'line chart': 'line', 'line graph': 'line', 'trend': 'line',
+                'frequency': 'freq_bar', 'freq': 'freq_bar',
+                'grouped bar': 'grouped_bar',
+                'stacked bar': 'stacked_bar',
+            }
+            chart_type = None
+            for kw, ctype in sorted(_CHART_TYPE_MAP.items(), key=lambda x: -len(x[0])):
+                if kw in q:
+                    chart_type = ctype
+                    break
+
+            if chart_type is None:
+                return None  # no explicit chart type → fall through to suggest_novel_chart
+
+            x_col, y_col = None, None
+
+            # Pattern: "of X vs Y" or "X vs Y" or "X versus Y"
+            _vs_match = _re.search(r'(?:of\s+)?([a-z0-9_ ]+?)\s+(?:vs\.?|versus|and|against)\s+([a-z0-9_ ]+)', q)
+            if _vs_match:
+                x_col = _find_col(_vs_match.group(1).strip())
+                y_col = _find_col(_vs_match.group(2).strip())
+
+            # Pattern: "of X by Y" or "X by Y"
+            if not x_col:
+                _by_match = _re.search(r'(?:of\s+)?([a-z0-9_ ]+?)\s+by\s+([a-z0-9_ ]+)', q)
+                if _by_match:
+                    x_col = _find_col(_by_match.group(1).strip())
+                    y_col = _find_col(_by_match.group(2).strip())
+
+            # Pattern: "of X" (single column)
+            if not x_col:
+                _of_match = _re.search(r'(?:of|for|on|showing)\s+([a-z0-9_ ]+?)(?:\s+(?:column|data|values?))?(?:\s*$|\s+(?:and|vs|by|chart|graph|plot))', q)
+                if _of_match:
+                    x_col = _find_col(_of_match.group(1).strip())
+
+            # Pattern: "x=colname y=colname" or "x axis = colname"
+            _xa = _re.search(r'x[\s_]?(?:axis)?[\s=:]+([a-z0-9_ ]+)', q)
+            _ya = _re.search(r'y[\s_]?(?:axis)?[\s=:]+([a-z0-9_ ]+)', q)
+            if _xa:
+                x_col = _find_col(_xa.group(1).strip()) or x_col
+            if _ya:
+                y_col = _find_col(_ya.group(1).strip()) or y_col
+
+            if chart_type and (x_col or y_col):
+                return {'chart_type': chart_type, 'x': x_col, 'y': y_col, 'title': ''}
+            if chart_type == 'heatmap':
+                return {'chart_type': 'heatmap', 'x': None, 'y': None, 'title': 'Correlation Heatmap'}
+            return None
+
+        _explicit_spec = _parse_explicit_chart_spec(question, chart_df_records)
+        if _explicit_spec:
+            logger.info('Explicit chart spec parsed: %s', _explicit_spec)
+            try:
+                chart_result = generate_on_demand_chart(spec=_explicit_spec, df_records=chart_df_records, existing_chart_keys=existing_chart_keys)
+                if chart_result.get('error'):
+                    # Fall through to suggest_novel_chart on explicit spec failure
+                    logger.warning('Explicit spec failed (%s), falling back to suggest_novel_chart', chart_result['error'])
+                    _explicit_spec = None
+                elif chart_result.get('is_duplicate'):
+                    return {'answer': f"That chart is already on your dashboard! Try asking for a different column combination.", 'data_queried': False, 'new_chart': None}
+                else:
+                    ct = _explicit_spec.get('chart_type', 'chart')
+                    x = _explicit_spec.get('x') or ''
+                    y = _explicit_spec.get('y') or ''
+                    cols = f" of {x}" + (f" vs {y}" if y else "") if x else ""
+                    return {'answer': f"Here is your custom {ct}{cols}{filter_label}.", 'data_queried': False, 'new_chart': chart_result}
+            except Exception as _expl_exc:
+                logger.error('Explicit chart spec generation failed: %s', _expl_exc, exc_info=True)
+                _explicit_spec = None
+
         try:
             novel = suggest_novel_chart(df_records=chart_df_records, existing_chart_keys=existing_chart_keys, user_request=question, stats_summary=stats)
         except Exception as _chart_exc:
