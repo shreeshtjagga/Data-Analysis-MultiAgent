@@ -6,36 +6,29 @@
 # ─── Data processing ──────────────────────────────────────────────────────────
 pandas>=2.0.0,<3.0.0
 numpy>=1.26.0,<3.0.0
-scipy>=1.13.0
-openpyxl>=3.1.2
-xlrd>=2.0.1
-pyarrow>=16.0.0
+openpyxl>=3.1.2           # .xlsx support
+pyarrow>=16.0.0            # Parquet read/write for disk cache
 
 # ─── Visualisation ────────────────────────────────────────────────────────────
 plotly>=5.22.0,<6.0.0
-statsmodels>=0.14.0  # Required for plotly trendlines (ols)
+# NOTE: statsmodels removed — trendlines now optional with graceful fallback
+# NOTE: scipy removed — was only a transitive dep of statsmodels, not used directly
 
 # ─── API framework ────────────────────────────────────────────────────────────
 fastapi>=0.111.0
 uvicorn>=0.30.0
 python-multipart>=0.0.9
-orjson>=3.9.0        # fast JSON — NaN/Inf → null natively, ~10x stdlib speed
+orjson>=3.9.0              # fast JSON — NaN/Inf → null natively, ~10x stdlib speed
 
 # ─── Database ─────────────────────────────────────────────────────────────────
 sqlalchemy>=2.0.30
 asyncpg>=0.29.0
 
-# ─── Cache (Upstash Redis — KEPT, Supabase has no Redis equivalent) ───────────
+# ─── Cache (Upstash Redis) ─────────────────────────────────────────────────────
 redis>=5.0.0
 
-# ─── Auth — Supabase (replaces python-jose, passlib, google-auth) ─────────────
+# ─── Auth ─────────────────────────────────────────────────────────────────────
 supabase>=2.4.0            # Supabase Python client for auth and DB
-
-# REMOVED (with reasons):
-# passlib[bcrypt]    → REMOVED: Supabase handles password hashing internally
-# bcrypt             → REMOVED: same reason, no longer store hashed passwords
-# python-jose        → REMOVED: Supabase manages JWT signing/verification
-# google-auth        → REMOVED: Supabase verifies Google tokens via Dashboard config
 
 # ─── Validation ───────────────────────────────────────────────────────────────
 pydantic>=2.7.0
@@ -46,7 +39,16 @@ groq>=0.9.0
 
 # ─── Config ───────────────────────────────────────────────────────────────────
 python-dotenv>=1.0.0
-requests>=2.31.0
 
 # ─── RAG ──────────────────────────────────────────────────────────────────────
-pinecone>=5.0.0    # serverless vector DB + inference API (zero local ML)
+pinecone>=5.0.0            # serverless vector DB for RAG chunk retrieval
+
+# REMOVED (with reasons):
+# scipy            → NOT directly imported anywhere; was only a transitive dep of statsmodels
+# xlrd             → NOT used; .xlsx files use openpyxl, .csv files need no engine
+# requests         → NOT imported anywhere in backend source code
+# statsmodels      → Caused Render free-tier OOM crashes; trendlines now have graceful fallback
+# passlib[bcrypt]  → Supabase handles password hashing internally
+# bcrypt           → Same reason, no longer store hashed passwords locally
+# python-jose      → Supabase manages JWT signing/verification
+# google-auth      → Supabase verifies Google tokens via Dashboard config
