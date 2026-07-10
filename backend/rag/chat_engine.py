@@ -40,7 +40,7 @@ def _data_system_prompt(file_name: str, chart_keys: list[str]) -> str:
         'You have a CONTEXT block with pre-computed facts and a PANDAS RESULT block\n',
         'with exact numbers from the real data. These are the ONLY facts you may use.\n',
         '- Use EXACT numbers from CONTEXT or PANDAS RESULT — never estimate\n',
-        '- If answer is not in CONTEXT: write one bullet: That is not in this dataset. Then pivot\n',
+        '- If the answer is not in CONTEXT or PANDAS RESULT: set the "direct_answer" field to: "That is not in this dataset." Then pivot\n',
         '- Out-of-domain queries: If user asks general knowledge (e.g. "what is today", "who is president"), YOU MUST REFUSE nicely: "I only answer questions about the dataset."\n',
         '- Never fabricate numbers or use training knowledge to fill gaps\n',
         '- Rankings: always name the entity AND its exact value\n',
