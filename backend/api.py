@@ -634,6 +634,11 @@ def _classify_chat_intent(question: str) -> str:
     )
     if any((p in q for p in _EXPLAIN)):
         return 'explain_chart'
+    # Regex-based chart intent classifier (tolerant to typos like genrate, genarte)
+    _VERB_PAT = r'\b(?:generat|genrat|genart|genert|creat|crear|make|mkae|build|draw|show|give|need|want|plot|chart|visuali)\w*\b'
+    _NOUN_PAT = r'\b(?:chart|graph|plot|visuali|histogram|scatter|heatmap|donut|pie|bar|line|box|violin|freq_bar|stacked)\w*\b'
+    if _re.search(_VERB_PAT, q) and _re.search(_NOUN_PAT, q):
+        return 'generate_chart'
     _NEED_WANT = ('i need graph', 'i need a graph', 'i need chart', 'i need a chart', 'i need plot', 'i need a plot', 'i need visualization', 'i want graph', 'i want a graph', 'i want chart', 'i want a chart', 'i want plot', 'i want a plot', 'need graph', 'need chart', 'need plot', 'want graph', 'want chart', 'want plot', 'show graph', 'show chart', 'show plot', 'show a graph', 'show a chart', 'show a plot', 'new chart', 'new plot', 'new graph', 'another chart', 'another plot', 'another graph', 'different chart', 'different plot', 'one more chart', 'one more plot', 'more charts', 'more plots', 'can you plot', 'can you chart', 'can you make a', 'can you generate', 'can you create', 'can you show me a', 'can you visualize', 'can you visualise', 'generate chart', 'generate graph', 'generate plot', 'generate me chart', 'generate me graph', 'generate me plot', 'generate me a', 'create chart', 'create graph', 'create plot', 'make chart', 'make graph', 'make plot', 'make a chart', 'make a graph', 'make a plot', 'make me chart', 'make me graph', 'make me a', 'give me chart', 'give me graph', 'give me plot', 'draw chart', 'draw graph', 'draw plot', 'show me a new', 'show me chart', 'show me graph', 'show me plot', 'give me a chart', 'give me a plot', 'give me a graph', 'give me a scatter', 'give me a pie', 'give me a bar', 'give me a line', 'give me a histogram', 'give me a donut', 'give me a heatmap', 'show a pie', 'show a bar', 'show a scatter', 'show a line', 'show a histogram', 'show a donut', 'graph for', 'graph of', 'chart for', 'chart of', 'plot for', 'plot of', 'generate a', 'create a', 'build a', 'draw a', 'visualize ', 'visualise ')
     if any((p in q for p in _NEED_WANT)):
         return 'generate_chart'
