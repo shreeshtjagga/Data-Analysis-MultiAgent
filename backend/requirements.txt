@@ -6,6 +6,7 @@
 # ─── Data processing ──────────────────────────────────────────────────────────
 pandas>=2.0.0,<3.0.0
 numpy>=1.26.0,<3.0.0
+scipy>=1.13.0
 openpyxl>=3.1.2           # .xlsx support
 pyarrow>=16.0.0            # Parquet read/write for disk cache
 
