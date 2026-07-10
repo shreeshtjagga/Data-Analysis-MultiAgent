@@ -1424,6 +1424,7 @@ export default function DataPulse({ user, onLogout }) {
   }, []);
   const loadHistory = async () => {
     setHistoryLoading(true);
+    setHistoryError("");
     try {
       const data = await apiHistory();
       const list = Array.isArray(data) ? data : (Array.isArray(data?.analyses) ? data.analyses : []);
