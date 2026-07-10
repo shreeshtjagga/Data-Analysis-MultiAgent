@@ -15,7 +15,7 @@ _MAX_CONTEXT_CHARS = 12000
 _TOP_K_CHUNKS = 8
 
 
-async def _call_groq_with_retry(groq_client, messages: list[dict], model: str, temperature: float = 0.1, max_tokens: int = 700) -> str:
+async def _call_groq_with_retry(groq_client, messages: list[dict], model: str, temperature: float = 0.1, max_tokens: int = 1500) -> str:
     """Call Groq with automatic fallback to smaller model on rate-limit (429) errors."""
     return await call_groq_with_fallback(messages, model, temperature, max_tokens)
 
@@ -75,7 +75,7 @@ async def _plan_and_run_query(question: str, file_hash: str, col_types: dict, gr
         raw = await call_groq_with_fallback(
             messages=[{'role': 'user', 'content': planner_prompt}],
             primary_model=INTENT_MODEL,
-            max_tokens=250,
+            max_tokens=1000,
             temperature=0
         )
         logger.info('Query planner response: %s', raw[:200])
@@ -283,7 +283,7 @@ async def answer_question(question: str, file_hash: str, file_name: str, stats: 
                             messages=confirm_msg,
                             primary_model=SYNTHESIS_MODEL,
                             temperature=0,
-                            max_tokens=300
+                            max_tokens=1024
                         )
                         answer = _sanitize_llm_output(raw_ans)
                         return {'answer': answer, 'data_queried': True, 'new_chart': None}
@@ -318,7 +318,7 @@ async def answer_question(question: str, file_hash: str, file_name: str, stats: 
                         messages=messages,
                         primary_model=SYNTHESIS_MODEL,
                         temperature=0.05,
-                        max_tokens=500
+                        max_tokens=1200
                     )
                     answer = _sanitize_llm_output(raw_ans)
                     return {'answer': answer, 'data_queried': True, 'new_chart': None}
@@ -367,7 +367,7 @@ async def answer_question(question: str, file_hash: str, file_name: str, stats: 
         messages.append({'role': 'system', 'content': "WARNING: No relevant data was found for this question. You MUST respond in the required JSON format with direct_answer: 'That is not in this dataset.' Then suggest what the user CAN ask about in the `suggestion` field."})
     try:
         temp = 0.05 if data_result is not None else 0.1
-        answer = await _call_groq_with_retry(groq_client, messages, SYNTHESIS_MODEL, temperature=temp, max_tokens=700)
+        answer = await _call_groq_with_retry(groq_client, messages, SYNTHESIS_MODEL, temperature=temp, max_tokens=1500)
         answer = _sanitize_llm_output(answer)
     except Exception as exc:
         logger.error('RAG synthesis failed after retries: %s', exc)

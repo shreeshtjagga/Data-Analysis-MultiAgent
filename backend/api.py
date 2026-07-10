@@ -621,6 +621,16 @@ def _classify_chat_intent(question: str) -> str:
         'what chart shows', 'what graph shows', 'what plot shows',
         'chart mean', 'graph mean', 'chart tell', 'graph tell',
         'chart showing', 'chart show', 'reading the chart', 'read the chart',
+        # vague follow-up references
+        'explain it', 'explain more', 'more about it', 'tell me more', 'elaborate',
+        'explain the above', 'what does it show', 'what does it mean', 'what is it showing',
+        'explain that', 'what is that', 'explain this', 'what is this showing',
+        'what does that chart', 'what does that show', 'explain that chart',
+        'the chart you', 'chart you generated', 'chart you created', 'chart you just',
+        'the one you', 'the plot you', 'you generated', 'you just showed',
+        'you just made', 'explain the chart above', 'i said to explain',
+        'i asked you to explain', 'explain the last', 'breakdown of the chart',
+        'expalin', 'explan', 'explian', # common typos
     )
     if any((p in q for p in _EXPLAIN)):
         return 'explain_chart'

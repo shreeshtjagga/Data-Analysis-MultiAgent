@@ -566,8 +566,27 @@ const ChatBubble = memo(({ m, PlotComponent, result, stopPageZoomOnCtrlWheel, on
           let parsedJson = null;
           try {
             let maybeJson = cleanText.replace(/```json/g, '').replace(/```/g, '').trim();
-            if (maybeJson.startsWith('{') && maybeJson.endsWith('}')) {
-              parsedJson = JSON.parse(maybeJson);
+            // Try to parse the full JSON first
+            if (maybeJson.startsWith('{')) {
+              if (maybeJson.endsWith('}')) {
+                try { parsedJson = JSON.parse(maybeJson); } catch (_) { /* try repair below */ }
+              }
+              // If JSON is truncated (no closing }), try to repair it so we don't show raw JSON
+              if (!parsedJson) {
+                // Extract direct_answer at minimum
+                const daMatch = maybeJson.match(/"direct_answer"\s*:\s*"((?:[^"\\]|\\.)*?)"/);
+                const piMatch = maybeJson.match(/"proactive_insight"\s*:\s*"((?:[^"\\]|\\.)*?)"/);
+                const confMatch = maybeJson.match(/"confidence"\s*:\s*(\d+)/);
+                const suggMatch = maybeJson.match(/"suggestion"\s*:\s*"((?:[^"\\]|\\.)*?)"/);
+                if (daMatch) {
+                  parsedJson = {
+                    direct_answer: daMatch[1],
+                    proactive_insight: piMatch ? piMatch[1] : undefined,
+                    confidence: confMatch ? parseInt(confMatch[1]) : undefined,
+                    suggestion: suggMatch ? suggMatch[1] : undefined,
+                  };
+                }
+              }
             }
           } catch (e) {
             parsedJson = null;
@@ -600,28 +619,36 @@ const ChatBubble = memo(({ m, PlotComponent, result, stopPageZoomOnCtrlWheel, on
                     </div>
                     <button onClick={() => setExpandedChartKey(key)} className="topbar-btn" style={{ padding: '4px 10px', fontSize: '11px', background: 'rgba(99,102,241,0.1)' }}>Expand</button>
                   </div>
-                  <div style={{ height: '240px', pointerEvents: 'none', opacity: 0.95 }} onWheel={stopPageZoomOnCtrlWheel}>
-                    <PlotComponent
-                      data={cData.map(t => ({ ...t, textfont: { color: '#FFFFFF' } }))}
-                      layout={{
-                        ...PLOTLY_DARK_LAYOUT,
-                        ...cLayout,
-                        paper_bgcolor: 'rgba(0,0,0,0)',
-                        plot_bgcolor: 'rgba(0,0,0,0)',
-                        font: { color: '#FFFFFF', family: "'Inter', sans-serif" },
-                        autosize: true,
-                        width: undefined,
-                        dragmode: false,
-                        height: 240,
-                        margin: { r: 15, t: 15, b: 35, l: 35 },
-                        title: { text: '' },
-                        showlegend: false,
-                      }}
-                      config={{ ...PLOTLY_CONFIG, staticPlot: true, displayModeBar: false }}
-                      useResizeHandler
-                      style={{ width: '100%', height: '100%' }}
-                    />
-                  </div>
+                  {(() => {
+                    const _explain_key_type = key.split('_')[0];
+                    const _isHeatmap = _explain_key_type === 'heatmap' || key.toLowerCase().includes('heatmap');
+                    const _previewH = _isHeatmap ? 360 : 240;
+                    const _margin = _isHeatmap ? { r: 60, t: 15, b: 100, l: 100 } : { r: 15, t: 15, b: 35, l: 35 };
+                    return (
+                      <div style={{ height: `${_previewH}px`, pointerEvents: 'none', opacity: 0.95 }} onWheel={stopPageZoomOnCtrlWheel}>
+                        <PlotComponent
+                          data={cData.map(t => ({ ...t, textfont: { color: '#FFFFFF' } }))}
+                          layout={{
+                            ...PLOTLY_DARK_LAYOUT,
+                            ...cLayout,
+                            paper_bgcolor: 'rgba(0,0,0,0)',
+                            plot_bgcolor: 'rgba(0,0,0,0)',
+                            font: { color: '#FFFFFF', family: "'Inter', sans-serif" },
+                            autosize: true,
+                            width: undefined,
+                            dragmode: false,
+                            height: _previewH,
+                            margin: _margin,
+                            title: { text: '' },
+                            showlegend: false,
+                          }}
+                          config={{ ...PLOTLY_CONFIG, staticPlot: true, displayModeBar: false }}
+                          useResizeHandler
+                          style={{ width: '100%', height: '100%' }}
+                        />
+                      </div>
+                    );
+                  })()}
                   {expandedChartKey === key && (
                     <div style={{ position: 'fixed', inset: 0, zIndex: 9999, background: 'rgba(0,0,0,0.85)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '40px' }} onClick={() => setExpandedChartKey(null)}>
                       <div style={{ background: 'var(--bg-deep)', border: '1px solid var(--border-subtle)', borderRadius: '16px', width: '90%', maxWidth: '1000px', height: '80vh', display: 'flex', flexDirection: 'column', overflow: 'hidden', boxShadow: '0 20px 50px rgba(0,0,0,0.6)' }} onClick={e => e.stopPropagation()}>
