@@ -6,13 +6,9 @@ if (!supabaseUrl || !supabaseAnonKey) {
 }
 export const supabase = createClient(supabaseUrl, supabaseAnonKey)
 
-// In local dev (no VITE_API_BASE): use "/api" — Vite proxy strips /api and forwards to localhost:8000
-// In production (VITE_API_BASE set): call backend directly — backend routes have NO /api prefix
 const BASE = import.meta.env.VITE_API_BASE ?? "/api";
 
 
-// ── Session Management ──────────────────────────────────────────────
-// Session timeout configuration (in milliseconds)
 const SESSION_TIMEOUT_MS = 60 * 60 * 1000;        // 1 hour — matches Supabase JWT default expiry
 const INACTIVITY_TIMEOUT_MS = 30 * 60 * 1000;     // 30 minutes of no activity → auto-logout
 
@@ -22,15 +18,10 @@ let _lastActivityAt = Date.now(); // timestamp of last user interaction
 let _onSessionExpired = null;    // callback set by App.jsx for auto-logout
 let _inactivityTimer = null;     // interval for checking inactivity
 
-/**
- * Register a callback that fires when the session expires (either by timeout
- * or inactivity). App.jsx sets this to trigger handleLogout().
- */
 export function onSessionExpired(callback) {
   _onSessionExpired = callback;
 }
 
-/** Record user activity (called by App.jsx on mouse/keyboard/touch events). */
 export function recordActivity() {
   _lastActivityAt = Date.now();
 }
@@ -41,14 +32,12 @@ function _startInactivityMonitor() {
     if (!accessToken) { _stopInactivityMonitor(); return; }
 
     const now = Date.now();
-    // Check token age — force logout if the JWT itself is expired
     if (_sessionSetAt && (now - _sessionSetAt) >= SESSION_TIMEOUT_MS) {
       console.info('[Session] Token expired — logging out');
       _clearSessionState();
       if (_onSessionExpired) _onSessionExpired('session_expired');
       return;
     }
-    // Check inactivity
     if ((now - _lastActivityAt) >= INACTIVITY_TIMEOUT_MS) {
       console.info('[Session] Inactivity timeout — logging out');
       _clearSessionState();
@@ -62,7 +51,6 @@ function _stopInactivityMonitor() {
   if (_inactivityTimer) { clearInterval(_inactivityTimer); _inactivityTimer = null; }
 }
 
-/** Internal: clear local state without side effects (avoids re-entrancy with clearToken). */
 function _clearSessionState() {
   accessToken = null;
   _sessionSetAt = null;
@@ -83,7 +71,6 @@ export function setToken(token) {
 
 export function getToken() {
   if (!accessToken) return null;
-  // Quick check: if the token is stale, treat it as absent
   if (_sessionSetAt && (Date.now() - _sessionSetAt) >= SESSION_TIMEOUT_MS) {
     clearToken();
     return null;
@@ -93,13 +80,10 @@ export function getToken() {
 
 export function clearToken() {
   _clearSessionState();
-  // Clear server-side refresh cookie
   fetch(`${BASE}/auth/logout`, { method: "POST", credentials: "include" }).catch(() => { });
-  // Sign out from Supabase client (clears local storage session)
   try { supabase.auth.signOut().catch(() => {}); } catch (_) {}
 }
 
-// ── Token Refresh ───────────────────────────────────────────────────
 async function refreshAccessToken() {
   try {
     const resp = await fetch(`${BASE}/auth/refresh`, {
@@ -119,7 +103,6 @@ async function refreshAccessToken() {
   return false;
 }
 
-// ── HTTP Helpers ────────────────────────────────────────────────────
 function getStatusMessage(status) {
   const messages = {
     400: "Bad Request",
@@ -223,7 +206,6 @@ async function apiFetch(path, options = {}) {
   return response.json();
 }
 
-// ── Public API Functions ────────────────────────────────────────────
 export async function apiRegister(email, password, name = null) {
   return apiFetch("/auth/register", {
     method: "POST",

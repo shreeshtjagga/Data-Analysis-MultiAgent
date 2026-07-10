@@ -11,7 +11,6 @@ import numpy as np
 import pandas as pd
 logger = logging.getLogger(__name__)
 
-# ── Security: Regex-based ban list (first pass — fast) ──
 _BANNED_PATTERNS = [
     r'\bimport\b', r'\bexec\b', r'\beval\b', r'\bopen\b',
     r'\bos\b\.', r'\bsys\b\.', r'\bsubprocess\b',
@@ -24,8 +23,6 @@ _BANNED_PATTERNS = [
 ]
 _BANNED_RE = re.compile('|'.join(_BANNED_PATTERNS), re.IGNORECASE)
 
-# ── Security: AST-based validator (second pass — thorough) ──
-# Whitelist of allowed top-level attribute roots
 _ALLOWED_NAME_ROOTS = frozenset({
     'df', 'pd', 'np', 'result', 'True', 'False', 'None',
     'len', 'int', 'float', 'str', 'bool', 'list', 'dict', 'tuple', 'set',
@@ -33,7 +30,6 @@ _ALLOWED_NAME_ROOTS = frozenset({
     'isinstance', 'type',
 })
 
-# Dangerous AST node types that should never appear
 _BANNED_AST_NODES = (
     ast.Import, ast.ImportFrom,
 )
@@ -52,21 +48,17 @@ def _validate_ast(code: str) -> Optional[str]:
         return f'Syntax error in generated code: {exc}'
 
     for node in ast.walk(tree):
-        # Block import statements
         if isinstance(node, _BANNED_AST_NODES):
             return f'Unsafe AST node: {type(node).__name__}'
 
-        # Block dunder attribute access (e.g. __class__, __mro__, __subclasses__)
         if isinstance(node, ast.Attribute):
             attr = node.attr
             if attr.startswith('__') and attr.endswith('__'):
                 return f"Unsafe dunder access: '{attr}'"
-            # Block file I/O methods
             if attr in ('to_csv', 'to_excel', 'to_parquet', 'to_sql', 'to_pickle',
                         'to_hdf', 'to_feather', 'to_clipboard'):
                 return f"Blocked I/O method: '{attr}'"
 
-        # Block dangerous function calls by name
         if isinstance(node, ast.Call):
             func = node.func
             if isinstance(func, ast.Name) and func.id in (
@@ -76,9 +68,7 @@ def _validate_ast(code: str) -> Optional[str]:
             ):
                 return f"Blocked function call: '{func.id}'"
 
-        # Block starred unpacking that could cause memory issues
         if isinstance(node, ast.Starred):
-            # Allow in function args, block in assignments that could expand huge iterables
             pass
 
     return None
@@ -148,7 +138,6 @@ async def generate_pandas_code(question: str, df: pd.DataFrame, groq_client) -> 
 
 def _validate_code(code: str) -> Optional[str]:
     """Two-pass validation: regex (fast) then AST (thorough)."""
-    # Pass 1: Regex ban list
     match = _BANNED_RE.search(code)
     if match:
         return f"Unsafe code detected: '{match.group()}'"
@@ -156,7 +145,6 @@ def _validate_code(code: str) -> Optional[str]:
         return 'Generated code is too long (>2000 chars)'
     if 'result' not in code:
         return "Code does not assign to 'result' variable"
-    # Pass 2: AST validation
     ast_error = _validate_ast(code)
     if ast_error:
         return ast_error
@@ -179,7 +167,6 @@ def _exec_with_timeout(code: str, namespace: dict, timeout: int = _MAX_EXEC_TIME
     thread.join(timeout=timeout)
 
     if thread.is_alive():
-        # Thread is still running — it will be abandoned (daemon thread dies with process)
         logger.warning('Code execution timed out after %ds', timeout)
         return f'Code execution timed out after {timeout} seconds'
 

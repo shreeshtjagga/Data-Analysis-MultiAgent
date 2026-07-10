@@ -40,8 +40,6 @@ if DATABASE_URL.startswith('postgres://'):
 elif DATABASE_URL.startswith('postgresql://'):
     DATABASE_URL = DATABASE_URL.replace('postgresql://', 'postgresql+asyncpg://', 1)
 
-# asyncpg mis-parses usernames with a dot (e.g. postgres.projectref from Supabase pooler).
-# URL-encode the dot in the username portion so it is passed through correctly.
 try:
     from urllib.parse import urlparse as _up, urlunparse as _uu
     _parsed = _up(DATABASE_URL)

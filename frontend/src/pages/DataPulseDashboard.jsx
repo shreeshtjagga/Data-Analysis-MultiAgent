@@ -729,7 +729,6 @@ const ChartPanel = memo(({ result, PlotComponent }) => {
     if (!el) return undefined;
 
     const handleWheelCapture = (event) => {
-      // If user zooms, prevent page scroll
       if (!event.ctrlKey && !event.metaKey) {
         event.preventDefault();
       } else {
@@ -763,7 +762,6 @@ const ChartPanel = memo(({ result, PlotComponent }) => {
       }
 
       if (axesAtBoundary.length > 0 && axesAtBoundary.every(Boolean)) {
-        // Stop propagation so Plotly doesn't zoom past the boundary!
         event.stopPropagation();
       }
     };
@@ -975,7 +973,6 @@ const ChartPanel = memo(({ result, PlotComponent }) => {
               if (rangesEqual(current.x, nextViewport.x) && rangesEqual(current.y, nextViewport.y)) {
                 return prev;
               }
-              // Update the ref immediately
               currentViewportsRef.current[key] = { x: nextViewport.x, y: nextViewport.y };
               return { ...prev, [key]: nextViewport };
             });
@@ -1004,7 +1001,6 @@ const ChartPanel = memo(({ result, PlotComponent }) => {
             const nextX = clampedX || rawX || currentXRange;
             const nextY = clampedY || rawY || currentYRange;
 
-            // Update the ref immediately so subsequent wheel/relayout events have the correct current range
             currentViewportsRef.current[key] = { x: nextX, y: nextY };
 
             if (relayoutTimeoutRefs.current[key]) {
@@ -1363,7 +1359,6 @@ export default function DataPulse({ user, onLogout }) {
       clearStageTimers();
       const raw = err?.message || "";
       log(`Core Failure: ${raw}`);
-      // Sanitize raw backend/DB errors — never show internal details to users
       let userMsg = "Analysis failed. Please try again or upload a different file.";
       if (raw.includes("413") || raw.toLowerCase().includes("too large") || raw.toLowerCase().includes("file size")) {
         userMsg = "File is too large. Maximum size is 10 MB.";
@@ -1707,8 +1702,6 @@ export default function DataPulse({ user, onLogout }) {
       }].slice(-MAX_CHAT_MESSAGES));
     } catch (err) {
       const raw = err?.message || "";
-      // Show backend's own message if it's already user-friendly (rate limit, session, etc.)
-      // Otherwise show a clean generic fallback
       const userMsg =
         raw.includes("429") || raw.toLowerCase().includes("too many")
           ? "You're sending messages too fast. Please wait a moment and try again."

@@ -10,7 +10,6 @@ from ..agents.visualizer import visualizer_agent
 from ..agents.insights import insights_agent
 logger = logging.getLogger(__name__)
 _AGENT_TIMEOUT_SECONDS = 90
-# Allow extra time for the Future.result() call overhead on top of the agent timeout
 _RESULT_TIMEOUT_SECONDS = _AGENT_TIMEOUT_SECONDS + 5
 
 def _run_agent_with_timeout(agent_fn, state: AnalysisState, name: str) -> AnalysisState:

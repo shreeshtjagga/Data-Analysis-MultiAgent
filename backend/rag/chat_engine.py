@@ -369,7 +369,6 @@ async def answer_question(question: str, file_hash: str, file_name: str, stats: 
         answer = _sanitize_llm_output(answer)
     except Exception as exc:
         logger.error('RAG synthesis failed after retries: %s', exc)
-        # Last-resort: return a meaningful message from static context instead of generic error
         if static_ctx:
             answer = json.dumps({
                 'direct_answer': 'I am having trouble connecting to the AI model right now. Based on the dataset stats, here is what I know.',
@@ -395,8 +394,6 @@ async def answer_chart_explanation(
     import re as _re
     from .indexer import retrieve_chunks
 
-    # Self-healing key resolution: if chart_data is empty but chart_keys exist,
-    # re-score them against the question and pick the best match
     resolved_key = chart_key
     if not chart_data and chart_keys:
         q_lower = question.lower()
@@ -416,7 +413,6 @@ async def answer_chart_explanation(
 
     chart_facts = _extract_chart_facts(chart_data, resolved_key)
 
-    # Build compact stats context to ground the LLM (prevent generic hallucinations)
     stats_lines: list[str] = []
     num_cols = stats.get('numeric_columns') or {}
     cat_cols = stats.get('categorical_columns') or {}

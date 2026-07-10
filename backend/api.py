@@ -97,8 +97,6 @@ app.add_middleware(CORSMiddleware, allow_origins=origins, allow_credentials=True
 
 @app.middleware('http')
 async def add_security_headers(request: Request, call_next):
-    # Strip /api prefix — frontend sends /api/... but FastAPI routes are at /...
-    # This allows both local dev (Vite proxy strips /api) and production to work
     path = request.scope.get('path', '')
     if path.startswith('/api/'):
         request.scope['path'] = path[4:]       # e.g. /api/history → /history
@@ -109,14 +107,12 @@ async def add_security_headers(request: Request, call_next):
 
     response = await call_next(request)
 
-    # ── Core security headers ──
     response.headers['X-Content-Type-Options'] = 'nosniff'
     response.headers['X-Frame-Options'] = 'DENY'
     response.headers['X-XSS-Protection'] = '1; mode=block'
     response.headers['Referrer-Policy'] = 'strict-origin-when-cross-origin'
     response.headers['Permissions-Policy'] = 'camera=(), microphone=(), geolocation=(), payment=()'
     response.headers['X-Permitted-Cross-Domain-Policies'] = 'none'
-    # ── Content Security Policy ──
     csp_directives = [
         "default-src 'self'",
         "script-src 'self' 'unsafe-inline' 'unsafe-eval' https://cdn.plot.ly",
@@ -129,7 +125,6 @@ async def add_security_headers(request: Request, call_next):
         "form-action 'self'",
     ]
     response.headers['Content-Security-Policy'] = '; '.join(csp_directives)
-    # ── HSTS (only in production to avoid localhost issues) ──
     if APP_ENV == 'production':
         response.headers['Strict-Transport-Security'] = 'max-age=31536000; includeSubDomains; preload'
     return response
@@ -142,7 +137,6 @@ async def custom_http_exception_handler(request: Request, exc: HTTPException):
     else:
         response = JSONResponse(status_code=exc.status_code, content={'detail': exc.detail})
     
-    # Manually add CORS headers to prevent browser hiding the error
     origin = request.headers.get('origin')
     if origin:
         response.headers['Access-Control-Allow-Origin'] = origin
@@ -159,7 +153,6 @@ async def catch_all_exception_handler(request: Request, exc: Exception):
     
     response = JSONResponse(status_code=500, content=content)
     
-    # Manually add CORS headers
     origin = request.headers.get('origin')
     if origin:
         response.headers['Access-Control-Allow-Origin'] = origin
@@ -270,12 +263,10 @@ async def reset_password(body: ResetPasswordRequest, db: AsyncSession=Depends(ge
 
 @app.post('/auth/sync-session', response_model=TokenResponse, tags=['auth'])
 async def sync_session(body: SyncSessionRequest, response: Response=None):
-    # 1. Verify the Supabase token first — this is the critical step
     payload = await verify_access_token(body.access_token)
     if payload is None:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail='Invalid or expired access token')
 
-    # 2. Try to sync with local DB — but don't block login if DB is unavailable
     user_id = 0
     user_name = payload['email'].split('@')[0]
     user_email = payload['email']
@@ -324,7 +315,6 @@ async def refresh_token_route(request: Request, response: Response):
     payload = await verify_access_token(new_session['access_token'])
     if payload is None:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail='Token verification failed after refresh')
-    # Try DB lookup — fall back to token payload if DB is unavailable
     user_id, user_name, user_email = 0, payload['email'].split('@')[0], payload['email']
     user_created_at = user_updated_at = datetime.now(tz=timezone.utc)
     try:
@@ -353,7 +343,6 @@ async def me(credentials: Annotated[HTTPAuthorizationCredentials, Depends(securi
     payload = await verify_access_token(token)
     if payload is None:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail='Invalid or expired token')
-    # Defaults from token (always available, even if DB is down)
     user_id = 0
     user_name = payload['email'].split('@')[0]
     user_email = payload['email']
@@ -416,7 +405,6 @@ def cleanup_old_parquet_files(retention_days: int=3):
     except Exception as exc:
         logger.warning('Parquet cleanup failed: %s', exc)
 
-# Threshold below which Parquet persist runs synchronously (above this it's backgrounded)
 _SYNC_PARQUET_THRESHOLD_ROWS: int = 5000
 
 def _stratified_preview(df: pd.DataFrame, n: int) -> list:
@@ -608,7 +596,6 @@ def _is_result_plausible(data_result: dict, stats: dict) -> tuple[bool, str]:
 
 def _classify_chat_intent(question: str) -> str:
     q = question.lower().strip()
-    # Intercept insults, frustrations, and commands before anything else
     _INSULTS_OR_COMMANDS = ('idiot', 'stupid', 'dumb', 'fool', 'fuck', 'shit', 'bastard', 'asshole', 'useless', 'waste', 'nonsense', 'shut up', 'stop it', 'quiet', 'wtf', 'damn')
     if any((ins in q for ins in _INSULTS_OR_COMMANDS)):
         return 'greeting'
@@ -629,7 +616,6 @@ def _classify_chat_intent(question: str) -> str:
         'what does the chart', 'analyse the chart', 'analyze the chart', 'insight from the chart',
         'insight from this', 'what does this plot', 'what does the plot', 'what does this graph',
         'what does the graph', 'what is shown in', 'what is shown on',
-        # additional natural phrasings
         'above chart', 'above graph', 'above plot', 'last chart', 'this visualization',
         'about this chart', 'about the chart', 'from this chart', 'from the chart',
         'what chart shows', 'what graph shows', 'what plot shows',
@@ -638,13 +624,10 @@ def _classify_chat_intent(question: str) -> str:
     )
     if any((p in q for p in _EXPLAIN)):
         return 'explain_chart'
-    # Regex-based chart intent classifier (tolerant to typos like genrate, genarte, genearte)
-    # Verbs: covers common transpositions and drops of 'generate', 'create', 'make' etc.
     _VERB_PAT = r'\b(?:generat|genearte|genreate|genrate|genarte|genert|gnerate|gernate|creat|crear|make|mkae|build|draw|show|give|need|want|plot|chart|visuali)\w*\b'
     _NOUN_PAT = r'\b(?:chart|graph|plot|visuali|histogram|scatter|heatmap|donut|pie|bar|line|box|violin|stacked)\w*\b'
     if _re.search(_VERB_PAT, q) and _re.search(_NOUN_PAT, q):
         return 'generate_chart'
-    # Backstop: short sentence with a chart noun and no explanation words → treat as generate
     _EXPLAIN_STARTS = ('explain', 'what', 'why', 'describe', 'tell me about', 'interpret', 'read', 'analyse', 'analyze')
     if len(q.split()) <= 7 and _re.search(_NOUN_PAT, q) and not any(q.startswith(e) for e in _EXPLAIN_STARTS):
         return 'generate_chart'
@@ -750,7 +733,6 @@ async def chat_with_analysis(body: ChatRequest, user_id: int=Depends(get_current
             logger.warning('Chat: Failed to load full dataset from Parquet: %s', load_exc)
             using_preview_only = True
 
-    # Production fallback: load full clean_data from DB when Parquet is unavailable
     if not df_records and file_hash:
         try:
             _db_row = await db.execute(
@@ -853,9 +835,6 @@ async def chat_with_analysis(body: ChatRequest, user_id: int=Depends(get_current
                                 pass
                     if filter_label:
                         break
-        # ── Custom chart parsing: user explicitly specifies chart type and/or columns ──
-        # Handles: "histogram of price", "scatter of price vs mileage",
-        #          "bar chart of brand by revenue", "line chart of year vs sales"
         def _parse_explicit_chart_spec(question: str, df_records: list) -> dict | None:
             """Try to extract an explicit chart spec from the user's question."""
             if not df_records:
@@ -869,13 +848,11 @@ async def chat_with_analysis(body: ChatRequest, user_id: int=Depends(get_current
                 text = text.strip().lower()
                 if text in _col_lower:
                     return _col_lower[text]
-                # partial match
                 for norm, orig in _col_lower.items():
                     if text in norm or norm in text:
                         return orig
                 return None
 
-            # Map chart type keywords
             _CHART_TYPE_MAP = {
                 'histogram': 'histogram', 'distribution': 'histogram',
                 'scatter': 'scatter', 'scatter plot': 'scatter',
@@ -900,26 +877,22 @@ async def chat_with_analysis(body: ChatRequest, user_id: int=Depends(get_current
 
             x_col, y_col = None, None
 
-            # Pattern: "of X vs Y" or "X vs Y" or "X versus Y"
             _vs_match = _re.search(r'(?:of\s+)?([a-z0-9_ ]+?)\s+(?:vs\.?|versus|and|against)\s+([a-z0-9_ ]+)', q)
             if _vs_match:
                 x_col = _find_col(_vs_match.group(1).strip())
                 y_col = _find_col(_vs_match.group(2).strip())
 
-            # Pattern: "of X by Y" or "X by Y"
             if not x_col:
                 _by_match = _re.search(r'(?:of\s+)?([a-z0-9_ ]+?)\s+by\s+([a-z0-9_ ]+)', q)
                 if _by_match:
                     x_col = _find_col(_by_match.group(1).strip())
                     y_col = _find_col(_by_match.group(2).strip())
 
-            # Pattern: "of X" (single column)
             if not x_col:
                 _of_match = _re.search(r'(?:of|for|on|showing)\s+([a-z0-9_ ]+?)(?:\s+(?:column|data|values?))?(?:\s*$|\s+(?:and|vs|by|chart|graph|plot))', q)
                 if _of_match:
                     x_col = _find_col(_of_match.group(1).strip())
 
-            # Pattern: "x=colname y=colname" or "x axis = colname"
             _xa = _re.search(r'x[\s_]?(?:axis)?[\s=:]+([a-z0-9_ ]+)', q)
             _ya = _re.search(r'y[\s_]?(?:axis)?[\s=:]+([a-z0-9_ ]+)', q)
             if _xa:
@@ -939,7 +912,6 @@ async def chat_with_analysis(body: ChatRequest, user_id: int=Depends(get_current
             try:
                 chart_result = generate_on_demand_chart(spec=_explicit_spec, df_records=chart_df_records, existing_chart_keys=existing_chart_keys)
                 if chart_result.get('error'):
-                    # Fall through to suggest_novel_chart on explicit spec failure
                     logger.warning('Explicit spec failed (%s), falling back to suggest_novel_chart', chart_result['error'])
                     _explicit_spec = None
                 elif chart_result.get('is_duplicate'):
@@ -980,13 +952,11 @@ async def chat_with_analysis(body: ChatRequest, user_id: int=Depends(get_current
         q_lower = question.lower()
         matched_key = None
 
-        # Pass 1: exact key name substring match
         for key in existing_chart_keys:
             if key.lower() in q_lower:
                 matched_key = key
                 break
 
-        # Pass 2: chart-type keyword → 'in' partial key match (not startswith — too strict)
         if not matched_key:
             chart_type_map = {
                 'scatter':      ['scatter'],
@@ -1014,7 +984,6 @@ async def chat_with_analysis(body: ChatRequest, user_id: int=Depends(get_current
                 if matched_key:
                     break
 
-        # Pass 3: token overlap scoring — dataset-agnostic, handles any column name
         if not matched_key:
             q_tokens = set(_re.sub(r'[^\w]', ' ', q_lower).split())
             best_key, best_score = None, 0
@@ -1026,14 +995,11 @@ async def chat_with_analysis(body: ChatRequest, user_id: int=Depends(get_current
             if best_score > 0:
                 matched_key = best_key
 
-        # Pass 4: fallback to first chart (most prominent on dashboard)
         _explain_key = matched_key or existing_chart_keys[0]
 
-        # Load chart data — try context first, then Redis once with the correct key
         _chart_raw = None
         if isinstance(charts_data, dict) and _explain_key in charts_data:
             _raw = charts_data[_explain_key]
-            # True/None/bool means frontend sent a placeholder stub — need Redis
             if _raw and _raw is not True:
                 _chart_raw = _raw
 

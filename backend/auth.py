@@ -64,11 +64,9 @@ async def _get_or_create_profile(
     if user is not None:
         return user
 
-    # Also check by email (handles the case where account existed before supabase migration)
     result = await db.execute(select(User).where(User.email == email))
     user = result.scalar_one_or_none()
     if user is not None:
-        # Attach the supabase_id to the existing row
         if not user.supabase_id:
             user.supabase_id = supabase_user_id
             await db.flush()
@@ -135,7 +133,6 @@ async def register_user(
     except Exception as exc:
         await db.rollback()
         logger.error('Failed to create local profile after registration: %s', exc)
-        # Supabase user was created — still return success so user can log in
         return {
             'success': True,
             'message': 'Registration successful! Please log in.',
@@ -156,7 +153,6 @@ async def login_user(db: AsyncSession, email: str, password: str) -> dict:
         return {'success': False, 'message': 'Invalid email or password'}
 
     try:
-        # supabase-py v2: sign_in_with_password accepts a credentials dict
         resp = await asyncio.to_thread(
             _supabase_public.auth.sign_in_with_password,
             {'email': normalized_email, 'password': password},
@@ -187,8 +183,6 @@ async def login_user(db: AsyncSession, email: str, password: str) -> dict:
     except Exception as exc:
         await db.rollback()
         logger.error('Failed to sync local profile on login for %s: %s', normalized_email, exc)
-        # Don't fail login just because local DB sync failed — return token anyway
-        # The /auth/me and /auth/sync-session endpoints will retry profile creation
         return {
             'success': True,
             'message': 'Login successful!',
@@ -230,9 +224,6 @@ async def request_password_reset(db: AsyncSession, email: str) -> dict:
     try:
         frontend_url = os.getenv('FRONTEND_URL', 'http://localhost:5173').strip().rstrip('/')
         redirect_to = f'{frontend_url}/auth/callback'
-        # reset_password_for_email triggers Supabase to send the actual recovery email.
-        # The link in the email redirects to /auth/callback#access_token=...&type=recovery
-        # which AuthCallback.jsx intercepts and routes to /reset-password.
         await asyncio.to_thread(
             _supabase_public.auth.reset_password_for_email,
             normalized_email,
