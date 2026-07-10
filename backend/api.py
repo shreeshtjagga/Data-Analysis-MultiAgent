@@ -625,7 +625,7 @@ def _classify_chat_intent(question: str) -> str:
     if any((p in q for p in _EXPLAIN)):
         return 'explain_chart'
     _VERB_PAT = r'\b(?:generat|genearte|genreate|genrate|genarte|genert|gnerate|gernate|creat|crear|make|mkae|build|draw|show|give|need|want|plot|chart|visuali)\w*\b'
-    _NOUN_PAT = r'\b(?:chart|graph|plot|visuali|histogram|scatter|heatmap|donut|pie|bar|line|box|violin|stacked)\w*\b'
+    _NOUN_PAT = r'\b(?:chart|graph|plot|visuali|histogram|scatter|heatmap|donut|pie|bar|line|box|violin|stacked|correlat|corelat|distribut|trend)\w*\b'
     if _re.search(_VERB_PAT, q) and _re.search(_NOUN_PAT, q):
         return 'generate_chart'
     _EXPLAIN_STARTS = ('explain', 'what', 'why', 'describe', 'tell me about', 'interpret', 'read', 'analyse', 'analyze')
@@ -857,7 +857,7 @@ async def chat_with_analysis(body: ChatRequest, user_id: int=Depends(get_current
                 'histogram': 'histogram', 'distribution': 'histogram',
                 'scatter': 'scatter', 'scatter plot': 'scatter',
                 'bar chart': 'ranked_bar', 'bar graph': 'ranked_bar', 'bar': 'ranked_bar',
-                'heatmap': 'heatmap', 'correlation heatmap': 'heatmap',
+                'heatmap': 'heatmap', 'correlation heatmap': 'heatmap', 'correlation': 'heatmap', 'corelation': 'heatmap',
                 'box plot': 'box', 'box': 'box',
                 'violin': 'violin', 'violin plot': 'violin',
                 'pie chart': 'donut', 'pie': 'donut', 'donut': 'donut',
