@@ -608,6 +608,10 @@ def _is_result_plausible(data_result: dict, stats: dict) -> tuple[bool, str]:
 
 def _classify_chat_intent(question: str) -> str:
     q = question.lower().strip()
+    # Intercept insults, frustrations, and commands before anything else
+    _INSULTS_OR_COMMANDS = ('idiot', 'stupid', 'dumb', 'fool', 'fuck', 'shit', 'bastard', 'asshole', 'useless', 'waste', 'nonsense', 'shut up', 'stop it', 'quiet', 'wtf', 'damn')
+    if any((ins in q for ins in _INSULTS_OR_COMMANDS)):
+        return 'greeting'
     _OFF_TOPIC = ('write code', 'write python', 'write javascript', 'write java', 'how to program', 'how to code', 'write a function', 'help me code', 'write a script', 'write an app', 'build an app', 'build a website', 'recipe', 'how to cook', 'how to bake', 'how to make a cake', 'who is the president', 'capital of', 'weather in', 'sports', 'tell me a joke', 'tell me a story', 'write a poem', 'write a song')
     if any((ot in q for ot in _OFF_TOPIC)):
         return 'off_topic'
@@ -634,10 +638,15 @@ def _classify_chat_intent(question: str) -> str:
     )
     if any((p in q for p in _EXPLAIN)):
         return 'explain_chart'
-    # Regex-based chart intent classifier (tolerant to typos like genrate, genarte)
-    _VERB_PAT = r'\b(?:generat|genrat|genart|genert|creat|crear|make|mkae|build|draw|show|give|need|want|plot|chart|visuali)\w*\b'
-    _NOUN_PAT = r'\b(?:chart|graph|plot|visuali|histogram|scatter|heatmap|donut|pie|bar|line|box|violin|freq_bar|stacked)\w*\b'
+    # Regex-based chart intent classifier (tolerant to typos like genrate, genarte, genearte)
+    # Verbs: covers common transpositions and drops of 'generate', 'create', 'make' etc.
+    _VERB_PAT = r'\b(?:generat|genearte|genreate|genrate|genarte|genert|gnerate|gernate|creat|crear|make|mkae|build|draw|show|give|need|want|plot|chart|visuali)\w*\b'
+    _NOUN_PAT = r'\b(?:chart|graph|plot|visuali|histogram|scatter|heatmap|donut|pie|bar|line|box|violin|stacked)\w*\b'
     if _re.search(_VERB_PAT, q) and _re.search(_NOUN_PAT, q):
+        return 'generate_chart'
+    # Backstop: short sentence with a chart noun and no explanation words → treat as generate
+    _EXPLAIN_STARTS = ('explain', 'what', 'why', 'describe', 'tell me about', 'interpret', 'read', 'analyse', 'analyze')
+    if len(q.split()) <= 7 and _re.search(_NOUN_PAT, q) and not any(q.startswith(e) for e in _EXPLAIN_STARTS):
         return 'generate_chart'
     _NEED_WANT = ('i need graph', 'i need a graph', 'i need chart', 'i need a chart', 'i need plot', 'i need a plot', 'i need visualization', 'i want graph', 'i want a graph', 'i want chart', 'i want a chart', 'i want plot', 'i want a plot', 'need graph', 'need chart', 'need plot', 'want graph', 'want chart', 'want plot', 'show graph', 'show chart', 'show plot', 'show a graph', 'show a chart', 'show a plot', 'new chart', 'new plot', 'new graph', 'another chart', 'another plot', 'another graph', 'different chart', 'different plot', 'one more chart', 'one more plot', 'more charts', 'more plots', 'can you plot', 'can you chart', 'can you make a', 'can you generate', 'can you create', 'can you show me a', 'can you visualize', 'can you visualise', 'generate chart', 'generate graph', 'generate plot', 'generate me chart', 'generate me graph', 'generate me plot', 'generate me a', 'create chart', 'create graph', 'create plot', 'make chart', 'make graph', 'make plot', 'make a chart', 'make a graph', 'make a plot', 'make me chart', 'make me graph', 'make me a', 'give me chart', 'give me graph', 'give me plot', 'draw chart', 'draw graph', 'draw plot', 'show me a new', 'show me chart', 'show me graph', 'show me plot', 'give me a chart', 'give me a plot', 'give me a graph', 'give me a scatter', 'give me a pie', 'give me a bar', 'give me a line', 'give me a histogram', 'give me a donut', 'give me a heatmap', 'show a pie', 'show a bar', 'show a scatter', 'show a line', 'show a histogram', 'show a donut', 'graph for', 'graph of', 'chart for', 'chart of', 'plot for', 'plot of', 'generate a', 'create a', 'build a', 'draw a', 'visualize ', 'visualise ')
     if any((p in q for p in _NEED_WANT)):
@@ -783,6 +792,10 @@ async def chat_with_analysis(body: ChatRequest, user_id: int=Depends(get_current
             msg = "I'm your AI data analyst. I answer questions about your dataset, find correlations, and generate charts on demand."
         elif any((t in _q for t in ('how are you',))):
             msg = 'Running smoothly! Ready to dig into your data whenever you are.'
+        elif any((t in _q for t in ('shut up', 'stop it', 'quiet'))):
+            msg = "Apologies if I was being too chatty! I'll keep my responses brief and focused. What would you like to check next?"
+        elif any((t in _q for t in ('idiot', 'stupid', 'dumb', 'fool', 'fuck', 'shit', 'bastard', 'asshole', 'useless', 'waste', 'nonsense', 'wtf', 'damn'))):
+            msg = "I'm here to help you analyze your data. Let's keep the focus on finding insights from the dataset! What would you like to look at next?"
         else:
             msg = f"Hello! I'm your AI analyst for '{file_name}'. Ask me about statistics, relationships, trends — or say 'generate a chart' to create a new visualization."
         return {'answer': msg, 'data_queried': False, 'new_chart': None}
