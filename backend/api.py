@@ -835,11 +835,19 @@ async def chat_with_analysis(body: ChatRequest, user_id: int=Depends(get_current
                                 pass
                     if filter_label:
                         break
-        novel = suggest_novel_chart(df_records=chart_df_records, existing_chart_keys=existing_chart_keys, user_request=question, stats_summary=stats)
+        try:
+            novel = suggest_novel_chart(df_records=chart_df_records, existing_chart_keys=existing_chart_keys, user_request=question, stats_summary=stats)
+        except Exception as _chart_exc:
+            logger.error('suggest_novel_chart failed: %s', _chart_exc, exc_info=True)
+            return {'answer': 'I encountered an error while planning your chart. Please try re-uploading your file and asking again.', 'data_queried': False, 'new_chart': None}
         if novel.get('cannot_plot'):
             reason = novel.get('reason', "I've already plotted all the most useful column combinations for this dataset.")
             return {'answer': reason, 'data_queried': False, 'new_chart': None}
-        chart_result = generate_on_demand_chart(spec=novel['spec'], df_records=chart_df_records, existing_chart_keys=existing_chart_keys)
+        try:
+            chart_result = generate_on_demand_chart(spec=novel['spec'], df_records=chart_df_records, existing_chart_keys=existing_chart_keys)
+        except Exception as _gen_exc:
+            logger.error('generate_on_demand_chart failed: %s', _gen_exc, exc_info=True)
+            return {'answer': 'Chart generation failed. This may be due to incompatible column types. Try specifying which columns to plot (e.g. "scatter of price vs mileage").', 'data_queried': False, 'new_chart': None}
         if chart_result.get('is_duplicate'):
             return {'answer': "You already have this chart on your dashboard! If you'd like to see something else, tell me which columns to plot.", 'data_queried': False, 'new_chart': None}
         if chart_result.get('error'):

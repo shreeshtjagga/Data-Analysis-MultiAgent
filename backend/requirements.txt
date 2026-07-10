@@ -1,16 +1,18 @@
 # DataPulse — Python dependencies
 # Install with: pip install -r requirements.txt
+# IMPORTANT: Versions are pinned to avoid breaking changes from major upgrades.
+# pandas 3.x and plotly 6.x have API breaking changes — keep these caps.
 
 # ─── Data processing ──────────────────────────────────────────────────────────
-pandas>=2.0.0
-numpy>=1.26.0
+pandas>=2.0.0,<3.0.0
+numpy>=1.26.0,<3.0.0
 scipy>=1.13.0
 openpyxl>=3.1.2
 xlrd>=2.0.1
 pyarrow>=16.0.0
 
 # ─── Visualisation ────────────────────────────────────────────────────────────
-plotly>=5.22.0
+plotly>=5.22.0,<6.0.0
 
 # ─── API framework ────────────────────────────────────────────────────────────
 fastapi>=0.111.0

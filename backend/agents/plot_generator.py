@@ -27,7 +27,7 @@ def _records_to_df(records: list[dict]) -> pd.DataFrame:
             parsed = pd.to_datetime(df[col], format='mixed', errors='coerce')
         except (ValueError, TypeError):
             try:
-                parsed = pd.to_datetime(df[col], infer_datetime_format=True, errors='coerce')
+                parsed = pd.to_datetime(df[col], errors='coerce')
             except Exception:
                 continue
         try:
