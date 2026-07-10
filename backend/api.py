@@ -661,6 +661,10 @@ def _classify_chat_intent(question: str) -> str:
             return 'explain_chart'
     return 'data_question'
 
+from collections import OrderedDict
+_DATASET_CACHE = OrderedDict()
+_MAX_CACHE_SIZE = 3
+
 @app.post('/chat', tags=['analysis'])
 async def chat_with_analysis(body: ChatRequest, user_id: int=Depends(get_current_user_id), db: AsyncSession=Depends(get_db)):
     try:
@@ -722,13 +726,24 @@ async def chat_with_analysis(body: ChatRequest, user_id: int=Depends(get_current
             raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail='Could not verify dataset access. Please try again.')
     df_records: list = []
     using_preview_only = False
-    if file_hash and ENABLE_DISK_CACHE:
+    
+    # Try local memory cache first (instantaneous)
+    if file_hash and file_hash in _DATASET_CACHE:
+        df_records = _DATASET_CACHE[file_hash]
+        _DATASET_CACHE.move_to_end(file_hash)
+        logger.info('Chat: Cache hit in-memory for file %s', file_hash[:8])
+        
+    if not df_records and file_hash and ENABLE_DISK_CACHE:
         try:
             assert _re.match('^[a-f0-9]{64}$', file_hash), 'Invalid file hash'
             storage_path = os.path.join(_PARQUET_STORAGE_DIR, f'{file_hash}.parquet')
             if os.path.exists(storage_path):
                 df_full = pd.read_parquet(storage_path)
                 df_records = df_full.to_dict('records')
+                # Save to memory cache
+                _DATASET_CACHE[file_hash] = df_records
+                if len(_DATASET_CACHE) > _MAX_CACHE_SIZE:
+                    _DATASET_CACHE.popitem(last=False)
                 logger.info('Chat: Loaded %d rows from Parquet for on-demand chart gen', len(df_full))
             else:
                 using_preview_only = True
@@ -752,6 +767,10 @@ async def chat_with_analysis(body: ChatRequest, user_id: int=Depends(get_current
                 if isinstance(_db_records, list) and _db_records:
                     df_records = _db_records
                     using_preview_only = False
+                    # Save to memory cache
+                    _DATASET_CACHE[file_hash] = df_records
+                    if len(_DATASET_CACHE) > _MAX_CACHE_SIZE:
+                        _DATASET_CACHE.popitem(last=False)
                     logger.info('Chat: Loaded %d rows from DB clean_data fallback', len(df_records))
         except Exception as _db_exc:
             logger.warning('Chat: DB clean_data fallback failed: %s', _db_exc)
