@@ -946,6 +946,8 @@ async def chat_with_analysis(body: ChatRequest, user_id: int=Depends(get_current
         reasoning = novel.get('reasoning', '')
         answer = reasoning + filter_label if reasoning else f'Here is the chart you requested{filter_label}.'
         return {'answer': answer, 'data_queried': False, 'new_chart': chart_result}
+    df_for_chat = pd.DataFrame(df_records) if df_records else None
+    
     if intent == 'explain_chart':
         if not existing_chart_keys:
             return {'answer': "There aren't any charts on the dashboard yet. If you'd like me to generate one, just ask!", 'data_queried': False, 'new_chart': None}
@@ -1027,6 +1029,7 @@ async def chat_with_analysis(body: ChatRequest, user_id: int=Depends(get_current
                 conversation_history=body.history or [],
                 groq_client=_explain_client,
                 redis_client=_expl_redis,
+                df=df_for_chat
             )
             return explain_result
         _tag = f'\n[CHART: {_explain_key}]' if _explain_key else ''
@@ -1034,6 +1037,6 @@ async def chat_with_analysis(body: ChatRequest, user_id: int=Depends(get_current
     _data_client = get_groq_client()
     if _data_client and file_hash:
         _data_redis = _get_cache_client()
-        ans_result = await answer_question(question=question, file_hash=file_hash, file_name=file_name, stats=stats, insights=insights, chart_keys=existing_chart_keys, conversation_history=body.history or [], groq_client=_data_client, redis_client=_data_redis)
+        ans_result = await answer_question(question=question, file_hash=file_hash, file_name=file_name, stats=stats, insights=insights, chart_keys=existing_chart_keys, conversation_history=body.history or [], groq_client=_data_client, redis_client=_data_redis, df=df_for_chat)
         return ans_result
     return {'answer': f"The dataset '{file_name}' has {stats.get('row_count', '?')} rows and {stats.get('column_count', '?')} columns. I need a valid Groq API key to answer specific questions about it.", 'data_queried': False, 'new_chart': None}

@@ -75,7 +75,7 @@ def _validate_ast(code: str) -> Optional[str]:
     return None
 
 
-async def classify_question(question: str, groq_client) -> str:
+async def classify_question(question: str) -> str:
     q = question.lower().strip()
     _ANALYTICAL_SIGNALS = ('how many', 'how much', 'total', 'count of', 'number of', 'average', 'sum of', 'maximum', 'minimum', 'what is the', 'what are the', 'list all', 'show all', 'top ', 'bottom ', 'highest', 'lowest', 'most', 'least', 'sales report', 'report of', 'report for', 'bikes in', 'sold in', 'made in', 'manufactured in', 'built in', 'registered in', 'price of')
     if any((sig in q for sig in _ANALYTICAL_SIGNALS)):
@@ -103,7 +103,7 @@ async def classify_question(question: str, groq_client) -> str:
 def _build_codegen_prompt(question: str, columns: list[str], dtypes: dict[str, str], sample_values: dict[str, list]) -> str:
     return f'You are a pandas expert. Write ONLY executable Python/pandas code.\n\nDATASET INFO:\n- DataFrame is already loaded as `df`\n- Columns: {columns}\n- Dtypes: {json.dumps(dtypes, default=str)}\n- Sample values per column: {json.dumps(sample_values, default=str)}\n\nQUESTION: "{question}"\n\nRULES:\n1. Store the final answer in a variable called `result`\n2. Use EXACT column names from the list above (case-sensitive)\n3. Do NOT import anything — `pd` and `np` are already available\n4. `result` must be a scalar, dict, Series, or small DataFrame\n5. For counts: use .shape[0] or .value_counts() or .groupby().size()\n6. For filters: match dtypes exactly. If a year column is int64, compare with int not string\n7. Always .head(20) on large results to prevent memory issues\n8. If the question asks about a specific entity (brand, model, state), FILTER for it\n9. For "sales report" or "report of X": compute count, average price, top models/states\n10. Never use print() — just assign to `result`\n\nReturn ONLY the code. No markdown fences. No explanation.'
 
-async def generate_pandas_code(question: str, df: pd.DataFrame, groq_client) -> str:
+async def generate_pandas_code(question: str, df: pd.DataFrame) -> str:
     columns = df.columns.tolist()
     dtypes = {col: str(df[col].dtype) for col in columns}
     sample_values = {}

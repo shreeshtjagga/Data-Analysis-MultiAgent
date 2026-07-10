@@ -41,7 +41,7 @@ def _data_system_prompt(file_name: str, chart_keys: list[str]) -> str:
         'with exact numbers from the real data. These are the ONLY facts you may use.\n',
         '- Use EXACT numbers from CONTEXT or PANDAS RESULT — never estimate\n',
         '- If the answer is not in CONTEXT or PANDAS RESULT: set the "direct_answer" field to: "That is not in this dataset." Then pivot\n',
-        '- Out-of-domain queries: If user asks general knowledge (e.g. "what is today", "who is president"), YOU MUST REFUSE nicely: "I only answer questions about the dataset."\n',
+        '- Out-of-domain queries: If user asks general knowledge (e.g. "what is today"), YOU MUST REFUSE nicely. However, you MAY explain general statistical concepts (like "correlation") as long as you relate them to the dataset.\n',
         '- Never fabricate numbers or use training knowledge to fill gaps\n',
         '- Rankings: always name the entity AND its exact value\n',
         '- Correlations: state r value, direction, and plain-English meaning\n',
@@ -259,7 +259,7 @@ def _sanitize_llm_output(text: str) -> str:
     text = _re.sub('  +', ' ', text)
     return text.strip()
 
-async def answer_question(question: str, file_hash: str, file_name: str, stats: dict, insights: dict, chart_keys: list[str], conversation_history: list[dict], groq_client, redis_client) -> dict:
+async def answer_question(question: str, file_hash: str, file_name: str, stats: dict, insights: dict, chart_keys: list[str], conversation_history: list[dict], groq_client, redis_client, df=None) -> dict:
     from .indexer import retrieve_chunks
     from .pandas_executor import classify_question, generate_pandas_code, safe_execute, format_result, build_rich_context, is_challenge
     from ..core.data_agent import _load_df
@@ -270,10 +270,11 @@ async def answer_question(question: str, file_hash: str, file_name: str, stats: 
                 last_answer = str(msg.get('content', ''))
                 break
         if last_answer:
-            (df, load_err) = _load_df(file_hash)
+            if df is None:
+                (df, load_err) = _load_df(file_hash)
             if df is not None and (not df.empty):
                 try:
-                    code = await generate_pandas_code(question=conversation_history[-2].get('content', question) if len(conversation_history) >= 2 else question, df=df, groq_client=groq_client)
+                    code = await generate_pandas_code(question=conversation_history[-2].get('content', question) if len(conversation_history) >= 2 else question, df=df)
                     exec_result = safe_execute(code, df)
                     if exec_result['error'] is None:
                         formatted = format_result(exec_result['result'])
@@ -288,14 +289,17 @@ async def answer_question(question: str, file_hash: str, file_name: str, stats: 
                         return {'answer': answer, 'data_queried': True, 'new_chart': None}
                 except Exception as exc:
                     logger.warning('Challenge re-verification failed: %s', exc)
-    q_type = await classify_question(question, groq_client)
+    q_type = await classify_question(question)
     logger.info("Question classified as: %s — '%s'", q_type, question[:80])
     static_ctx = _build_static_context(stats, insights)
     if q_type == 'analytical':
-        (df, load_err) = _load_df(file_hash)
+        if df is None:
+            (df, load_err) = _load_df(file_hash)
+        else:
+            load_err = None
         if df is not None and (not df.empty):
             try:
-                code = await generate_pandas_code(question=question, df=df, groq_client=groq_client)
+                code = await generate_pandas_code(question=question, df=df)
                 logger.info('Generated pandas code:\n%s', code)
                 exec_result = safe_execute(code, df)
                 if exec_result['error'] is None:
@@ -388,6 +392,7 @@ async def answer_chart_explanation(
     file_name: str, file_hash: str, chart_keys: list[str],
     stats: dict, insights: dict,
     conversation_history: list[dict], groq_client, redis_client,
+    df=None
 ) -> dict:
     import re as _re
     from .indexer import retrieve_chunks
