@@ -3,12 +3,38 @@ import asyncio
 import json
 import logging
 import os
+import time
 from typing import Any, Optional
 logger = logging.getLogger(__name__)
 SYNTHESIS_MODEL = os.getenv('GROQ_SYNTHESIS_MODEL', 'llama-3.3-70b-versatile')
+FALLBACK_MODEL = os.getenv('GROQ_FALLBACK_MODEL', 'llama-3.1-8b-instant')
 INTENT_MODEL = os.getenv('GROQ_INTENT_MODEL', 'llama-3.1-8b-instant')
 _MAX_CONTEXT_CHARS = 12000
 _TOP_K_CHUNKS = 8
+
+
+async def _call_groq_with_retry(groq_client, messages: list[dict], model: str, temperature: float = 0.1, max_tokens: int = 700) -> str:
+    """Call Groq with automatic fallback to smaller model on rate-limit (429) errors."""
+    for attempt, use_model in enumerate([model, FALLBACK_MODEL]):
+        try:
+            completion = await asyncio.to_thread(
+                groq_client.chat.completions.create,
+                model=use_model,
+                messages=messages,
+                temperature=temperature,
+                max_tokens=max_tokens,
+            )
+            return (completion.choices[0].message.content or '').strip()
+        except Exception as exc:
+            exc_str = str(exc).lower()
+            is_rate_limit = '429' in exc_str or 'rate_limit' in exc_str or 'rate limit' in exc_str or 'too many' in exc_str
+            if is_rate_limit and attempt == 0:
+                logger.warning('Groq rate limit hit on %s, waiting 2s then retrying with fallback model %s', model, FALLBACK_MODEL)
+                await asyncio.sleep(2)
+                continue
+            logger.error('Groq call failed (model=%s attempt=%d): %s', use_model, attempt, exc)
+            raise
+    raise RuntimeError('All Groq model attempts exhausted')
 
 def _data_system_prompt(file_name: str, chart_keys: list[str]) -> str:
     parts = [
@@ -339,12 +365,25 @@ async def answer_question(question: str, file_hash: str, file_name: str, stats: 
         messages.append({'role': 'system', 'content': "WARNING: No relevant data was found for this question. You MUST respond in the required JSON format with direct_answer: 'That is not in this dataset.' Then suggest what the user CAN ask about in the `suggestion` field."})
     try:
         temp = 0.05 if data_result is not None else 0.1
-        completion = await asyncio.to_thread(groq_client.chat.completions.create, model=SYNTHESIS_MODEL, messages=messages, temperature=temp, max_tokens=700)
-        answer = (completion.choices[0].message.content or '').strip()
+        answer = await _call_groq_with_retry(groq_client, messages, SYNTHESIS_MODEL, temperature=temp, max_tokens=700)
         answer = _sanitize_llm_output(answer)
     except Exception as exc:
-        logger.error('RAG synthesis failed: %s', exc)
-        answer = 'I hit a temporary error generating your answer. Please try again in a moment.'
+        logger.error('RAG synthesis failed after retries: %s', exc)
+        # Last-resort: return a meaningful message from static context instead of generic error
+        if static_ctx:
+            answer = json.dumps({
+                'direct_answer': 'I am having trouble connecting to the AI model right now. Based on the dataset stats, here is what I know.',
+                'proactive_insight': static_ctx.split('\n')[0] if static_ctx else '',
+                'confidence': 50,
+                'suggestion': 'Please try again in 30 seconds — this is a temporary API rate limit.'
+            })
+        else:
+            answer = json.dumps({
+                'direct_answer': 'The AI model is temporarily unavailable due to rate limits. Please wait 30 seconds and try again.',
+                'proactive_insight': '',
+                'confidence': 0,
+                'suggestion': 'Ask me the same question again in a moment.'
+            })
     return {'answer': answer, 'data_queried': data_result is not None, 'new_chart': None}
 
 async def answer_chart_explanation(
@@ -428,18 +467,11 @@ async def answer_chart_explanation(
     messages.append({'role': 'user', 'content': question})
 
     try:
-        completion = await asyncio.to_thread(
-            groq_client.chat.completions.create,
-            model=SYNTHESIS_MODEL,
-            messages=messages,
-            temperature=0.05,
-            max_tokens=260,
-        )
-        answer = (completion.choices[0].message.content or '').strip()
+        answer = await _call_groq_with_retry(groq_client, messages, SYNTHESIS_MODEL, temperature=0.05, max_tokens=260)
         if resolved_key and '[CHART:' not in answer:
             answer = f'{answer}\n[CHART: {resolved_key}]'
     except Exception as exc:
-        logger.error('Chart explanation synthesis failed: %s', exc)
+        logger.error('Chart explanation synthesis failed after retries: %s', exc)
         tag = f'\n[CHART: {resolved_key}]' if resolved_key else ''
         answer = f'Here is the chart from {file_name}.{tag}'
 

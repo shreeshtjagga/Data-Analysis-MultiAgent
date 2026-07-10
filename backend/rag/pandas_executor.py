@@ -118,11 +118,33 @@ async def generate_pandas_code(question: str, df: pd.DataFrame, groq_client) -> 
         elif pd.api.types.is_numeric_dtype(df[col]):
             sample_values[col] = [f'min={df[col].min()}', f'max={df[col].max()}']
     prompt = _build_codegen_prompt(question, columns, dtypes, sample_values)
-    resp = await asyncio.to_thread(groq_client.chat.completions.create, model='llama-3.3-70b-versatile', messages=[{'role': 'system', 'content': 'You are a pandas code generator. Output ONLY valid Python code. No markdown. No explanation. No ```.'}, {'role': 'user', 'content': prompt}], temperature=0, max_tokens=500)
-    code = (resp.choices[0].message.content or '').strip()
-    if code.startswith('```'):
-        code = code.split('\n', 1)[-1].rsplit('```', 1)[0].strip()
-    return code
+    sys_msg = {'role': 'system', 'content': 'You are a pandas code generator. Output ONLY valid Python code. No markdown. No explanation. No ```.'}
+    user_msg = {'role': 'user', 'content': prompt}
+    _CODEGEN_MODELS = ['llama-3.3-70b-versatile', 'llama-3.1-8b-instant']
+    last_exc = None
+    for use_model in _CODEGEN_MODELS:
+        try:
+            resp = await asyncio.to_thread(
+                groq_client.chat.completions.create,
+                model=use_model,
+                messages=[sys_msg, user_msg],
+                temperature=0,
+                max_tokens=500,
+            )
+            code = (resp.choices[0].message.content or '').strip()
+            if code.startswith('```'):
+                code = code.split('\n', 1)[-1].rsplit('```', 1)[0].strip()
+            return code
+        except Exception as exc:
+            exc_str = str(exc).lower()
+            is_rate_limit = '429' in exc_str or 'rate_limit' in exc_str or 'rate limit' in exc_str or 'too many' in exc_str
+            if is_rate_limit:
+                logger.warning('Groq codegen rate limit on %s, retrying with next model', use_model)
+                await asyncio.sleep(1)
+                last_exc = exc
+                continue
+            raise
+    raise last_exc or RuntimeError('All code generation models exhausted')
 
 def _validate_code(code: str) -> Optional[str]:
     """Two-pass validation: regex (fast) then AST (thorough)."""
