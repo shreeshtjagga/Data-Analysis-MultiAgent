@@ -1305,3 +1305,73 @@ body {
   opacity: 0.35;
   cursor: not-allowed;
 }
+
+/* =========================================
+   Mobile Responsive Adjustments
+   ========================================= */
+@media (max-width: 900px) {
+  .grid-12 {
+    grid-template-columns: 1fr;
+  }
+  .col-4, .col-8 {
+    grid-column: span 1;
+  }
+  
+  :root {
+    --space-page-x: 16px;
+    --space-page-y: 16px;
+  }
+  
+  .dashboard-grid {
+    display: flex;
+    flex-direction: column;
+  }
+  
+  /* Make KPI Cards stack or wrap */
+  .kpi-grid {
+    grid-template-columns: 1fr !important;
+  }
+  
+  /* Data Info 2-column grid to 1-column */
+  .stats-grid {
+    grid-template-columns: 1fr !important;
+  }
+  
+  /* Modal responsive constraints */
+  .auth-modal-container, 
+  .history-modal-container,
+  .export-modal-container,
+  .auth-card {
+    width: 95vw !important;
+    max-width: 100% !important;
+    padding: 24px !important;
+  }
+  
+  /* Hide text on small primary buttons if necessary or let them shrink */
+  .btn-primary {
+    padding: 0 16px;
+  }
+  
+  /* Make tabs scroll horizontally on mobile */
+  .tabs-nav {
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    padding-bottom: 4px;
+    justify-content: flex-start;
+  }
+  
+  .tabs-nav::-webkit-scrollbar {
+    height: 4px;
+  }
+  
+  .tabs-nav::-webkit-scrollbar-thumb {
+    background: rgba(99,102,241,0.3);
+    border-radius: 4px;
+  }
+  
+  /* Make sure the chat input flex doesn't overflow */
+  .chat-input-row {
+    flex-direction: row;
+    width: 100%;
+  }
+}

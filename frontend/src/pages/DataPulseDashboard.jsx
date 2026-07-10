@@ -2021,7 +2021,7 @@ export default function DataPulse({ user, onLogout }) {
                     )}
                   </div>
                   <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
-                    <div style={{ display: 'flex', gap: '12px' }}>
+                    <div className="chat-input-row" style={{ display: 'flex', gap: '12px' }}>
                       <input className="input-field" value={chatInput} onChange={e => setChatInput(e.target.value)} onKeyDown={e => e.key === 'Enter' && document.getElementById('chat-send-btn')?.click()} style={{ flex: 1, fontSize: '14px' }} placeholder="Query data..." maxLength={1200} />
                       <button id="chat-send-btn" className="btn-primary" onClick={sendChat} disabled={chatLoading} style={{ width: '44px', padding: 0 }}>»</button>
                     </div>
@@ -2064,7 +2064,7 @@ export default function DataPulse({ user, onLogout }) {
                           )}
                         </div>
                       )}
-                      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '16px' }}>
+                      <div className="kpi-grid" style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '16px' }}>
                         {keyMetrics.map(m => (
                           <div key={m.label} className="kpi-card">
                             <strong className="kpi-label">{m.label}</strong>
@@ -2074,7 +2074,7 @@ export default function DataPulse({ user, onLogout }) {
                       </div>
                       <div style={{ padding: '20px', background: 'var(--bg-input)', borderRadius: '12px', border: '1px solid var(--border-subtle)' }}>
                         <strong style={{ fontSize: '15px', display: 'block', marginBottom: '16px', color: 'var(--text-main)', fontFamily: "'Inter', sans-serif" }}>Data Info</strong>
-                        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px' }}>
+                        <div className="stats-grid" style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px' }}>
                           {[
                             {
                               label: 'Numeric Columns',
@@ -2199,7 +2199,7 @@ export default function DataPulse({ user, onLogout }) {
                   {tab === "charts" && <div className="tab-content-fade-in"><ChartPanel result={result} PlotComponent={PlotComponent} /></div>}
                   {tab === "insights" && (
                     <div className="flex-col gap-24 tab-content-fade-in">
-                      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '16px' }}>
+                      <div className="kpi-grid" style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '16px' }}>
                         <div style={{ padding: '18px', borderRadius: '12px', border: '1px solid var(--border-subtle)', background: 'var(--bg-input)' }}>
                           <strong style={{ fontSize: '12px', color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.08em' }}>Strong Correlations</strong>
                           <div style={{ marginTop: '8px', fontSize: '26px', color: 'var(--text-main)', fontFamily: "'Inter', sans-serif" }}>{(stats?.strong_correlations || []).length}</div>
@@ -2376,7 +2376,7 @@ export default function DataPulse({ user, onLogout }) {
             style={{ position: 'absolute', inset: 0, background: 'rgba(0,0,0,0.65)', backdropFilter: 'blur(8px)' }}
           />
           { }
-          <div className="animate-fade-in" style={{
+          <div className="export-modal-container animate-fade-in" style={{
             position: 'relative', zIndex: 1, width: 'min(560px, 94vw)',
             background: 'var(--bg-card)', border: '1px solid rgba(99,102,241,0.25)',
             borderRadius: '20px', padding: '32px', display: 'flex', flexDirection: 'column', gap: '20px',
@@ -2504,7 +2504,7 @@ export default function DataPulse({ user, onLogout }) {
       {showHistory && (
         <div style={{ position: 'fixed', inset: 0, zIndex: 1000, display: 'flex', justifyContent: 'flex-end' }}>
           <div style={{ position: 'absolute', inset: 0, background: 'rgba(0,0,0,0.5)', backdropFilter: 'blur(6px)' }} onClick={() => setShowHistory(false)} />
-          <div className="animate-fade-in" style={{ width: 'min(400px, 100vw)', background: 'var(--bg-card)', borderLeft: '1px solid var(--border-subtle)', position: 'relative', zIndex: 1, padding: '24px', display: 'flex', flexDirection: 'column', gap: '24px', boxShadow: '-20px 0 50px rgba(0,0,0,0.5)' }}>
+          <div className="history-modal-container animate-fade-in" style={{ width: 'min(400px, 100vw)', background: 'var(--bg-card)', borderLeft: '1px solid var(--border-subtle)', position: 'relative', zIndex: 1, padding: '24px', display: 'flex', flexDirection: 'column', gap: '24px', boxShadow: '-20px 0 50px rgba(0,0,0,0.5)' }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
               <h2 style={{ fontSize: '20px' }}>Analysis Vault</h2>
               <button onClick={() => setShowHistory(false)} style={{ background: 'none', border: 'none', color: 'var(--text-muted)', cursor: 'pointer', fontSize: '20px' }}>✕</button>
