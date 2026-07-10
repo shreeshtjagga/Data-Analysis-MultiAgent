@@ -97,7 +97,18 @@ app.add_middleware(CORSMiddleware, allow_origins=origins, allow_credentials=True
 
 @app.middleware('http')
 async def add_security_headers(request: Request, call_next):
+    # Strip /api prefix — frontend sends /api/... but FastAPI routes are at /...
+    # This allows both local dev (Vite proxy strips /api) and production to work
+    path = request.scope.get('path', '')
+    if path.startswith('/api/'):
+        request.scope['path'] = path[4:]       # e.g. /api/history → /history
+        request.scope['raw_path'] = path[4:].encode()
+    elif path == '/api':
+        request.scope['path'] = '/'
+        request.scope['raw_path'] = b'/'
+
     response = await call_next(request)
+
     # ── Core security headers ──
     response.headers['X-Content-Type-Options'] = 'nosniff'
     response.headers['X-Frame-Options'] = 'DENY'
