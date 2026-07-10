@@ -5,6 +5,8 @@ import logging
 import os
 import time
 from typing import Any, Optional
+from ..core.llm_client import call_groq_with_fallback
+
 logger = logging.getLogger(__name__)
 SYNTHESIS_MODEL = os.getenv('GROQ_SYNTHESIS_MODEL', 'llama-3.1-8b-instant')
 FALLBACK_MODEL = os.getenv('GROQ_FALLBACK_MODEL', 'llama-3.1-8b-instant')
@@ -15,26 +17,7 @@ _TOP_K_CHUNKS = 8
 
 async def _call_groq_with_retry(groq_client, messages: list[dict], model: str, temperature: float = 0.1, max_tokens: int = 700) -> str:
     """Call Groq with automatic fallback to smaller model on rate-limit (429) errors."""
-    for attempt, use_model in enumerate([model, FALLBACK_MODEL]):
-        try:
-            completion = await asyncio.to_thread(
-                groq_client.chat.completions.create,
-                model=use_model,
-                messages=messages,
-                temperature=temperature,
-                max_tokens=max_tokens,
-            )
-            return (completion.choices[0].message.content or '').strip()
-        except Exception as exc:
-            exc_str = str(exc).lower()
-            is_rate_limit = '429' in exc_str or 'rate_limit' in exc_str or 'rate limit' in exc_str or 'too many' in exc_str
-            if is_rate_limit and attempt == 0:
-                logger.warning('Groq rate limit hit on %s, waiting 2s then retrying with fallback model %s', model, FALLBACK_MODEL)
-                await asyncio.sleep(2)
-                continue
-            logger.error('Groq call failed (model=%s attempt=%d): %s', use_model, attempt, exc)
-            raise
-    raise RuntimeError('All Groq model attempts exhausted')
+    return await call_groq_with_fallback(messages, model, temperature, max_tokens)
 
 def _data_system_prompt(file_name: str, chart_keys: list[str]) -> str:
     parts = [
@@ -89,8 +72,12 @@ async def _plan_and_run_query(question: str, file_hash: str, col_types: dict, gr
         col_info_str = json.dumps(col_types, ensure_ascii=True)
     planner_prompt = f'You are a data query planner. Decide if a structured query\n\nis needed to answer this question precisely with exact numbers from the full dataset.\nIf YES -> return ONE JSON object (no explanation, no markdown).\nIf NO (opinion, greeting) -> return: NONE\n\nIMPORTANT PLANNING RULES:\n- When the user mentions a SPECIFIC entity (brand, name, category), use filter_group or filter_lookup to filter by that entity.\n  Example: "Kawasaki bikes" → filter by the column whose top_values includes "Kawasaki".\n- When the user mentions a SPECIFIC year/period, use filters with op "eq" on the year/date column.\n  Example: "in year 2020" → filter the year column by value 2020.\n- For "report" or "summary" of a filtered entity, use filter_group with group_by on a descriptive column.\n- For PREDICTION/FORECAST questions ("what will X be in 2030?", "predict future sales"), use "trend" query to get the slope and R-squared. This gives the data needed for extrapolation.\n  Example: "predict sales in 2030" → {{"type":"trend","params":{{"time_col":"Year","val_col":"Sales"}}}}\n- For questions about growth/change over time, use "year_summary" to get yearly aggregates.\n- Use the column metadata below to identify which column contains a mentioned value.\n\nAVAILABLE QUERY TYPES:\nfilter_lookup   -> look up a column value by filtering another\n  example: {{"type":"filter_lookup","params":{{"filter_col":"name","filter_val":"Alice","result_col":"salary"}}}}\ntop_n           -> highest N rows by a numeric column\n  example: {{"type":"top_n","params":{{"column":"Revenue","n":5}}}}\nbottom_n        -> lowest N rows\n  example: {{"type":"bottom_n","params":{{"column":"Price","n":3}}}}\ngroup_aggregate -> group by one column, aggregate another\n  example: {{"type":"group_aggregate","params":{{"group_by":"Region","column":"Sales","func":"sum","n":10}}}}\nfilter_group    -> filter rows then group+aggregate\n  example: {{"type":"filter_group","params":{{"group_by":"Brand","func":"count","n":5,"filters":[{{"column":"Year","op":"eq","value":"2023"}}]}}}}\naggregate       -> single stat on one column\n  example: {{"type":"aggregate","params":{{"column":"Price","func":"mean"}}}}\n  funcs: mean, sum, min, max, count, nunique, median, std\nvalue_counts    -> count occurrences of each category\n  example: {{"type":"value_counts","params":{{"column":"Category","n":10}}}}\nsearch          -> full-text search for a specific named entity\n  example: {{"type":"search","params":{{"value":"John Smith","n":3}}}}\ndistinct        -> list all unique values in a column\n  example: {{"type":"distinct","params":{{"column":"Country"}}}}\ntrend           -> linear trend/slope of a numeric column over time\n  example: {{"type":"trend","params":{{"time_col":"Year","val_col":"Revenue"}}}}\nyear_summary    -> aggregate a numeric column by year (or other time bucket)\n  example: {{"type":"year_summary","params":{{"time_col":"Date","val_col":"Sales","func":"sum"}}}}\nrow_count       -> count rows matching a filter\n  example: {{"type":"row_count","params":{{"filters":[{{"column":"Status","op":"eq","value":"Active"}}]}}}}\ncorrelation     -> correlation between two numeric columns\n  example: {{"type":"correlation","params":{{"column":"Price","column2":"Sales"}}}}\npercentile      -> compute percentile of a numeric column\n  example: {{"type":"percentile","params":{{"column":"Age","percentile":90}}}}\nFILTER OPS: eq, neq, gt, lt, gte, lte, contains, year, month, isnull, notnull\nDATASET COLUMNS (with sample values and ranges):\n{col_info_str}\nQUESTION: {question}\n\nReturn ONLY the JSON object or the word NONE. No explanation whatsoever.'
     try:
-        resp = await asyncio.to_thread(groq_client.chat.completions.create, model=INTENT_MODEL, messages=[{'role': 'user', 'content': planner_prompt}], max_tokens=250, temperature=0)
-        raw = (resp.choices[0].message.content or '').strip()
+        raw = await call_groq_with_fallback(
+            messages=[{'role': 'user', 'content': planner_prompt}],
+            primary_model=INTENT_MODEL,
+            max_tokens=250,
+            temperature=0
+        )
         logger.info('Query planner response: %s', raw[:200])
         if '{' not in raw:
             return None
@@ -291,8 +278,13 @@ async def answer_question(question: str, file_hash: str, file_name: str, stats: 
                     if exec_result['error'] is None:
                         formatted = format_result(exec_result['result'])
                         confirm_msg = [{'role': 'system', 'content': _data_system_prompt(file_name, chart_keys)}, {'role': 'system', 'content': f"The user is asking you to confirm a previous answer. You re-ran the query and got this result:\nPANDAS RESULT (re-verified):\n{formatted}\n\nPrevious answer was: {last_answer[:300]}\n\nConfirm the result confidently. In the `direct_answer` JSON field, say 'Yes, confirmed — ' then restate the key number. Do NOT change the answer, make sure to output the required JSON format."}, {'role': 'user', 'content': question}]
-                        completion = await asyncio.to_thread(groq_client.chat.completions.create, model=SYNTHESIS_MODEL, messages=confirm_msg, temperature=0, max_tokens=300)
-                        answer = _sanitize_llm_output((completion.choices[0].message.content or '').strip())
+                        raw_ans = await call_groq_with_fallback(
+                            messages=confirm_msg,
+                            primary_model=SYNTHESIS_MODEL,
+                            temperature=0,
+                            max_tokens=300
+                        )
+                        answer = _sanitize_llm_output(raw_ans)
                         return {'answer': answer, 'data_queried': True, 'new_chart': None}
                 except Exception as exc:
                     logger.warning('Challenge re-verification failed: %s', exc)
@@ -318,8 +310,13 @@ async def answer_question(question: str, file_hash: str, file_name: str, stats: 
                         role = 'assistant' if raw_role in ('assistant', 'ai') else 'user'
                         messages.append({'role': role, 'content': str(msg.get('content', ''))[:800]})
                     messages.append({'role': 'user', 'content': question})
-                    completion = await asyncio.to_thread(groq_client.chat.completions.create, model=SYNTHESIS_MODEL, messages=messages, temperature=0.05, max_tokens=500)
-                    answer = _sanitize_llm_output((completion.choices[0].message.content or '').strip())
+                    raw_ans = await call_groq_with_fallback(
+                        messages=messages,
+                        primary_model=SYNTHESIS_MODEL,
+                        temperature=0.05,
+                        max_tokens=500
+                    )
+                    answer = _sanitize_llm_output(raw_ans)
                     return {'answer': answer, 'data_queried': True, 'new_chart': None}
                 else:
                     logger.warning('Pandas execution failed, falling back to reasoning: %s', exec_result['error'])

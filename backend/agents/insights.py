@@ -6,7 +6,7 @@ import pandas as pd
 from ..core.state import AnalysisState
 from ..core.errors import add_pipeline_error
 from ..core.utils import truncate_stats_for_llm, sanitize_for_json
-from ..core.llm_client import get_groq_client
+from ..core.llm_client import get_groq_client, call_groq_with_fallback_sync
 logger = logging.getLogger(__name__)
 
 def _build_column_narrative(stats: dict) -> str:
@@ -45,11 +45,15 @@ def _llm_insights(stats: dict) -> Optional[dict]:
     domain = (stats.get('dataset_profile') or {}).get('domain', 'general')
     label = (stats.get('dataset_profile') or {}).get('label', 'dataset')
     try:
-        client = get_groq_client()
-        if not client:
-            return None
-        completion = client.chat.completions.create(model=os.getenv('GROQ_MODEL', 'llama-3.1-8b-instant'), messages=[{'role': 'system', 'content': f'You are a friendly data analyst explaining findings about {label} ({domain} domain). Write in plain, simple English — no jargon. Always respond with valid JSON only. No markdown fences.'}, {'role': 'user', 'content': prompt}], temperature=0.1, max_tokens=1200)
-        raw = (completion.choices[0].message.content or '').strip()
+        raw = call_groq_with_fallback_sync(
+            messages=[
+                {'role': 'system', 'content': f'You are a friendly data analyst explaining findings about {label} ({domain} domain). Write in plain, simple English — no jargon. Always respond with valid JSON only. No markdown fences.'},
+                {'role': 'user', 'content': prompt}
+            ],
+            primary_model=os.getenv('GROQ_MODEL', 'llama-3.1-8b-instant'),
+            temperature=0.1,
+            max_tokens=1200
+        )
         if raw.startswith('```'):
             raw = raw.split('\n', 1)[-1].rsplit('```', 1)[0].strip()
         result = json.loads(raw)

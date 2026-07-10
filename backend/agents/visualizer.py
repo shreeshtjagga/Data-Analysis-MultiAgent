@@ -13,7 +13,7 @@ import plotly.graph_objects as go
 from ..core.state import AnalysisState
 from ..core.errors import add_pipeline_error
 from ..core.utils import truncate_stats_for_llm
-from ..core.llm_client import get_groq_client
+from ..core.llm_client import get_groq_client, call_groq_with_fallback_sync
 logger = logging.getLogger(__name__)
 COLOR_PALETTE = px.colors.qualitative.Bold
 TEMPLATE = 'plotly_white'
@@ -160,12 +160,16 @@ def _llm_plan_charts(df: pd.DataFrame, cols: dict, stats: dict) -> Optional[list
     profile = {'rows': len(df), 'dataset_label': stats.get('dataset_profile', {}).get('label', 'Unknown'), 'dataset_domain': stats.get('dataset_profile', {}).get('domain', 'general'), 'numeric_columns': num_profiles, 'categorical_columns': cat_profiles, 'datetime_columns': cols['date'][:5], 'likert_columns': cols['likert'][:8], 'strong_correlations': stats.get('strong_correlations', [])[:8]}
     prompt = f'You are an expert data visualization planner.\nGiven this dataset profile, plan exactly the {MAX_OUTPUT_CHARTS} most insightful charts.\nEach chart must use REAL column names from the profile.\n\nDataset profile:\n<profile>{json.dumps(profile, ensure_ascii=True)}</profile>\n\nRules:\n1. For a numeric column that is heavy_tailed=true, use "histogram" with log_scale=true.\n2. For top-N entity rankings (e.g. country, city, product by a metric), use "ranked_bar".\n3. For numeric vs categorical (≤15 cats), use "grouped_bar" (sum for totals, mean for rates).\n4. For two correlated numeric columns, use "scatter".\n5. For a datetime + numeric, use "line".\n6. For correlation overview (≥3 numeric cols), use "heatmap".\n7. For categorical with 2-7 values, use "donut".\n8. For likert/rating columns (multiple), use "likert_bar".\n9. For distribution + outlier check, use "box".\n10. Never repeat the same (x, y) pair. Avoid redundant charts.\n11. TITLES: Use generic attribute names (e.g., "Sales by Region") NOT values (e.g., "Total 5000 in California"). Use only REAL column names.\n12. Prioritize charts that give REAL business/domain insight, not just counts.\n13. CRITICAL: NEVER use date-of-birth, age, dob, birth_date, or any personal date column as a raw chart axis. These columns contain personal data and produce meaningless spikes. If you want birth year distribution, use a histogram on a derived year — but only if birth-year is explicitly a separate numeric column.\n14. CRITICAL: datetime_columns listed in the profile are DATE columns. Never use them as Y-axis values. Only use them as X-axis for time-series (line charts) when paired with a meaningful numeric Y.\n\nRespond ONLY with valid JSON — a list of up to {MAX_OUTPUT_CHARTS} objects:\n[\n  {{\n    "chart_type": "<one of: ranked_bar|grouped_bar|histogram|scatter|line|heatmap|box|violin|donut|likert_bar|stacked_bar>",\n    "x": "<column name or null>",\n    "y": "<column name or null>",\n    "color": "<column name or null>",\n    "log_scale": false,\n    "title": "<human readable chart title>",\n    "agg": "<sum|mean|count>",\n    "priority": <1 to {MAX_OUTPUT_CHARTS}>\n  }},\n  ...\n]'
     try:
-        client = get_groq_client()
-        if not client:
-            return None
         planner_model = os.getenv('GROQ_PLANNER_MODEL', os.getenv('GROQ_MODEL', 'llama-3.3-70b-versatile'))
-        completion = client.chat.completions.create(model=planner_model, messages=[{'role': 'system', 'content': 'You are a chart planner. Respond with valid JSON array only. No markdown fences.'}, {'role': 'user', 'content': prompt}], temperature=0.1, max_tokens=1200)
-        raw = (completion.choices[0].message.content or '').strip()
+        raw = call_groq_with_fallback_sync(
+            messages=[
+                {'role': 'system', 'content': 'You are a chart planner. Respond with valid JSON array only. No markdown fences.'},
+                {'role': 'user', 'content': prompt}
+            ],
+            primary_model=planner_model,
+            temperature=0.1,
+            max_tokens=1200
+        )
         if raw.startswith('```'):
             raw = re.sub('^```[a-z]*\\n?', '', raw).rstrip('`').strip()
         plan = json.loads(raw)
@@ -791,13 +795,17 @@ def _llm_evaluate_charts(charts: list[Chart], df: pd.DataFrame, cols: dict, stat
     chart_summaries = [_chart_summary_for_llm(c, df) for c in charts]
     prompt = f"""You are an expert Data Visualization Quality Evaluator.\nYou built the following charts for a dataset. Review each one and decide if it is high quality.\n\nDataset domain: {stats.get('dataset_profile', {}).get('label', 'Unknown')}\nNumeric columns: {cols['num'][:8]}\nCategorical columns: {cols['cat'][:6]}\n\nBuilt charts summary:\n<charts>{json.dumps(chart_summaries, ensure_ascii=True)}</charts>\n\nFor EACH chart, respond with one of:\n  KEEP   — if it provides clear, meaningful insight\n  REPLACE — if it's the wrong chart type for the data (provide a better spec)\n  DROP   — if it shows no useful information\n\nRules for REPLACE:\n- Only replace if you can specify a clearly BETTER alternative using existing columns\n- A repeated scatter showing the same columns as another chart → DROP\n- A histogram with only 1-2 bars visible → REPLACE with ranked_bar\n- A box plot with only 1 category → DROP\n- An empty or near-empty chart → DROP\n\nRespond ONLY with valid JSON:\n{{\n  "evaluations": [\n    {{"key": "<chart_key>", "decision": "KEEP|REPLACE|DROP",\n      "reason": "<one line>",\n      "replacement": {{"chart_type": "ranked_bar", "x": "<col>", "y": "<col>",\n                      "title": "<title>", "agg": "sum", "log_scale": false}}\n      }},\n    ...\n  ]\n}}\n"replacement" is ONLY required when decision is REPLACE. Omit it otherwise."""
     try:
-        client = get_groq_client()
-        if not client:
-            return charts
-        completion = client.chat.completions.create(model=planner_model, messages=[{'role': 'system', 'content': 'You are a chart quality evaluator. Respond with valid JSON only. No markdown.'}, {'role': 'user', 'content': prompt}], temperature=0.1, max_tokens=500)
-        raw = (completion.choices[0].message.content or '').strip()
+        raw = call_groq_with_fallback_sync(
+            messages=[
+                {'role': 'system', 'content': 'You are a chart quality evaluator. Respond with valid JSON only. No markdown.'},
+                {'role': 'user', 'content': prompt}
+            ],
+            primary_model=planner_model,
+            temperature=0.1,
+            max_tokens=500
+        )
         if raw.startswith('```'):
-            raw = re.sub('^```[a-z]*\\n?', '', raw).rstrip('`').strip()
+            raw = re.sub('^```[a-z]*\n?', '', raw).rstrip('`').strip()
         result = json.loads(raw)
         evaluations = result.get('evaluations', [])
         if not evaluations:

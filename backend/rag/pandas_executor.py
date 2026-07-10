@@ -10,6 +10,7 @@ from typing import Any, Optional
 import numpy as np
 import pandas as pd
 logger = logging.getLogger(__name__)
+from ..core.llm_client import call_groq_with_fallback
 
 _BANNED_PATTERNS = [
     r'\bimport\b', r'\bexec\b', r'\beval\b', r'\bopen\b',
@@ -84,8 +85,13 @@ async def classify_question(question: str, groq_client) -> str:
         return 'reasoning'
     try:
         prompt = f'Classify this data question into ONE category:\n"analytical" — needs exact numbers: counts, sums, averages, filters, specific values, lookups, reports\n"reasoning" — needs interpretation: trends, comparisons, explanations, suggestions, why questions\n\nQuestion: "{question}"\n\nReply with ONLY one word: analytical or reasoning'
-        resp = await asyncio.to_thread(groq_client.chat.completions.create, model='llama-3.1-8b-instant', messages=[{'role': 'user', 'content': prompt}], temperature=0, max_tokens=10)
-        result = (resp.choices[0].message.content or '').strip().lower()
+        result = await call_groq_with_fallback(
+            messages=[{'role': 'user', 'content': prompt}],
+            primary_model='llama-3.1-8b-instant',
+            temperature=0,
+            max_tokens=10
+        )
+        result = result.lower()
         if 'analytical' in result:
             return 'analytical'
         if 'reasoning' in result:
@@ -110,31 +116,15 @@ async def generate_pandas_code(question: str, df: pd.DataFrame, groq_client) -> 
     prompt = _build_codegen_prompt(question, columns, dtypes, sample_values)
     sys_msg = {'role': 'system', 'content': 'You are a pandas code generator. Output ONLY valid Python code. No markdown. No explanation. No ```.'}
     user_msg = {'role': 'user', 'content': prompt}
-    _CODEGEN_MODELS = ['llama-3.3-70b-versatile', 'llama-3.1-8b-instant']
-    last_exc = None
-    for use_model in _CODEGEN_MODELS:
-        try:
-            resp = await asyncio.to_thread(
-                groq_client.chat.completions.create,
-                model=use_model,
-                messages=[sys_msg, user_msg],
-                temperature=0,
-                max_tokens=500,
-            )
-            code = (resp.choices[0].message.content or '').strip()
-            if code.startswith('```'):
-                code = code.split('\n', 1)[-1].rsplit('```', 1)[0].strip()
-            return code
-        except Exception as exc:
-            exc_str = str(exc).lower()
-            is_rate_limit = '429' in exc_str or 'rate_limit' in exc_str or 'rate limit' in exc_str or 'too many' in exc_str
-            if is_rate_limit:
-                logger.warning('Groq codegen rate limit on %s, retrying with next model', use_model)
-                await asyncio.sleep(1)
-                last_exc = exc
-                continue
-            raise
-    raise last_exc or RuntimeError('All code generation models exhausted')
+    code = await call_groq_with_fallback(
+        messages=[sys_msg, user_msg],
+        primary_model='llama-3.3-70b-versatile',
+        temperature=0,
+        max_tokens=500,
+    )
+    if code.startswith('```'):
+        code = code.split('\n', 1)[-1].rsplit('```', 1)[0].strip()
+    return code
 
 def _validate_code(code: str) -> Optional[str]:
     """Two-pass validation: regex (fast) then AST (thorough)."""
