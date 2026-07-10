@@ -231,6 +231,18 @@ async def health_check(db: AsyncSession=Depends(get_db)):
     redis_ok = await redis_cache.ping()
     return HealthResponse(status='ok' if pg_ok and redis_ok else 'degraded', postgres=pg_ok, redis=redis_ok)
 
+@app.head('/health', tags=['system'])
+async def health_check_head(db: AsyncSession=Depends(get_db)):
+    pg_ok = False
+    try:
+        await db.execute(__import__('sqlalchemy').text('SELECT 1'))
+        pg_ok = True
+    except Exception:
+        pass
+    redis_ok = await redis_cache.ping()
+    status_code = 200 if pg_ok and redis_ok else 503
+    return Response(status_code=status_code)
+
 @app.post('/auth/register', response_model=AuthResponse, status_code=status.HTTP_201_CREATED, tags=['auth'], dependencies=[Depends(check_ip_rate_limit)])
 async def register(body: UserRegister, db: AsyncSession=Depends(get_db)):
     result = await register_user(db, body.email, body.password, body.name)

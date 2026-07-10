@@ -8,9 +8,9 @@ from typing import Any, Optional
 from ..core.llm_client import call_groq_with_fallback
 
 logger = logging.getLogger(__name__)
-SYNTHESIS_MODEL = os.getenv('GROQ_SYNTHESIS_MODEL', 'llama-3.1-8b-instant')
-FALLBACK_MODEL = os.getenv('GROQ_FALLBACK_MODEL', 'llama-3.1-8b-instant')
-INTENT_MODEL = os.getenv('GROQ_INTENT_MODEL', 'llama-3.1-8b-instant')
+SYNTHESIS_MODEL = 'llama-3.1-8b-instant'
+FALLBACK_MODEL = 'llama-3.1-8b-instant'
+INTENT_MODEL = 'llama-3.1-8b-instant'
 _MAX_CONTEXT_CHARS = 12000
 _TOP_K_CHUNKS = 8
 
