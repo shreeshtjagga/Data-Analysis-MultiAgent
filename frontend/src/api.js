@@ -6,7 +6,9 @@ if (!supabaseUrl || !supabaseAnonKey) {
 }
 export const supabase = createClient(supabaseUrl, supabaseAnonKey)
 
-const BASE = import.meta.env.VITE_API_BASE ? `${import.meta.env.VITE_API_BASE}/api` : "/api";
+// In local dev (no VITE_API_BASE): use "/api" — Vite proxy strips /api and forwards to localhost:8000
+// In production (VITE_API_BASE set): call backend directly — backend routes have NO /api prefix
+const BASE = import.meta.env.VITE_API_BASE ?? "/api";
 
 
 // ── Session Management ──────────────────────────────────────────────
