@@ -123,11 +123,19 @@ export default function App() {
     handleLogout();
   };
   if (!authState.checked) {
-    // Always render the OAuth callback handler immediately — never block it with null
     if (window.location.pathname === '/auth/callback') {
       return <AuthCallback onLogin={handleLogin} />;
     }
-    return null;
+    return (
+      <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', height: '100vh', background: '#060912', color: '#6366f1', fontFamily: "'Inter', sans-serif" }}>
+        <div className="ai-typing-pulse" style={{ scale: '2' }}>
+          <span></span>
+          <span></span>
+          <span></span>
+        </div>
+        <div style={{ marginTop: '24px', fontSize: '13px', color: '#94a3b8', letterSpacing: '0.08em', textTransform: 'uppercase' }}>Initializing DataPulse...</div>
+      </div>
+    );
   }
   return (
     <Routes>
