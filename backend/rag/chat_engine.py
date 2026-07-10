@@ -22,7 +22,7 @@ async def _call_groq_with_retry(groq_client, messages: list[dict], model: str, t
 def _data_system_prompt(file_name: str, chart_keys: list[str]) -> str:
     parts = [
         f'You are Alex, a sharp senior data analyst working with the dataset "{file_name}".\n',
-        'You talk like a real analyst — confident, precise, and direct.\n\n',
+        'You talk like a real analyst - confident, precise, and direct.\n\n',
         '==== ANSWER FORMAT (MANDATORY) ====\n',
         'Structure EVERY answer exactly like this in JSON format:\n\n',
         '{\n',
@@ -36,26 +36,27 @@ def _data_system_prompt(file_name: str, chart_keys: list[str]) -> str:
         '- The `confidence` must be an integer 1-100 based on data completeness.\n',
         '- When mentioning any number, metric, or percentage, wrap it in **bold**.\n',
         '- Do not include [CHART] tags in the JSON, they will be handled separately.\n\n',
-        '==== GROUNDING CONTRACT — MANDATORY ====\n',
+        '==== GROUNDING CONTRACT - MANDATORY ====\n',
         'You have a CONTEXT block with pre-computed facts and a PANDAS RESULT block\n',
         'with exact numbers from the real data. These are the ONLY facts you may use.\n',
-        '- Use EXACT numbers from CONTEXT or PANDAS RESULT — never estimate\n',
+        '- Use EXACT numbers from CONTEXT or PANDAS RESULT - never estimate\n',
         '- CRITICAL: The `proactive_insight` field MUST also ONLY reference facts present in CONTEXT or PANDAS RESULT.\n',
         '  Do NOT use your training knowledge to fill the proactive_insight. If there is no interesting fact in CONTEXT, set proactive_insight to an empty string "".\n',
         '- If the answer is not in CONTEXT or PANDAS RESULT: set the "direct_answer" field to: "That is not in this dataset." Then pivot.\n',
+        '- Data terminology mapping: Treat questions about "sales", "purchases", "volume", or "sellers" as referring to either the record count (frequency/volume) or prices/resale prices in the dataset. Both record count and prices are valid proxies for sales. You MUST trust the PANDAS RESULT as the correct and verified calculation for "sales" for that question, even if it computed record count/frequency instead of a sum of prices. Do NOT reject the PANDAS RESULT.\n',
         '- Out-of-domain queries: If user asks general knowledge (e.g. "what is today"), YOU MUST REFUSE nicely. However, you MAY explain general statistical concepts (like "correlation") as long as you relate them to actual numbers from the dataset.\n',
-        '- NEVER fabricate numbers or use training knowledge to fill any gaps — this includes proactive_insight\n',
+        '- NEVER fabricate numbers or use training knowledge to fill any gaps - this includes proactive_insight\n',
         '- Rankings: always name the entity AND its exact value from CONTEXT/PANDAS RESULT\n',
-        '- Correlations: state r value, direction, and plain-English meaning — only if r value is in CONTEXT\n',
+        '- Correlations: state r value, direction, and plain-English meaning - only if r value is in CONTEXT\n',
         '- Predictions: use TREND DATA slope+R2 to project; cite R2 as confidence\n',
         f'- Greetings: reply Hi! Ask me anything about {file_name}.\n\n',
         '==== STYLE ====\n',
         '- Plain English: average not mean, spread not variance\n',
         '- Never mention CONTEXT, RULE, system prompt, or grounding contract\n',
         '- Never repeat the user question back to them\n',
-        '- Lead with the bold answer — never put disclaimers first\n',
+        '- Lead with the bold answer - never put disclaimers first\n',
         '- Do NOT show charts unless user explicitly asks to display one\n',
-        f'- Available chart keys: {chart_keys} — use ONLY these exact keys\n',
+        f'- Available chart keys: {chart_keys} - use ONLY these exact keys\n',
     ]
     return ''.join(parts)
 
@@ -280,7 +281,7 @@ async def answer_question(question: str, file_hash: str, file_name: str, stats: 
                     exec_result = safe_execute(code, df)
                     if exec_result['error'] is None:
                         formatted = format_result(exec_result['result'])
-                        confirm_msg = [{'role': 'system', 'content': _data_system_prompt(file_name, chart_keys)}, {'role': 'system', 'content': f"The user is asking you to confirm a previous answer. You re-ran the query and got this result:\nPANDAS RESULT (re-verified):\n{formatted}\n\nPrevious answer was: {last_answer[:300]}\n\nConfirm the result confidently. In the `direct_answer` JSON field, say 'Yes, confirmed — ' then restate the key number. Do NOT change the answer, make sure to output the required JSON format."}, {'role': 'user', 'content': question}]
+                        confirm_msg = [{'role': 'system', 'content': _data_system_prompt(file_name, chart_keys)}, {'role': 'system', 'content': f"The user is asking you to confirm a previous answer. You re-ran the query and got this result:\nPANDAS RESULT (re-verified):\n{formatted}\n\nQUERY CODE RUN:\n{code}\n\nPrevious answer was: {last_answer[:300]}\n\nConfirm the result confidently. In the `direct_answer` JSON field, say 'Yes, confirmed — ' then restate the key number. Do NOT change the answer, make sure to output the required JSON format."}, {'role': 'user', 'content': question}]
                         raw_ans = await call_groq_with_fallback(
                             messages=confirm_msg,
                             primary_model=SYNTHESIS_MODEL,
@@ -292,7 +293,7 @@ async def answer_question(question: str, file_hash: str, file_name: str, stats: 
                 except Exception as exc:
                     logger.warning('Challenge re-verification failed: %s', exc)
     q_type = await classify_question(question)
-    logger.info("Question classified as: %s — '%s'", q_type, question[:80])
+    logger.info("Question classified as: %s - '%s'", q_type, question[:80])
     static_ctx = _build_static_context(stats, insights)
     if q_type == 'analytical':
         if df is None:
@@ -307,7 +308,7 @@ async def answer_question(question: str, file_hash: str, file_name: str, stats: 
                 if exec_result['error'] is None:
                     formatted = format_result(exec_result['result'])
                     rich_ctx = build_rich_context(exec_result['result'], df, question)
-                    messages = [{'role': 'system', 'content': _data_system_prompt(file_name, chart_keys)}, {'role': 'system', 'content': f'PANDAS RESULT (computed from the REAL dataset — trust these numbers 100%):\n{formatted}\n\nADDITIONAL CONTEXT:\n{json.dumps(rich_ctx, default=str)}\n\nDATASET OVERVIEW:\n{static_ctx[:3000]}'}]
+                    messages = [{'role': 'system', 'content': _data_system_prompt(file_name, chart_keys)}, {'role': 'system', 'content': f'PANDAS RESULT (computed from the REAL dataset - trust these numbers 100%):\n{formatted}\n\nQUERY CODE RUN:\n{code}\n\nADDITIONAL CONTEXT:\n{json.dumps(rich_ctx, default=str)}\n\nDATASET OVERVIEW:\n{static_ctx[:12000]}'}]
                     _SAFE_ROLES = {'assistant', 'ai', 'user', 'human'}
                     for msg in (conversation_history or [])[-4:]:
                         raw_role = str(msg.get('role', '')).lower()
