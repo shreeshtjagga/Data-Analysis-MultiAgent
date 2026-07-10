@@ -1,7 +1,7 @@
 import logging
-import signal
 import concurrent.futures
 import pandas as pd
+
 from .state import AnalysisState
 from .constants import PIPELINE_VERSION
 from ..agents.architect import architect_agent, profile_dataset
@@ -14,19 +14,21 @@ _AGENT_TIMEOUT_SECONDS = 90
 _RESULT_TIMEOUT_SECONDS = _AGENT_TIMEOUT_SECONDS + 5
 
 def _run_agent_with_timeout(agent_fn, state: AnalysisState, name: str) -> AnalysisState:
+    """Run an agent with a wall-clock timeout.
 
-    def _timeout_handler(signum, frame):
-        raise TimeoutError(f"Agent '{name}' timed out after {_AGENT_TIMEOUT_SECONDS}s")
-    has_alarm = hasattr(signal, 'SIGALRM')
-    if has_alarm:
-        old_handler = signal.signal(signal.SIGALRM, _timeout_handler)
-        signal.alarm(_AGENT_TIMEOUT_SECONDS)
-    try:
-        return agent_fn(state)
-    finally:
-        if has_alarm:
-            signal.alarm(0)
-            signal.signal(signal.SIGALRM, old_handler)
+    Uses concurrent.futures instead of signal.SIGALRM because:
+    - SIGALRM is Unix-only
+    - signal.signal() can only be called from the main thread, but FastAPI
+      runs the pipeline via asyncio.to_thread() which executes in a worker thread.
+    """
+    with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
+        future = executor.submit(agent_fn, state)
+        try:
+            return future.result(timeout=_AGENT_TIMEOUT_SECONDS)
+        except concurrent.futures.TimeoutError:
+            future.cancel()
+            raise TimeoutError(f"Agent '{name}' timed out after {_AGENT_TIMEOUT_SECONDS}s")
+
 
 def _run_parallel_agents(state: AnalysisState) -> AnalysisState:
     if state.clean_df is None:
