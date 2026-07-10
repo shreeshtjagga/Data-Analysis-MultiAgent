@@ -117,25 +117,27 @@ async def get_current_user_id(credentials: Annotated[HTTPAuthorizationCredential
     payload = await verify_access_token(token)
     if payload is None:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail='Invalid or expired token', headers={'WWW-Authenticate': 'Bearer'})
-    result = await db.execute(_sa_select(_User).where(
-        or_(_User.supabase_id == payload['sub'], _User.email == payload['email'])
-    ))
-    user = result.scalar_one_or_none()
+    user = None
+    try:
+        user = await db.get(_User, int(payload['sub']))
+    except (TypeError, ValueError):
+        user = None
     if user is None:
-        # Auto-create local profile for valid Supabase users (e.g., new OAuth users)
+        result = await db.execute(_sa_select(_User).where(
+            or_(_User.supabase_id == payload['sub'], _User.email == payload['email'])
+        ))
+        user = result.scalar_one_or_none()
+    if user is None:
         try:
             user = _User(supabase_id=payload['sub'], email=payload['email'], name=payload['email'].split('@')[0])
             db.add(user)
             await db.commit()
             await db.refresh(user)
-            logger.info('Auto-created local profile for Supabase user: %s', payload['email'])
+            logger.info('Auto-created local profile for token user: %s', payload['email'])
         except Exception as exc:
             await db.rollback()
             logger.error('Failed to auto-create profile for %s: %s', payload['email'], exc)
             raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail='User profile unavailable', headers={'WWW-Authenticate': 'Bearer'})
-    elif not user.supabase_id:
-        user.supabase_id = payload['sub']
-        await db.commit()
     return user.id
 
 async def check_ip_rate_limit(request: Request):
@@ -236,8 +238,13 @@ async def refresh_token_route(request: Request, response: Response, db: AsyncSes
     payload = await verify_access_token(new_session['access_token'])
     if payload is None:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail='Token verification failed after refresh')
-    result = await db.execute(_sa_select(_User).where(_User.supabase_id == payload['sub']))
-    user = result.scalar_one_or_none()
+    try:
+        user = await db.get(_User, int(payload['sub']))
+    except (TypeError, ValueError):
+        user = None
+    if user is None:
+        result = await db.execute(_sa_select(_User).where(or_(_User.supabase_id == payload['sub'], _User.email == payload['email'])))
+        user = result.scalar_one_or_none()
     if user is None:
         raise HTTPException(status_code=404, detail='User not found')
     return TokenResponse(access_token=new_session['access_token'], token_type='bearer', user=UserResponse(id=user.id, name=user.name, email=user.email, created_at=user.created_at, updated_at=user.updated_at))

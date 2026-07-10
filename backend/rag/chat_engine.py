@@ -10,6 +10,38 @@ INTENT_MODEL = os.getenv('GROQ_INTENT_MODEL', 'llama-3.1-8b-instant')
 _MAX_CONTEXT_CHARS = 12000
 _TOP_K_CHUNKS = 8
 
+# Throttle concurrent Groq calls to avoid hitting account rate limits.
+# Tunable via env var GROQ_MAX_CONCURRENCY (default 4).
+_GROQ_MAX_CONCURRENCY = int(os.getenv('GROQ_MAX_CONCURRENCY', '4'))
+_GROQ_SEMAPHORE = asyncio.Semaphore(_GROQ_MAX_CONCURRENCY)
+
+
+async def _call_groq_with_backoff(groq_client, *args, max_retries: int = 4, initial_backoff: float = 1.0, max_backoff: float = 16.0, **kwargs):
+    """Call Groq chat completion with retries on RateLimit/timeout errors.
+
+    This is permissive about exception typing because different SDKs
+    or versions may raise different exception classes.
+    """
+    import random
+    attempt = 0
+    while True:
+        try:
+            async with _GROQ_SEMAPHORE:
+                return await asyncio.to_thread(groq_client.chat.completions.create, *args, **kwargs)
+        except Exception as exc:
+            attempt += 1
+            name = exc.__class__.__name__ if exc is not None else ''
+            msg = str(exc or '').lower()
+            is_rate = ('ratelimit' in name.lower()) or ('rate' in msg and 'limit' in msg) or ('rate limit' in msg) or ('429' in msg)
+            is_timeout = ('timeout' in msg) or ('timed out' in msg) or ('connect' in msg)
+            if (is_rate or is_timeout) and attempt <= max_retries:
+                backoff = min(max_backoff, initial_backoff * (2 ** (attempt - 1))) + random.random()
+                logger.warning('Groq transient error (%s): %s. Retrying in %.1fs (attempt %d/%d)', name or 'Error', str(exc)[:200], backoff, attempt, max_retries)
+                await asyncio.sleep(backoff)
+                continue
+            # Not a transient or retries exhausted: re-raise
+            raise
+
 def _data_system_prompt(file_name: str, chart_keys: list[str]) -> str:
     parts = [
         f'You are a friendly and helpful data assistant working with the dataset "{file_name}".\n',
@@ -51,6 +83,45 @@ def _data_system_prompt(file_name: str, chart_keys: list[str]) -> str:
     return ''.join(parts)
 
 
+def _prepare_history_messages(conversation_history: Optional[list], keep_recent: int = 4, max_summary_chars: int = 800, max_role_content: int = 1000) -> list:
+    """Compress conversation history into a small set of messages.
+
+    - Keeps the last `keep_recent` messages verbatim (role=user/assistant).
+    - Summarizes older messages into a single `system` summary message truncated to `max_summary_chars`.
+    - Trims individual role contents to `max_role_content`.
+    """
+    if not conversation_history:
+        return []
+    safe_roles = {'assistant', 'ai', 'user', 'human'}
+    filtered = [m for m in conversation_history if str(m.get('role', '')).lower() in safe_roles]
+    if not filtered:
+        return []
+    # Normalize roles and limit content length
+    norm = []
+    for m in filtered:
+        raw_role = str(m.get('role', '')).lower()
+        role = 'assistant' if raw_role in ('assistant', 'ai') else 'user'
+        content = str(m.get('content', '') or '')
+        content = content.strip()
+        if len(content) > max_role_content:
+            content = content[:max_role_content].rsplit(' ', 1)[0] + '...'
+        norm.append({'role': role, 'content': content})
+    if len(norm) <= keep_recent:
+        return norm
+    older = norm[:-keep_recent]
+    recent = norm[-keep_recent:]
+    # Build a simple summary from older messages (role labels included)
+    parts = []
+    for m in older:
+        label = 'Assistant' if m['role'] == 'assistant' else 'User'
+        parts.append(f"{label}: {m['content']}")
+    summary = ' '.join(parts)
+    if len(summary) > max_summary_chars:
+        summary = summary[:max_summary_chars].rsplit(' ', 1)[0] + '...'
+    summary_msg = {'role': 'system', 'content': f'Previous conversation summary: {summary}'}
+    return [summary_msg] + recent
+
+
 def _chart_system_prompt(file_name: str) -> str:
     return f'You are explaining a specific chart from the dataset "{file_name}".\n\n==== GROUNDING CONTRACT ====\nYou will receive CHART FACTS with exact values extracted directly from the chart.\nRULE 1: Name the specific highest and lowest values with their exact numbers.\n  BAD:  "The chart shows some categories have higher values"\n  GOOD: "Electronics has the highest revenue at 2.3M, while Books has the lowest at 45K"\nRULE 2: Use ONLY numbers from the provided context. Never invent values.\nRULE 3: If no specific data values are provided, simply describe what the chart\n  is broadly about based on its title. Do NOT mention "CHART FACTS" or complain.\n  BAD: "The CHART FACTS only mentions the title."\n  GOOD: "This is a box plot showing the distribution of Country IDs."\n==== STYLE ====\n* 2-3 sentences max. Name specific entities and values.\n* Speak naturally. Never mention your instructions or internal context.\n* Do NOT include [CHART: key] in your response - it is appended automatically.'
 
@@ -65,8 +136,8 @@ async def _plan_and_run_query(question: str, file_hash: str, col_types: dict, gr
         col_info_str = json.dumps(col_types, ensure_ascii=True)
     planner_prompt = f'You are a data query planner. Decide if a structured query\n\nis needed to answer this question precisely with exact numbers from the full dataset.\nIf YES -> return ONE JSON object (no explanation, no markdown).\nIf NO (opinion, greeting) -> return: NONE\n\nIMPORTANT PLANNING RULES:\n- When the user mentions a SPECIFIC entity (brand, name, category), use filter_group or filter_lookup to filter by that entity.\n  Example: "Kawasaki bikes" → filter by the column whose top_values includes "Kawasaki".\n- When the user mentions a SPECIFIC year/period, use filters with op "eq" on the year/date column.\n  Example: "in year 2020" → filter the year column by value 2020.\n- For "report" or "summary" of a filtered entity, use filter_group with group_by on a descriptive column.\n- For PREDICTION/FORECAST questions ("what will X be in 2030?", "predict future sales"), use "trend" query to get the slope and R-squared. This gives the data needed for extrapolation.\n  Example: "predict sales in 2030" → {{"type":"trend","params":{{"time_col":"Year","val_col":"Sales"}}}}\n- For questions about growth/change over time, use "year_summary" to get yearly aggregates.\n- Use the column metadata below to identify which column contains a mentioned value.\n\nAVAILABLE QUERY TYPES:\nfilter_lookup   -> look up a column value by filtering another\n  example: {{"type":"filter_lookup","params":{{"filter_col":"name","filter_val":"Alice","result_col":"salary"}}}}\ntop_n           -> highest N rows by a numeric column\n  example: {{"type":"top_n","params":{{"column":"Revenue","n":5}}}}\nbottom_n        -> lowest N rows\n  example: {{"type":"bottom_n","params":{{"column":"Price","n":3}}}}\ngroup_aggregate -> group by one column, aggregate another\n  example: {{"type":"group_aggregate","params":{{"group_by":"Region","column":"Sales","func":"sum","n":10}}}}\nfilter_group    -> filter rows then group+aggregate\n  example: {{"type":"filter_group","params":{{"group_by":"Brand","func":"count","n":5,"filters":[{{"column":"Year","op":"eq","value":"2023"}}]}}}}\naggregate       -> single stat on one column\n  example: {{"type":"aggregate","params":{{"column":"Price","func":"mean"}}}}\n  funcs: mean, sum, min, max, count, nunique, median, std\nvalue_counts    -> count occurrences of each category\n  example: {{"type":"value_counts","params":{{"column":"Category","n":10}}}}\nsearch          -> full-text search for a specific named entity\n  example: {{"type":"search","params":{{"value":"John Smith","n":3}}}}\ndistinct        -> list all unique values in a column\n  example: {{"type":"distinct","params":{{"column":"Country"}}}}\ntrend           -> linear trend/slope of a numeric column over time\n  example: {{"type":"trend","params":{{"time_col":"Year","val_col":"Revenue"}}}}\nyear_summary    -> aggregate a numeric column by year (or other time bucket)\n  example: {{"type":"year_summary","params":{{"time_col":"Date","val_col":"Sales","func":"sum"}}}}\nrow_count       -> count rows matching a filter\n  example: {{"type":"row_count","params":{{"filters":[{{"column":"Status","op":"eq","value":"Active"}}]}}}}\ncorrelation     -> correlation between two numeric columns\n  example: {{"type":"correlation","params":{{"column":"Price","column2":"Sales"}}}}\npercentile      -> compute percentile of a numeric column\n  example: {{"type":"percentile","params":{{"column":"Age","percentile":90}}}}\nFILTER OPS: eq, neq, gt, lt, gte, lte, contains, year, month, isnull, notnull\nDATASET COLUMNS (with sample values and ranges):\n{col_info_str}\nQUESTION: {question}\n\nReturn ONLY the JSON object or the word NONE. No explanation whatsoever.'
     try:
-        resp = await asyncio.to_thread(groq_client.chat.completions.create, model=INTENT_MODEL, messages=[{'role': 'user', 'content': planner_prompt}], max_tokens=250, temperature=0)
-        raw = (resp.choices[0].message.content or '').strip()
+        resp = await _call_groq_with_backoff(groq_client, model=INTENT_MODEL, messages=[{'role': 'user', 'content': planner_prompt}], max_tokens=250, temperature=0)
+        raw = _extract_completion_text(resp)
         logger.info('Query planner response: %s', raw[:200])
         if '{' not in raw:
             return None
@@ -248,6 +319,61 @@ def _sanitize_llm_output(text: str) -> str:
     text = _re.sub('  +', ' ', text)
     return text.strip()
 
+
+def _extract_completion_text(completion: Any) -> str:
+    # Be permissive: Groq client may return different shapes depending on SDK/version.
+    # Try several common places for the assistant text.
+    try:
+        # Preferred: object with .choices list and .message.content
+        choices = getattr(completion, 'choices', None)
+        if choices:
+            first = choices[0]
+            # object-like choice with message.content
+            if hasattr(first, 'message') and getattr(first.message, 'content', None):
+                return str(getattr(first.message, 'content')).strip()
+            # dict-like choice
+            if isinstance(first, dict):
+                # common shapes: {'message': {'content': ...}} or {'text': '...'}
+                msg = first.get('message')
+                if isinstance(msg, dict) and msg.get('content'):
+                    return str(msg.get('content')).strip()
+                if first.get('text'):
+                    return str(first.get('text')).strip()
+        # Fallback: completion may itself be a dict with 'text' or 'choices'
+        if isinstance(completion, dict):
+            if completion.get('text'):
+                return str(completion.get('text')).strip()
+            ch = completion.get('choices')
+            if ch and isinstance(ch, list) and len(ch) > 0:
+                fc = ch[0]
+                if isinstance(fc, dict):
+                    msg = fc.get('message') or fc.get('msg') or fc
+                    if isinstance(msg, dict) and msg.get('content'):
+                        return str(msg.get('content')).strip()
+                    if fc.get('text'):
+                        return str(fc.get('text')).strip()
+        # As a last resort, stringify the object if it has a readable repr
+        text = str(getattr(completion, '__dict__', completion))
+        if text and text.strip():
+            return text.strip()
+    except Exception:
+        pass
+    raise ValueError('No completion text could be extracted from Groq response')
+
+
+def _rationalize_groq_error(exc: Exception) -> str:
+    msg = str(exc or '')
+    lower = msg.lower()
+    if 'api key' in lower or 'authentication' in lower or 'unauthorized' in lower:
+        return 'I could not reach the reasoning service because of Groq authentication. Please verify your GROQ_API_KEY and try again.'
+    if 'model' in lower and 'not found' in lower:
+        return 'The configured Groq model is unavailable. Please check GROQ_MODEL or GROQ_SYNTHESIS_MODEL settings.'
+    if 'timeout' in lower or 'timed out' in lower or 'connect' in lower or 'connection' in lower:
+        return 'The reasoning service timed out. Please try again in a moment.'
+    if 'rate' in lower and ('limit' in lower or '429' in lower or 'ratelimit' in lower or 'quota' in lower or 'quota' in msg.lower()):
+        return 'The reasoning service is rate-limiting your requests (RateLimit). Try again in a minute, check your Groq quota, or reduce request concurrency.'
+    return 'I hit a temporary error generating your answer. Please try again in a moment.'
+
 async def answer_question(question: str, file_hash: str, file_name: str, stats: dict, insights: dict, chart_keys: list[str], conversation_history: list[dict], groq_client, redis_client) -> dict:
     import time as _time
     from .indexer import retrieve_chunks
@@ -267,9 +393,15 @@ async def answer_question(question: str, file_hash: str, file_name: str, stats: 
                     exec_result = await execute_pandas_with_retry(question=q, df=df, groq_client=groq_client, max_retries=1)
                     if not exec_result['error']:
                         formatted = format_result(exec_result['result'])
-                        confirm_msg = [{'role': 'system', 'content': _data_system_prompt(file_name, chart_keys)}, {'role': 'system', 'content': f"The user is asking you to confirm a previous answer. You re-ran the query and got this result:\nPANDAS RESULT (re-verified):\n{formatted}\n\nPrevious answer was: {last_answer[:300]}\n\nConfirm the result confidently. In the `direct_answer` JSON field, say 'Yes, confirmed — ' then restate the key number. Do NOT change the answer, make sure to output the required JSON format."}, {'role': 'user', 'content': question}]
-                        completion = await asyncio.to_thread(groq_client.chat.completions.create, model=SYNTHESIS_MODEL, messages=confirm_msg, temperature=0, max_tokens=300)
-                        answer = _sanitize_llm_output((completion.choices[0].message.content or '').strip())
+                        confirm_msg = [
+                            {'role': 'system', 'content': _data_system_prompt(file_name, chart_keys)},
+                            {'role': 'system', 'content': f"The user is asking you to confirm a previous answer. You re-ran the query and got this result:\nPANDAS RESULT (re-verified):\n{formatted}\n\nPrevious answer was: {last_answer[:300]}\n\nConfirm the result confidently. In the `direct_answer` JSON field, say 'Yes, confirmed — ' then restate the key number. Do NOT change the answer, make sure to output the required JSON format."},
+                            {'role': 'user', 'content': question},
+                        ]
+                        completion = await _call_groq_with_backoff(groq_client, model=SYNTHESIS_MODEL, messages=confirm_msg, temperature=0, max_tokens=300)
+                        answer_text = _extract_completion_text(completion)
+                        answer = _sanitize_llm_output(answer_text)
+                        code = exec_result.get('code')
                         new_chart = None
                         if exec_result.get('fig_dict'):
                             new_chart = {'id': f'gen_{int(_time.time())}', 'fig': exec_result['fig_dict']}
@@ -279,9 +411,13 @@ async def answer_question(question: str, file_hash: str, file_name: str, stats: 
     q_type = await classify_question(question, groq_client)
     logger.info("Question classified as: %s — '%s'", q_type, question[:80])
     static_ctx = _build_static_context(stats, insights)
-    # --- Code-interpreter path: try for ALL question types ---
+    # Check for simple greetings/pleasantries to bypass code execution and respond instantly
+    _GREETINGS = {'hello', 'hi', 'hey', 'thanks', 'thank you', 'goodbye', 'good morning', 'good afternoon', 'good evening', 'hey there'}
+    q_clean = question.lower().strip().rstrip('!?.')
+    is_simple_greeting = q_clean in _GREETINGS
+    # --- Code-interpreter path: try for ALL question types (except simple greetings) ---
     (df, load_err) = _load_df(file_hash)
-    if df is not None and (not df.empty):
+    if df is not None and (not df.empty) and (not is_simple_greeting):
         try:
             logger.info("Running robust Pandas execution loop (with self-correction)")
             exec_result = await execute_pandas_with_retry(question=question, df=df, groq_client=groq_client, max_retries=3)
@@ -290,16 +426,18 @@ async def answer_question(question: str, file_hash: str, file_name: str, stats: 
                 formatted = format_result(exec_result['result'])
                 rich_ctx = build_rich_context(exec_result['result'], df, question)
                 messages = [{'role': 'system', 'content': _data_system_prompt(file_name, chart_keys)}, {'role': 'system', 'content': f'PANDAS RESULT (computed from the REAL dataset — trust these numbers 100%):\n{formatted}\n\nADDITIONAL CONTEXT:\n{json.dumps(rich_ctx, default=str)}\n\nDATASET OVERVIEW:\n{static_ctx[:3000]}'}]
-                _SAFE_ROLES = {'assistant', 'ai', 'user', 'human'}
-                for msg in (conversation_history or [])[-4:]:
-                    raw_role = str(msg.get('role', '')).lower()
-                    if raw_role not in _SAFE_ROLES:
-                        continue
-                    role = 'assistant' if raw_role in ('assistant', 'ai') else 'user'
-                    messages.append({'role': role, 'content': str(msg.get('content', ''))[:800]})
+                hist_msgs = _prepare_history_messages(conversation_history, keep_recent=4, max_summary_chars=800, max_role_content=800)
+                messages.extend(hist_msgs)
                 messages.append({'role': 'user', 'content': question})
-                completion = await asyncio.to_thread(groq_client.chat.completions.create, model=SYNTHESIS_MODEL, messages=messages, temperature=0.05, max_tokens=500)
-                answer = _sanitize_llm_output((completion.choices[0].message.content or '').strip())
+                completion = await asyncio.to_thread(
+                    groq_client.chat.completions.create,
+                    model=SYNTHESIS_MODEL,
+                    messages=messages,
+                    temperature=0.05,
+                    max_tokens=500,
+                )
+                answer_text = _extract_completion_text(completion)
+                answer = _sanitize_llm_output(answer_text)
                 new_chart = None
                 if exec_result.get('fig_dict'):
                     new_chart = {'id': f'gen_{int(_time.time())}', 'fig': exec_result['fig_dict']}
@@ -336,13 +474,8 @@ async def answer_question(question: str, file_hash: str, file_name: str, stats: 
     (chunks, data_result) = await asyncio.gather(retrieval_coro, query_coro)
     context = _assemble_context(chunks, data_result, static_ctx)
     messages = [{'role': 'system', 'content': _data_system_prompt(file_name, chart_keys)}, {'role': 'system', 'content': f'CONTEXT:\n{context}'}]
-    _SAFE_ROLES = {'assistant', 'ai', 'user', 'human'}
-    for msg in (conversation_history or [])[-6:]:
-        raw_role = str(msg.get('role', '')).lower()
-        if raw_role not in _SAFE_ROLES:
-            continue
-        role = 'assistant' if raw_role in ('assistant', 'ai') else 'user'
-        messages.append({'role': role, 'content': str(msg.get('content', ''))[:1000]})
+    hist_msgs = _prepare_history_messages(conversation_history, keep_recent=6, max_summary_chars=1000, max_role_content=1000)
+    messages.extend(hist_msgs)
     messages.append({'role': 'user', 'content': question})
     has_chunks = bool(chunks)
     has_query = data_result is not None
@@ -350,12 +483,14 @@ async def answer_question(question: str, file_hash: str, file_name: str, stats: 
         messages.append({'role': 'system', 'content': "WARNING: No relevant data was found for this question. You MUST respond in the required JSON format with direct_answer: 'That is not in this dataset.' Then suggest what the user CAN ask about in the `suggestion` field."})
     try:
         temp = 0.05 if data_result is not None else 0.1
-        completion = await asyncio.to_thread(groq_client.chat.completions.create, model=SYNTHESIS_MODEL, messages=messages, temperature=temp, max_tokens=700)
-        answer = (completion.choices[0].message.content or '').strip()
-        answer = _sanitize_llm_output(answer)
+        completion = await _call_groq_with_backoff(groq_client, model=SYNTHESIS_MODEL, messages=messages, temperature=temp, max_tokens=700)
+        answer_text = _extract_completion_text(completion)
+        answer = _sanitize_llm_output(answer_text)
     except Exception as exc:
-        logger.error('RAG synthesis failed: %s', exc)
-        answer = 'I hit a temporary error generating your answer. Please try again in a moment.'
+        logger.exception('RAG synthesis failed')
+        # Include the exception class in the user message (no secrets or internals)
+        short_label = f" ({exc.__class__.__name__})" if exc is not None else ''
+        answer = f"{_rationalize_groq_error(exc)}{short_label}"
     return {'answer': answer, 'data_queried': data_result is not None, 'new_chart': None, 'code': None}
 
 async def answer_chart_explanation(
@@ -428,13 +563,8 @@ async def answer_chart_explanation(
         },
     ]
 
-    _SAFE_ROLES = {'assistant', 'ai', 'user', 'human'}
-    for msg in (conversation_history or [])[-4:]:
-        raw_role = str(msg.get('role', '')).lower()
-        if raw_role not in _SAFE_ROLES:
-            continue
-        role = 'assistant' if raw_role in ('assistant', 'ai') else 'user'
-        messages.append({'role': role, 'content': str(msg.get('content', ''))[:800]})
+    hist_msgs = _prepare_history_messages(conversation_history, keep_recent=4, max_summary_chars=800, max_role_content=800)
+    messages.extend(hist_msgs)
 
     messages.append({'role': 'user', 'content': question})
 
@@ -446,11 +576,12 @@ async def answer_chart_explanation(
             temperature=0.05,
             max_tokens=260,
         )
-        answer = (completion.choices[0].message.content or '').strip()
+        answer_text = _extract_completion_text(completion)
+        answer = _sanitize_llm_output(answer_text)
         if resolved_key and '[CHART:' not in answer:
             answer = f'{answer}\n[CHART: {resolved_key}]'
     except Exception as exc:
-        logger.error('Chart explanation synthesis failed: %s', exc)
+        logger.exception('Chart explanation synthesis failed')
         tag = f'\n[CHART: {resolved_key}]' if resolved_key else ''
         answer = f'Here is the chart from {file_name}.{tag}'
 

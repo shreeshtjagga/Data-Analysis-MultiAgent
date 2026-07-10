@@ -1,7 +1,7 @@
 import os
 
 APP_VERSION = '2.0.0'
-PIPELINE_VERSION = 'v7'
+PIPELINE_VERSION = 'v8'
 
 # ── Data persistence ────────────────────────────────────────────────────────
 # Maximum rows stored in the PostgreSQL clean_data column.

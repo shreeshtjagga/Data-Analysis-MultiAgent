@@ -5,7 +5,7 @@ import os
 import re
 from typing import Optional
 import pandas as pd
-from .visualizer import _build_box, _build_donut, _build_freq_bar, _build_grouped_bar, _build_heatmap, _build_histogram, _build_line, _build_ranked_bar, _build_scatter, _build_stacked_bar, _build_violin, _chart_has_signal
+from .visualizer import _build_box, _build_donut, _build_freq_bar, _build_grouped_bar, _build_heatmap, _build_histogram, _build_line, _build_ranked_bar, _build_scatter, _build_stacked_bar, _build_violin, _is_continuous_numeric, _is_group_dimension, _is_personal_date_column, _passes_pre_render_audit
 logger = logging.getLogger(__name__)
 SUPPORTED_CHART_TYPES = frozenset({'scatter', 'histogram', 'ranked_bar', 'grouped_bar', 'bar', 'box', 'violin', 'donut', 'pie', 'line', 'heatmap', 'freq_bar', 'stacked_bar'})
 _TYPE_DISPLAY = {'scatter': 'Scatter plot', 'histogram': 'Histogram', 'ranked_bar': 'Ranked bar chart', 'grouped_bar': 'Grouped bar chart', 'bar': 'Bar chart', 'box': 'Box plot', 'violin': 'Violin plot', 'donut': 'Donut chart', 'pie': 'Pie chart', 'line': 'Line chart', 'heatmap': 'Heatmap', 'freq_bar': 'Frequency bar chart', 'stacked_bar': 'Stacked bar chart'}
@@ -123,9 +123,14 @@ def _detect_mentioned_columns(user_request: str, df_columns: list[str]) -> list[
     return mentioned
 
 def _build_all_candidates(df: pd.DataFrame, existing_chart_keys: list[str]) -> list[dict]:
-    numeric = [c for c in df.columns if pd.api.types.is_numeric_dtype(df[c])]
-    categorical = [c for c in df.columns if not pd.api.types.is_numeric_dtype(df[c]) and (not pd.api.types.is_datetime64_any_dtype(df[c]))]
-    datetime_cols = [c for c in df.columns if pd.api.types.is_datetime64_any_dtype(df[c])]
+    numeric = [c for c in df.columns if _is_continuous_numeric(df, c)]
+
+    categorical = []
+    for c in df.columns:
+        if _is_group_dimension(df, c, max_categories=500):
+            categorical.append(c)
+
+    datetime_cols = [c for c in df.columns if pd.api.types.is_datetime64_any_dtype(df[c]) and df[c].nunique(dropna=True) > 1 and not _is_personal_date_column(c)]
     candidates = []
 
     def _add(chart_type, x, y, color=None, title='', agg='auto', log_scale=False):
@@ -222,8 +227,8 @@ def suggest_novel_chart(df_records: list[dict], existing_chart_keys: list[str], 
     df = _records_to_df(df_records)
     if df.empty:
         return {'cannot_plot': True, 'reason': 'No dataset preview available. Please re-upload your file.'}
-    numeric = [c for c in df.columns if pd.api.types.is_numeric_dtype(df[c])]
-    categorical = [c for c in df.columns if not pd.api.types.is_numeric_dtype(df[c]) and (not pd.api.types.is_datetime64_any_dtype(df[c]))]
+    numeric = [c for c in df.columns if _is_continuous_numeric(df, c)]
+    categorical = [c for c in df.columns if _is_group_dimension(df, c, max_categories=500)]
     requested_types = _detect_requested_chart_types(user_request)
     mentioned_cols = _detect_mentioned_columns(user_request, list(df.columns))
     logger.info('suggest_novel_chart: requested_types=%s, mentioned_cols=%s, existing=%d', requested_types, mentioned_cols, len(existing_chart_keys))
@@ -306,8 +311,8 @@ def generate_on_demand_chart(spec: dict, df_records: list[dict], existing_chart_
     if existing_chart_keys and _is_duplicate(candidate_key, existing_chart_keys):
         logger.info('Duplicate chart detected: %s', candidate_key)
         return {'id': 'duplicate', 'fig': None, 'error': None, 'is_duplicate': True}
-    num_cols = [c for c in df.columns if pd.api.types.is_numeric_dtype(df[c])]
-    cat_cols = [c for c in df.columns if not pd.api.types.is_numeric_dtype(df[c])]
+    num_cols = [c for c in df.columns if _is_continuous_numeric(df, c)]
+    cat_cols = [c for c in df.columns if _is_group_dimension(df, c, max_categories=500)]
     chart = None
     if chart_type == 'scatter':
         if not x or not y:
@@ -370,7 +375,7 @@ def generate_on_demand_chart(spec: dict, df_records: list[dict], existing_chart_
         if not col:
             return _err('gen_freq_bar', 'Frequency bar requires a categorical column.')
         chart = _build_freq_bar(df, col, title=title)
-    if chart is None or not _chart_has_signal(chart):
+    if chart is None or not _passes_pre_render_audit(chart):
         logger.warning('Primary chart build failed (type=%s x=%s y=%s), trying fallbacks', chart_type, x, y)
         fallback_chart = None
         if len(num_cols) >= 3:
@@ -381,10 +386,10 @@ def generate_on_demand_chart(spec: dict, df_records: list[dict], existing_chart_
             fallback_chart = _build_freq_bar(df, cat_cols[0], title=f'Frequency of {cat_cols[0]}')
         if fallback_chart is None and cat_cols and num_cols:
             fallback_chart = _build_ranked_bar(df, cat_cols[0], num_cols[0], title=f'Top {cat_cols[0]} by {num_cols[0]}')
-        if fallback_chart is not None and _chart_has_signal(fallback_chart):
+        if fallback_chart is not None and _passes_pre_render_audit(fallback_chart):
             chart = fallback_chart
             logger.info('Fallback chart selected: key=%s', chart.key)
-    if chart is None or not _chart_has_signal(chart):
+    if chart is None or not _passes_pre_render_audit(chart):
         n_num = len(num_cols)
         n_cat = len(cat_cols)
         type_label = _TYPE_DISPLAY.get(chart_type, chart_type)

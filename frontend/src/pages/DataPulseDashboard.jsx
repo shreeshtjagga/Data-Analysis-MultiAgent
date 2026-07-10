@@ -1683,13 +1683,9 @@ export default function DataPulse({ user, onLogout }) {
     setChatLoading(true);
     try {
       const resp = await apiChat(q, chatContext || {}, chatHistory);
-      if (resp?.new_chart?.id && resp?.new_chart?.fig) {
+      if (resp?.new_chart?.id) {
         const chartId = resp.new_chart.id;
         setGeneratedChartKeys((prev) => (prev.includes(chartId) ? prev : [...prev, chartId]));
-        setResult((prev) => prev ? ({
-          ...prev,
-          charts: { ...(prev.charts || {}), [chartId]: resp.new_chart.fig },
-        }) : prev);
       }
       const rawAnswer = (resp.answer || "").trim() || "No response generated.";
       const cleanAnswer = rawAnswer.replace(/\*\*/g, '');

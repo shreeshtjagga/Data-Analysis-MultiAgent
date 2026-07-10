@@ -17,11 +17,11 @@ from ..core.llm_client import get_groq_client
 logger = logging.getLogger(__name__)
 COLOR_PALETTE = px.colors.qualitative.Bold
 TEMPLATE = 'plotly_white'
-MAX_OUTPUT_CHARTS = 20
+MAX_OUTPUT_CHARTS = 12
 _SCATTER_MAX_ROWS = 3000
 _HIST_MAX_ROWS = 8000
 _TS_MAX_POINTS = 600
-_RANKED_BAR_TOP_N = 25
+_RANKED_BAR_TOP_N = 15
 
 
 def _completeness(s: pd.Series) -> float:
@@ -32,6 +32,15 @@ def _is_heavy_tailed(s: pd.Series) -> bool:
     if clean.empty or (med := float(clean.median())) <= 0:
         return False
     return float(clean.max()) / med > 100
+
+def _is_low_variance_categorical(s: pd.Series) -> bool:
+    clean = s.dropna()
+    if clean.empty:
+        return True
+    vc = clean.value_counts(normalize=True)
+    if vc.empty:
+        return True
+    return float(vc.iloc[0]) > 0.95
 
 def _is_likert(s: pd.Series) -> bool:
     if not pd.api.types.is_numeric_dtype(s):
@@ -50,6 +59,9 @@ def _is_high_cardinality_id(df: pd.DataFrame, col: str) -> bool:
     col_lower = col.lower()
     id_kw = ('id', 'uuid', 'guid', 'key', 'index', '_id', 'pk', 'email', 'url', 'phone', 'hash')
     is_id_named = any((k in col_lower for k in id_kw))
+    # Float (non-integer) numeric columns are continuous values, not IDs
+    if pd.api.types.is_float_dtype(s) and not is_id_named:
+        return False
     if is_id_named:
         return nu > 0.95 * n
     return nu > 0.995 * n
@@ -98,7 +110,56 @@ def _resample_ts(df: pd.DataFrame, date_col: str, val_cols: list[str], max_pts: 
     return df2.iloc[::step].reset_index()
 
 def _optimal_nbins(n: int) -> int:
-    return min(max(int(np.ceil(np.log2(n) + 1)), 8), 70)
+    if n >= 5000:
+        return 18
+    if n >= 1000:
+        return 22
+    return min(max(int(np.ceil(np.sqrt(max(n, 1)))), 8), 30)
+
+def _histogram_bins(clean: pd.Series) -> tuple[np.ndarray, np.ndarray]:
+    values = clean.astype(float).to_numpy()
+    if len(values) < 5:
+        return np.array([]), np.array([])
+    q1, q3 = np.percentile(values, [25, 75])
+    iqr = q3 - q1
+    if iqr > 0:
+        width = 2 * iqr / (len(values) ** (1 / 3))
+        fd_bins = int(np.ceil((values.max() - values.min()) / width)) if width > 0 else _optimal_nbins(len(values))
+        nbins = min(max(fd_bins, 8), _optimal_nbins(len(values)))
+    else:
+        nbins = _optimal_nbins(len(values))
+    counts, edges = np.histogram(values, bins=nbins)
+    return counts, edges
+
+def _is_uninformative_dense_distribution(clean: pd.Series) -> bool:
+    if len(clean) < 2000:
+        return False
+    counts, _ = _histogram_bins(clean)
+    if len(counts) < 8 or counts.sum() == 0:
+        return False
+    nonzero = counts[counts > 0]
+    if len(nonzero) < len(counts) * 0.85:
+        return False
+    mean_count = float(nonzero.mean())
+    if mean_count <= 0:
+        return False
+    coefficient_of_variation = float(nonzero.std() / mean_count)
+    return coefficient_of_variation < 0.2
+
+def _distribution_interest(df: pd.DataFrame, col: str) -> float:
+    clean = df[col].dropna()
+    if clean.empty or _is_uninformative_dense_distribution(clean):
+        return -1.0
+    counts, _ = _histogram_bins(clean)
+    if len(counts) == 0 or counts.sum() == 0:
+        return -1.0
+    nonzero = counts[counts > 0]
+    cv = float(nonzero.std() / max(float(nonzero.mean()), 1e-9)) if len(nonzero) else 0.0
+    try:
+        skew = abs(float(clean.skew()))
+    except Exception:
+        skew = 0.0
+    return skew + cv + (0.6 if _is_heavy_tailed(clean) else 0.0)
 
 def _style(fig: go.Figure, height: int=450) -> go.Figure:
     fig.update_layout(template=TEMPLATE, height=height, font=dict(family="'Inter', 'DM Sans', system-ui, sans-serif", size=13), title=dict(font_size=16, x=0.5, xanchor='center', y=0.96, yanchor='top'), margin=dict(l=60, r=60, t=85, b=60), colorway=COLOR_PALETTE, plot_bgcolor='rgba(0,0,0,0)', paper_bgcolor='rgba(0,0,0,0)', legend=dict(font=dict(size=11), orientation='h', yanchor='bottom', y=1.02, xanchor='right', x=1), xaxis=dict(showgrid=True, gridwidth=1, gridcolor='rgba(0,0,0,0.06)', automargin=True), yaxis=dict(showgrid=True, gridwidth=1, gridcolor='rgba(0,0,0,0.06)', automargin=True))
@@ -111,10 +172,75 @@ class Chart:
     score: float = 0.0
     cols: set[str] = field(default_factory=set)
 _DATE_NAME_PATTERNS = frozenset({'date', 'dob', 'birth', 'born', 'created', 'updated', 'timestamp', 'year', 'month', 'day', 'time', 'datetime', 'period', 'since'})
+_PERSONAL_DATE_KEYWORDS = ('dob', 'dateofbirth', 'birthdate', 'borndate', 'birthyear', 'birthday', 'yob')
 
 def _is_date_named(col: str) -> bool:
     col_norm = col.lower().replace('_', '').replace('-', '').replace(' ', '')
     return any((p in col_norm for p in _DATE_NAME_PATTERNS))
+
+def _is_personal_date_column(col: str) -> bool:
+    col_norm = col.lower().replace('_', '').replace('-', '').replace(' ', '')
+    return any((kw in col_norm for kw in _PERSONAL_DATE_KEYWORDS))
+
+def _is_group_dimension(df: pd.DataFrame, col: str, max_categories: int=150) -> bool:
+    if col not in df.columns:
+        return False
+    s = df[col]
+    n_unique = s.nunique(dropna=True)
+    if n_unique < 2 or n_unique > max_categories:
+        return False
+    if pd.api.types.is_datetime64_any_dtype(s):
+        return False
+    if _is_low_variance_categorical(s):
+        return False
+    if pd.api.types.is_numeric_dtype(s):
+        col_lower = col.lower()
+        id_like = _is_high_cardinality_id(df, col) or any((k in col_lower for k in ('id', 'key', 'code'))) or col_lower.endswith('id')
+        return bool(pd.api.types.is_bool_dtype(s) or _is_likert(s) or id_like or n_unique <= 25)
+    return True
+
+_ID_NAME_KEYWORDS = ('id', 'uuid', 'guid', 'key', 'index', '_id', 'pk', 'code', 'num', 'no', 'zip', 'postal')
+
+def _is_id_named(col: str) -> bool:
+    col_lower = col.lower().strip()
+    if col_lower.endswith('id') or col_lower.endswith('_id'):
+        return True
+    # word-boundary match so we don't false-positive on things like "paid" or "kid_count"
+    tokens = re.split('[_\\-\\s]+', col_lower)
+    return any((t in _ID_NAME_KEYWORDS for t in tokens if t))
+
+def _is_continuous_numeric(df: pd.DataFrame, col: str) -> bool:
+    if col not in df.columns:
+        return False
+    s = df[col]
+    if not pd.api.types.is_numeric_dtype(s):
+        return False
+    if pd.api.types.is_bool_dtype(s) or _is_likert(s) or _is_high_cardinality_id(df, col) or _is_date_named(col):
+        return False
+    # Any column that *reads* like an identifier/code (country_id, zip_code, ...) is
+    # categorical regardless of how many distinct values it happens to have — a
+    # histogram/scatter/box built on it is meaningless even when it isn't "high cardinality".
+    if _is_id_named(col):
+        return False
+    clean = s.dropna()
+    if len(clean) < 5 or clean.nunique(dropna=True) <= 1:
+        return False
+    min_unique = min(10, max(3, int(len(clean) * 0.02)))
+    return clean.nunique(dropna=True) >= min_unique
+
+def _is_low_cardinality_category(df: pd.DataFrame, col: Optional[str], max_categories: int=8) -> bool:
+    return bool(col and _is_group_dimension(df, col, max_categories=max_categories))
+
+def _passes_pre_render_audit(chart: Optional[Chart]) -> bool:
+    if chart is None or not _chart_has_signal(chart):
+        return False
+    fig = chart.fig
+    traces = list(getattr(fig, 'data', []) or [])
+    if chart.key.startswith('histogram_'):
+        return bool(traces) and all(getattr(t, 'type', None) in ('histogram', 'bar') for t in traces)
+    if chart.key.startswith(('ranked_bar_', 'grouped_bar_', 'stacked_', 'freq_bar_')):
+        return bool(traces) and all(getattr(t, 'type', None) == 'bar' for t in traces)
+    return True
 
 def _classify(df: pd.DataFrame, excluded: set[str]) -> dict:
     (num, cat, date_cols, likert, ids) = ([], [], [], [], [])
@@ -131,7 +257,12 @@ def _classify(df: pd.DataFrame, excluded: set[str]) -> dict:
         if pd.api.types.is_datetime64_any_dtype(s):
             date_cols.append(col)
         elif pd.api.types.is_numeric_dtype(s):
-            if _is_date_named(col):
+            col_lower = col.lower()
+            id_kw = ('id', 'uuid', 'guid', 'key', 'index', '_id', 'pk')
+            is_id_named = any((k in col_lower for k in id_kw)) or col_lower.endswith('id')
+            if is_id_named:
+                cat.append(col)
+            elif _is_date_named(col):
                 date_cols.append(col)
             elif _is_likert(s):
                 likert.append(col)
@@ -158,7 +289,78 @@ def _llm_plan_charts(df: pd.DataFrame, cols: dict, stats: dict) -> Optional[list
         s = df[c].dropna()
         cat_profiles[c] = {'unique': int(s.nunique()), 'top3': s.value_counts().head(3).to_dict()}
     profile = {'rows': len(df), 'dataset_label': stats.get('dataset_profile', {}).get('label', 'Unknown'), 'dataset_domain': stats.get('dataset_profile', {}).get('domain', 'general'), 'numeric_columns': num_profiles, 'categorical_columns': cat_profiles, 'datetime_columns': cols['date'][:5], 'likert_columns': cols['likert'][:8], 'strong_correlations': stats.get('strong_correlations', [])[:8]}
-    prompt = f'You are an expert data visualization planner.\nGiven this dataset profile, plan exactly the {MAX_OUTPUT_CHARTS} most insightful charts.\nEach chart must use REAL column names from the profile.\n\nDataset profile:\n<profile>{json.dumps(profile, ensure_ascii=True)}</profile>\n\nRules:\n1. For a numeric column that is heavy_tailed=true, use "histogram" with log_scale=true.\n2. For top-N entity rankings (e.g. country, city, product by a metric), use "ranked_bar".\n3. For numeric vs categorical (≤15 cats), use "grouped_bar" (sum for totals, mean for rates).\n4. For two correlated numeric columns, use "scatter".\n5. For a datetime + numeric, use "line".\n6. For correlation overview (≥3 numeric cols), use "heatmap".\n7. For categorical with 2-7 values, use "donut".\n8. For likert/rating columns (multiple), use "likert_bar".\n9. For distribution + outlier check, use "box".\n10. Never repeat the same (x, y) pair. Avoid redundant charts.\n11. TITLES: Use generic attribute names (e.g., "Sales by Region") NOT values (e.g., "Total 5000 in California"). Use only REAL column names.\n12. Prioritize charts that give REAL business/domain insight, not just counts.\n13. CRITICAL: NEVER use date-of-birth, age, dob, birth_date, or any personal date column as a raw chart axis. These columns contain personal data and produce meaningless spikes. If you want birth year distribution, use a histogram on a derived year — but only if birth-year is explicitly a separate numeric column.\n14. CRITICAL: datetime_columns listed in the profile are DATE columns. Never use them as Y-axis values. Only use them as X-axis for time-series (line charts) when paired with a meaningful numeric Y.\n\nRespond ONLY with valid JSON — a list of up to {MAX_OUTPUT_CHARTS} objects:\n[\n  {{\n    "chart_type": "<one of: ranked_bar|grouped_bar|histogram|scatter|line|heatmap|box|violin|donut|likert_bar|stacked_bar>",\n    "x": "<column name or null>",\n    "y": "<column name or null>",\n    "color": "<column name or null>",\n    "log_scale": false,\n    "title": "<human readable chart title>",\n    "agg": "<sum|mean|count>",\n    "priority": <1 to {MAX_OUTPUT_CHARTS}>\n  }},\n  ...\n]'
+    prompt = (
+        f'You are the Lead Data Visualization Architect for an advanced automated analytics pipeline.\n'
+        f'Given this dataset profile, plan exactly the {MAX_OUTPUT_CHARTS} most insightful charts.\n'
+        f'Each chart must use REAL column names from the profile.\n\n'
+        f'Dataset profile:\n<profile>{json.dumps(profile, ensure_ascii=True)}</profile>\n\n'
+        f'RULES (MANDATORY — violating any rule is a critical failure):\n\n'
+
+        # ── 1. Category & Metric Mapping ──
+        f'1. CATEGORY & METRIC MAPPING (Ranked Bar, Grouped Bar, Stacked Bar):\n'
+        f'   - Always verify that categorical text dimensions (e.g. gender, batting_style) map strictly to '
+        f'group dimensions (x, color, or split legends).\n'
+        f'   - NEVER use non-numeric text values as numeric aggregation metrics. '
+        f'Ensure x and y pairs are structurally sound before execution.\n'
+        f'   - For top-N entity rankings (e.g. country, city, product by a metric), use "ranked_bar".\n'
+        f'   - For numeric vs categorical (<=15 cats), use "grouped_bar" (sum for totals, mean for rates).\n\n'
+
+        # ── 2. True Frequency Scaling ──
+        f'2. TRUE FREQUENCY SCALING (Histograms):\n'
+        f'   - For skewed or heavy-tailed continuous variables (heavy_tailed=true), scale the frequency '
+        f'accumulation vertically using log_scale=true (this applies log_y, NOT log_x).\n'
+        f'   - NEVER apply horizontal logarithmic compression (log_x=True) to identification keys, '
+        f'sparse integers, or zero-bounded counters — it corrupts the visual plot structure.\n'
+        f'   - Ensure histograms render clean vertical frequency bars. '
+        f'Never approve or inject overlapping multi-scatter artifacts, box-plot marginals, or rug plots.\n\n'
+
+        # ── 3. Time-Series Continuity ──
+        f'3. TIME-SERIES CONTINUITY (Line Charts):\n'
+        f'   - Ensure date columns are mapped exclusively to the chronological X-axis. '
+        f'Never use a datetime or timestamp series as a vertical Y-axis value.\n'
+        f'   - Reject time-series plots that contain personal identifying dates '
+        f'(like date-of-birth or exact birthdays) which create meaningless sparse spikes.\n'
+        f'   - For a datetime + numeric, use "line".\n\n'
+
+        # ── 4. Correlation & Distribution Integrity ──
+        f'4. CORRELATION & DISTRIBUTION INTEGRITY (Scatter, Heatmap, Box, Violin):\n'
+        f'   - Scatter Plots: Only pair true continuous numeric variables. '
+        f'Use the color parameter strictly for low-cardinality categorical series (<=8 distinct values).\n'
+        f'   - Heatmaps: Reject correlation metrics if the variance across targeted numeric features is zero. '
+        f'Use "heatmap" for correlation overview when >=3 numeric cols exist.\n'
+        f'   - Box/Violin Plots: Ensure the splitting category has between 2 and 15 distinct values '
+        f'to prevent unreadable, overcrowded distributions.\n\n'
+
+        # ── 5. Pre-Render Self-Audit ──
+        f'5. PRE-RENDER SELF-AUDIT:\n'
+        f'   - Before submitting each chart spec, ask: "Are the labels scientifically accurate to the '
+        f'underlying data? Is the aspect ratio and bar spacing clean? Does this chart reveal a true domain '
+        f'insight, or is it a technical glitch?"\n\n'
+
+        # ── Additional standing rules ──
+        f'6. For categorical with 2-7 values, use "donut".\n'
+        f'7. For likert/rating columns (multiple), use "likert_bar".\n'
+        f'8. Never repeat the same (x, y) pair. Avoid redundant charts.\n'
+        f'9. TITLES: Use generic attribute names (e.g. "Sales by Region") NOT values. Use only REAL column names.\n'
+        f'10. Prioritize charts that give REAL business/domain insight, not just counts.\n'
+        f'11. NO ZERO VARIANCE: Never plan charts on columns with zero variance.\n'
+        f'12. NEVER use columns whose top category represents >95% of all values as grouping or color axes.\n\n'
+
+        f'Respond ONLY with valid JSON — a list of up to {MAX_OUTPUT_CHARTS} objects:\n'
+        f'[\n'
+        f'  {{\n'
+        f'    "chart_type": "<one of: ranked_bar|grouped_bar|histogram|scatter|line|heatmap|box|violin|donut|likert_bar|stacked_bar>",\n'
+        f'    "x": "<column name or null>",\n'
+        f'    "y": "<column name or null>",\n'
+        f'    "color": "<column name or null>",\n'
+        f'    "log_scale": false,\n'
+        f'    "title": "<human readable chart title>",\n'
+        f'    "agg": "<sum|mean|count>",\n'
+        f'    "priority": <1 to {MAX_OUTPUT_CHARTS}>\n'
+        f'  }},\n'
+        f'  ...\n'
+        f']'
+    )
     try:
         client = get_groq_client()
         if not client:
@@ -181,9 +383,15 @@ def _llm_plan_charts(df: pd.DataFrame, cols: dict, stats: dict) -> Optional[list
 def _build_ranked_bar(df: pd.DataFrame, x_col: str, y_col: str, title: str, agg: str='auto', top_n: int=_RANKED_BAR_TOP_N, color_col: Optional[str]=None, stats: dict=None) -> Optional[Chart]:
     if x_col not in df.columns or y_col not in df.columns:
         return None
+    if not _is_group_dimension(df, x_col, max_categories=500):
+        return None
     if not pd.api.types.is_numeric_dtype(df[y_col]):
         return None
     if x_col == y_col:
+        return None
+    if df[x_col].nunique(dropna=True) <= 1 or df[y_col].nunique(dropna=True) <= 1:
+        return None
+    if _is_low_variance_categorical(df[x_col]):
         return None
     comp = min(_completeness(df[x_col]), _completeness(df[y_col]))
     if comp < 0.4:
@@ -205,7 +413,7 @@ def _build_ranked_bar(df: pd.DataFrame, x_col: str, y_col: str, title: str, agg:
     chart_title = title or f'Top {len(grouped)} {x_col} by {agg_label} {y_col}'
     colors = ['#00d4a8','#4d9fff','#f5a623','#a78bfa','#ff4d6a','#00bcd4','#ff9800','#8bc34a']
     fig = px.bar(grouped, x=y_col, y=x_col, orientation='h', title=chart_title, color=x_col, color_discrete_sequence=colors, text=y_col)
-    fig.update_traces(texttemplate='%{text:.2s}', textposition='outside')
+    fig.update_traces(texttemplate='%{text:.2s}', textposition='outside', marker_line_width=0)
     pct_cols = (stats or {}).get('percentage_columns', []) if isinstance(stats, dict) else []
     if y_col in pct_cols:
         fig.update_layout(xaxis_tickformat='.1%')
@@ -218,19 +426,24 @@ def _build_grouped_bar(df: pd.DataFrame, cat_col: str, num_col: str, title: str,
         return None
     if cat_col == num_col:
         return None
+    if not _is_group_dimension(df, cat_col, max_categories=100):
+        return None
     if not pd.api.types.is_numeric_dtype(df[num_col]):
         return None
+    if df[cat_col].nunique(dropna=True) <= 1 or df[num_col].nunique(dropna=True) <= 1:
+        return None
+    if _is_low_variance_categorical(df[cat_col]):
+        return None
     n_cats = df[cat_col].nunique(dropna=True)
-    if not 2 <= n_cats <= 100:
+    if not 2 <= n_cats <= 40:
         return None
     comp = min(_completeness(df[cat_col]), _completeness(df[num_col]))
     if comp < 0.4:
         return None
     if agg == 'auto':
         agg = 'sum' if _should_sum(num_col, df[num_col]) else 'mean'
-    color_col_use = color_col if color_col and color_col in df.columns else cat_col
     try:
-        grouped = df.groupby(cat_col, observed=True)[num_col].agg(agg).reset_index().dropna(subset=[num_col]).sort_values(num_col, ascending=False)
+        grouped = df.groupby(cat_col, observed=True)[num_col].agg(agg).reset_index().dropna(subset=[num_col]).sort_values(num_col, ascending=False).head(20)
     except Exception:
         return None
     if grouped.empty:
@@ -245,6 +458,7 @@ def _build_grouped_bar(df: pd.DataFrame, cat_col: str, num_col: str, title: str,
     else:
         fig = px.bar(grouped, x=cat_col, y=num_col, title=chart_title, color=cat_col, color_discrete_sequence=colors)
         fig.update_layout(xaxis_tickangle=-30, xaxis_automargin=True)
+    fig.update_traces(marker_line_width=0)
     fig.update_layout(showlegend=False)
     score = 72 + comp * 18
     return Chart(key=f'grouped_bar_{cat_col}_{num_col}', fig=_style(fig, 460), score=score, cols={cat_col, num_col})
@@ -252,28 +466,52 @@ def _build_grouped_bar(df: pd.DataFrame, cat_col: str, num_col: str, title: str,
 def _build_histogram(df: pd.DataFrame, num_col: str, log_scale: bool=False, title: str='') -> Optional[Chart]:
     if num_col not in df.columns:
         return None
-    if not pd.api.types.is_numeric_dtype(df[num_col]):
+    if not _is_continuous_numeric(df, num_col):
         return None
     clean = df[num_col].dropna()
-    if len(clean) < 5:
+    if len(clean) < 5 or clean.nunique(dropna=True) <= 1:
+        return None
+    if _is_uninformative_dense_distribution(clean):
+        logger.debug("Skipping dense uniform distribution for '%s'", num_col)
         return None
     auto_log = log_scale or _is_heavy_tailed(df[num_col])
-    plot_df = _sample(df[[num_col]].dropna(), _HIST_MAX_ROWS)
-    nbins = _optimal_nbins(len(plot_df))
-    log_note = ' (log scale)' if auto_log else ''
+    plot_df = _sample(df[[num_col]].dropna(), _HIST_MAX_ROWS)[num_col].dropna()
+    counts, edges = _histogram_bins(plot_df)
+    if len(counts) < 3 or counts.sum() == 0:
+        return None
+    widths = np.diff(edges)
+    centers = edges[:-1] + widths / 2
+    percents = counts / counts.sum() * 100
+    ranges = np.array([f'{edges[i]:,.2f} - {edges[i + 1]:,.2f}' for i in range(len(counts))])
+    log_note = ' (log y scale)' if auto_log else ''
     chart_title = title or f'Distribution of {num_col}{log_note}'
-    fig = px.histogram(plot_df, x=num_col, nbins=nbins, title=chart_title, log_x=auto_log, marginal='box')
+    fig = go.Figure(data=[
+        go.Bar(
+            x=centers,
+            y=percents,
+            width=widths * 0.86,
+            customdata=ranges,
+            marker=dict(color='#6366f1', line=dict(color='rgba(255,255,255,0.45)', width=0.7)),
+            hovertemplate='Range: %{customdata}<br>Records: %{y:.2f}%<extra></extra>',
+        )
+    ])
+    fig.update_layout(title=chart_title, bargap=0.08, xaxis_title=num_col, yaxis_title='Records (%)')
+    if auto_log:
+        fig.update_yaxes(type='log', title='Log Scale')
     comp = _completeness(df[num_col])
     skew = abs(float(clean.skew()))
-    score = 60 + comp * 18 + min(skew * 5, 15) + (8 if auto_log else 0)
+    score = 52 + comp * 16 + min(skew * 8, 18) + (8 if auto_log else 0)
     return Chart(key=f'histogram_{num_col}', fig=_style(fig, 440), score=score, cols={num_col})
+
 
 def _build_scatter(df: pd.DataFrame, x_col: str, y_col: str, color_col: Optional[str]=None, title: str='') -> Optional[Chart]:
     if x_col not in df.columns or y_col not in df.columns:
         return None
     if x_col == y_col:
         return None
-    if not (pd.api.types.is_numeric_dtype(df[x_col]) and pd.api.types.is_numeric_dtype(df[y_col])):
+    if not (_is_continuous_numeric(df, x_col) and _is_continuous_numeric(df, y_col)):
+        return None
+    if df[x_col].nunique(dropna=True) <= 1 or df[y_col].nunique(dropna=True) <= 1:
         return None
     pair = df[[x_col, y_col]].dropna()
     if len(pair) < 10:
@@ -284,7 +522,7 @@ def _build_scatter(df: pd.DataFrame, x_col: str, y_col: str, color_col: Optional
     except Exception:
         r = 0.0
     comp = min(_completeness(df[x_col]), _completeness(df[y_col]))
-    color_use = color_col if color_col and color_col in df.columns and (df[color_col].nunique() <= 10) else None
+    color_use = color_col if _is_low_cardinality_category(df, color_col, max_categories=8) else None
     plot_df = _sample(df, _SCATTER_MAX_ROWS, stratify_col=color_use)
     sampled_note = f'  [{_SCATTER_MAX_ROWS:,} sampled]' if len(df) > _SCATTER_MAX_ROWS else ''
     chart_title = title or f'{x_col} vs {y_col}  (r={r:.2f}){sampled_note}'
@@ -296,8 +534,14 @@ def _build_scatter(df: pd.DataFrame, x_col: str, y_col: str, color_col: Optional
 def _build_line(df: pd.DataFrame, date_col: str, num_cols: list[str], title: str='') -> Optional[Chart]:
     if date_col not in df.columns or not num_cols:
         return None
+    if _is_personal_date_column(date_col):
+        return None
+    if not (pd.api.types.is_datetime64_any_dtype(df[date_col]) or _is_date_named(date_col)):
+        return None
+    if df[date_col].nunique(dropna=True) <= 1:
+        return None
     num_cols = [c for c in num_cols if c != date_col]
-    valid_nums = [c for c in num_cols if c in df.columns and pd.api.types.is_numeric_dtype(df[c]) and (_completeness(df[c]) >= 0.6)]
+    valid_nums = [c for c in num_cols if c in df.columns and _is_continuous_numeric(df, c) and (_completeness(df[c]) >= 0.6) and df[c].nunique(dropna=True) > 1]
     if not valid_nums:
         return None
     comp_d = _completeness(df[date_col])
@@ -325,7 +569,7 @@ def _build_line(df: pd.DataFrame, date_col: str, num_cols: list[str], title: str
     return Chart(key=f'line_{date_col}', fig=_style(fig, 480), score=score, cols={date_col} | set(cols_use))
 
 def _build_heatmap(df: pd.DataFrame, num_cols: list[str], title: str='') -> Optional[Chart]:
-    eligible = [c for c in num_cols if _completeness(df[c]) >= 0.6]
+    eligible = [c for c in num_cols if _is_continuous_numeric(df, c) and _completeness(df[c]) >= 0.6 and df[c].nunique(dropna=True) > 1 and float(df[c].var(skipna=True) or 0) > 0]
     if len(eligible) < 3:
         return None
     if max((len(c) for c in eligible)) > 45:
@@ -359,10 +603,16 @@ def _build_heatmap(df: pd.DataFrame, num_cols: list[str], title: str='') -> Opti
 def _build_box(df: pd.DataFrame, cat_col: str, num_col: str, title: str='') -> Optional[Chart]:
     if cat_col not in df.columns or num_col not in df.columns:
         return None
-    if not pd.api.types.is_numeric_dtype(df[num_col]):
+    if not _is_group_dimension(df, cat_col, max_categories=15):
+        return None
+    if not _is_continuous_numeric(df, num_col):
+        return None
+    if df[cat_col].nunique(dropna=True) <= 1 or df[num_col].nunique(dropna=True) <= 1:
+        return None
+    if _is_low_variance_categorical(df[cat_col]):
         return None
     n_cats = df[cat_col].nunique(dropna=True)
-    if not 2 <= n_cats <= 50:
+    if not 2 <= n_cats <= 15:
         return None
     comp = min(_completeness(df[cat_col]), _completeness(df[num_col]))
     if comp < 0.4:
@@ -377,7 +627,13 @@ def _build_box(df: pd.DataFrame, cat_col: str, num_col: str, title: str='') -> O
 def _build_violin(df: pd.DataFrame, cat_col: str, num_col: str, title: str='') -> Optional[Chart]:
     if cat_col not in df.columns or num_col not in df.columns:
         return None
-    if not pd.api.types.is_numeric_dtype(df[num_col]):
+    if not _is_group_dimension(df, cat_col, max_categories=15):
+        return None
+    if not _is_continuous_numeric(df, num_col):
+        return None
+    if df[cat_col].nunique(dropna=True) <= 1 or df[num_col].nunique(dropna=True) <= 1:
+        return None
+    if _is_low_variance_categorical(df[cat_col]):
         return None
     n_cats = df[cat_col].nunique(dropna=True)
     if not 2 <= n_cats <= 15:
@@ -395,6 +651,10 @@ def _build_violin(df: pd.DataFrame, cat_col: str, num_col: str, title: str='') -
 def _build_donut(df: pd.DataFrame, cat_col: str, title: str='') -> Optional[Chart]:
     if cat_col not in df.columns:
         return None
+    if not _is_group_dimension(df, cat_col, max_categories=20):
+        return None
+    if df[cat_col].nunique(dropna=True) <= 1:
+        return None
     n = df[cat_col].nunique(dropna=True)
     if not 2 <= n <= 20:
         return None
@@ -408,12 +668,12 @@ def _build_donut(df: pd.DataFrame, cat_col: str, title: str='') -> Optional[Char
     counts.columns = [cat_col, 'count']
     chart_title = f'Composition of {cat_col}'
     fig = px.pie(counts, names=cat_col, values='count', title=chart_title, hole=0.42)
-    fig.update_traces(textposition='outside', textinfo='percent+label')
+    fig.update_traces(textposition='outside', textinfo='percent+label', marker_line_width=0)
     score = 62 + comp * 18
     return Chart(key=f'donut_{cat_col}', fig=_style(fig, 440), score=score, cols={cat_col})
 
 def _build_likert_bar(df: pd.DataFrame, likert_cols: list[str], title: str='') -> Optional[Chart]:
-    valid = [c for c in likert_cols if _completeness(df[c]) >= 0.4]
+    valid = [c for c in likert_cols if _completeness(df[c]) >= 0.4 and df[c].nunique(dropna=True) > 1]
     if len(valid) < 2:
         return None
 
@@ -437,6 +697,14 @@ def _build_likert_bar(df: pd.DataFrame, likert_cols: list[str], title: str='') -
 def _build_stacked_bar(df: pd.DataFrame, x_col: str, cat_col: str, num_col: Optional[str]=None, title: str='') -> Optional[Chart]:
     if x_col not in df.columns or cat_col not in df.columns:
         return None
+    if not _is_group_dimension(df, x_col, max_categories=30) or not _is_group_dimension(df, cat_col, max_categories=15):
+        return None
+    if df[x_col].nunique(dropna=True) <= 1 or df[cat_col].nunique(dropna=True) <= 1:
+        return None
+    if num_col and num_col in df.columns and df[num_col].nunique(dropna=True) <= 1:
+        return None
+    if _is_low_variance_categorical(df[x_col]) or _is_low_variance_categorical(df[cat_col]):
+        return None
     nx = df[x_col].nunique(dropna=True)
     nc = df[cat_col].nunique(dropna=True)
     if not (2 <= nx <= 30 and 2 <= nc <= 15):
@@ -457,6 +725,12 @@ def _build_stacked_bar(df: pd.DataFrame, x_col: str, cat_col: str, num_col: Opti
 def _build_freq_bar(df: pd.DataFrame, cat_col: str, title: str='') -> Optional[Chart]:
     if cat_col not in df.columns:
         return None
+    if not _is_group_dimension(df, cat_col, max_categories=150):
+        return None
+    if df[cat_col].nunique(dropna=True) <= 1:
+        return None
+    if _is_low_variance_categorical(df[cat_col]):
+        return None
     n = df[cat_col].nunique(dropna=True)
     if not 2 <= n <= 150:
         return None
@@ -465,20 +739,38 @@ def _build_freq_bar(df: pd.DataFrame, cat_col: str, title: str='') -> Optional[C
         return None
     vc = df[cat_col].value_counts().head(25).reset_index()
     vc.columns = [cat_col, 'count']
-    chart_title = title or f'Frequency of {cat_col}'
+    total = int(df[cat_col].notna().sum())
+    vc['percent'] = vc['count'] / max(total, 1) * 100
+    chart_title = title or f'Top {len(vc)} {cat_col} Values'
     horizontal = n > 10
+    use_percent = total > 5000 or int(vc['count'].max()) > 2000
     if horizontal:
-        fig = px.bar(vc, y=cat_col, x='count', orientation='h', title=chart_title, color=cat_col)
+        if use_percent:
+            fig = px.bar(vc, y=cat_col, x='percent', orientation='h', title=chart_title, color=cat_col)
+            fig.update_layout(xaxis_tickformat='.1f')
+        else:
+            fig = px.bar(vc, y=cat_col, x='count', orientation='h', title=chart_title, color=cat_col)
         fig.update_layout(yaxis=dict(autorange='reversed'))
     else:
-        fig = px.bar(vc, x=cat_col, y='count', title=chart_title, color=cat_col)
+        if use_percent:
+            fig = px.bar(vc, x=cat_col, y='percent', title=chart_title, color=cat_col)
+            fig.update_layout(yaxis_tickformat='.1f')
+        else:
+            fig = px.bar(vc, x=cat_col, y='count', title=chart_title, color=cat_col)
         fig.update_layout(xaxis_tickangle=-25, xaxis_automargin=True)
+    fig.update_traces(marker_line_width=0)
     fig.update_layout(showlegend=False)
     score = 55 + comp * 15
     return Chart(key=f'freq_bar_{cat_col}', fig=_style(fig, 440), score=score, cols={cat_col})
 
 def _build_freq_bar_loose(df: pd.DataFrame, cat_col: str, title: str='') -> Optional[Chart]:
     if cat_col not in df.columns:
+        return None
+    if not _is_group_dimension(df, cat_col, max_categories=500):
+        return None
+    if df[cat_col].nunique(dropna=True) <= 1:
+        return None
+    if _is_low_variance_categorical(df[cat_col]):
         return None
     n = df[cat_col].nunique(dropna=True)
     if not 2 <= n <= 500:
@@ -488,14 +780,26 @@ def _build_freq_bar_loose(df: pd.DataFrame, cat_col: str, title: str='') -> Opti
         return None
     vc = df[cat_col].value_counts().head(25).reset_index()
     vc.columns = [cat_col, 'count']
-    chart_title = title or f'Frequency of {cat_col} (top 25)'
+    total = int(df[cat_col].notna().sum())
+    vc['percent'] = vc['count'] / max(total, 1) * 100
+    chart_title = title or f'Top {len(vc)} {cat_col} Values'
     horizontal = n > 10
+    use_percent = total > 5000 or int(vc['count'].max()) > 2000
     if horizontal:
-        fig = px.bar(vc, y=cat_col, x='count', orientation='h', title=chart_title, color=cat_col)
+        if use_percent:
+            fig = px.bar(vc, y=cat_col, x='percent', orientation='h', title=chart_title, color=cat_col)
+            fig.update_layout(xaxis_tickformat='.1f')
+        else:
+            fig = px.bar(vc, y=cat_col, x='count', orientation='h', title=chart_title, color=cat_col)
         fig.update_layout(yaxis=dict(autorange='reversed'))
     else:
-        fig = px.bar(vc, x=cat_col, y='count', title=chart_title, color=cat_col)
+        if use_percent:
+            fig = px.bar(vc, x=cat_col, y='percent', title=chart_title, color=cat_col)
+            fig.update_layout(yaxis_tickformat='.1f')
+        else:
+            fig = px.bar(vc, x=cat_col, y='count', title=chart_title, color=cat_col)
         fig.update_layout(xaxis_tickangle=-25, xaxis_automargin=True)
+    fig.update_traces(marker_line_width=0)
     fig.update_layout(showlegend=False)
     score = 30 + comp * 30
     return Chart(key=f'freq_bar_loose_{cat_col}', fig=_style(fig, 440), score=score, cols={cat_col})
@@ -535,19 +839,14 @@ def _execute_plan(df: pd.DataFrame, plan: list[dict], cols: dict, stats: dict) -
             chart = _build_grouped_bar(df, x, y, ttl, agg=agg, color_col=col)
             if chart is None:
                 chart = _build_grouped_bar(df, y, x, None, agg=agg, color_col=col)
-        elif ct == 'histogram' and x:
-            chart = _build_histogram(df, x, log_scale=log_, title=ttl)
-            if chart is None and y:
-                chart = _build_histogram(df, y, log_scale=log_, title=None)
+        elif ct == 'histogram' and (x or y):
+            hist_col = x or y
+            chart = _build_histogram(df, hist_col, log_scale=log_, title=ttl)
         elif ct == 'scatter' and x and y:
             x_num = x in df.columns and pd.api.types.is_numeric_dtype(df[x])
             y_num = y in df.columns and pd.api.types.is_numeric_dtype(df[y])
             if x_num and y_num:
                 chart = _build_scatter(df, x, y, color_col=col, title=ttl)
-            elif y_num and (not x_num):
-                chart = _build_scatter(df, y, x, color_col=col, title=None)
-            elif x_num and (not y_num):
-                chart = _build_scatter(df, x, y, color_col=col, title=None)
         elif ct == 'box' and x and y:
             chart = _build_box(df, x, y, title=ttl)
             if chart is None:
@@ -580,7 +879,7 @@ def _execute_plan(df: pd.DataFrame, plan: list[dict], cols: dict, stats: dict) -
             continue
         if chart.key in used_keys:
             continue
-        if not _chart_has_signal(chart):
+        if not _passes_pre_render_audit(chart):
             logger.debug('Dropping low-signal chart: %s', chart.key)
             continue
         used_keys.add(chart.key)
@@ -615,7 +914,7 @@ def _heuristic_plan(df: pd.DataFrame, cols: dict, stats: dict) -> list[Chart]:
     prefer_ranking = domain in ('sports', 'retail', 'marketing')
 
     def _add(c: Optional[Chart]) -> bool:
-        if c is None or not _chart_has_signal(c):
+        if c is None or not _passes_pre_render_audit(c):
             return False
         pair = frozenset(c.cols)
         if pair in used_pairs:
@@ -634,8 +933,7 @@ def _heuristic_plan(df: pd.DataFrame, cols: dict, stats: dict) -> list[Chart]:
         cat.extend(low_card_ids[:5])
         if low_card_ids:
             logger.info('[VIZ] Promoted %d low-cardinality IDs to categorical for chart generation', len(low_card_ids[:5]))
-    _PERSONAL_DATE_KEYWORDS = ('dob', 'dateofbirth', 'birthdate', 'borndate', 'birthyear', 'birthday', 'yob')
-    plottable_dates = [d for d in date if not any((kw in d.lower().replace('_', '') for kw in _PERSONAL_DATE_KEYWORDS))]
+    plottable_dates = [d for d in date if not _is_personal_date_column(d)]
     if plottable_dates and num:
         _add(_build_line(df, plottable_dates[0], num))
     if len(num) >= 3 and (not prefer_ranking):
@@ -653,7 +951,7 @@ def _heuristic_plan(df: pd.DataFrame, cols: dict, stats: dict) -> list[Chart]:
             best = max(strong_corrs, key=lambda x: abs(x['correlation']))
             (c1, c2) = (best['col1'], best['col2'])
             if c1 in num and c2 in num:
-                color_candidate = next((c for c in cat if df[c].nunique() <= 8), None)
+                color_candidate = next((c for c in cat if _is_low_cardinality_category(df, c, max_categories=8)), None)
                 _add(_build_scatter(df, c1, c2, color_col=color_candidate))
         else:
             _add(_build_scatter(df, num[0], num[1]))
@@ -790,7 +1088,65 @@ def _llm_evaluate_charts(charts: list[Chart], df: pd.DataFrame, cols: dict, stat
         return charts
     planner_model = os.getenv('GROQ_PLANNER_MODEL', 'llama-3.3-70b-versatile')
     chart_summaries = [_chart_summary_for_llm(c, df) for c in charts]
-    prompt = f"""You are an expert Data Visualization Quality Evaluator.\nYou built the following charts for a dataset. Review each one and decide if it is high quality.\n\nDataset domain: {stats.get('dataset_profile', {}).get('label', 'Unknown')}\nNumeric columns: {cols['num'][:8]}\nCategorical columns: {cols['cat'][:6]}\n\nBuilt charts summary:\n<charts>{json.dumps(chart_summaries, ensure_ascii=True)}</charts>\n\nFor EACH chart, respond with one of:\n  KEEP   — if it provides clear, meaningful insight\n  REPLACE — if it's the wrong chart type for the data (provide a better spec)\n  DROP   — if it shows no useful information\n\nRules for REPLACE:\n- Only replace if you can specify a clearly BETTER alternative using existing columns\n- A repeated scatter showing the same columns as another chart → DROP\n- A histogram with only 1-2 bars visible → REPLACE with ranked_bar\n- A box plot with only 1 category → DROP\n- An empty or near-empty chart → DROP\n\nRespond ONLY with valid JSON:\n{{\n  "evaluations": [\n    {{"key": "<chart_key>", "decision": "KEEP|REPLACE|DROP",\n      "reason": "<one line>",\n      "replacement": {{"chart_type": "ranked_bar", "x": "<col>", "y": "<col>",\n                      "title": "<title>", "agg": "sum", "log_scale": false}}\n      }},\n    ...\n  ]\n}}\n"replacement" is ONLY required when decision is REPLACE. Omit it otherwise."""
+    prompt = (
+        f'You are the Lead Data Visualization Quality Evaluator for an advanced analytics pipeline.\n'
+        f'You built the following charts for a dataset. Review each one and decide if it is high quality.\n\n'
+        f'Dataset domain: {stats.get("dataset_profile", {}).get("label", "Unknown")}\n'
+        f'Numeric columns: {cols["num"][:8]}\n'
+        f'Categorical columns: {cols["cat"][:6]}\n\n'
+        f'Built charts summary:\n<charts>{json.dumps(chart_summaries, ensure_ascii=True)}</charts>\n\n'
+        f'For EACH chart, respond with one of:\n'
+        f'  KEEP    — if it provides clear, meaningful insight\n'
+        f'  REPLACE — if it is the wrong chart type for the data (provide a better spec)\n'
+        f'  DROP    — if it shows no useful information\n\n'
+
+        f'EVALUATION RULES (MANDATORY):\n\n'
+
+        f'1. CATEGORY & METRIC MAPPING:\n'
+        f'   - Verify categorical text dimensions (e.g. gender, batting_style) map strictly to '
+        f'group dimensions (x, color, or legends). NEVER use non-numeric text as a numeric metric.\n'
+        f'   - If x and y are structurally swapped (text as metric, number as category), DROP or REPLACE.\n\n'
+
+        f'2. TRUE FREQUENCY SCALING:\n'
+        f'   - Histograms must render clean vertical frequency bars.\n'
+        f'   - If log_x was applied to ID keys, sparse integers, or zero-bounded counters → REPLACE '
+        f'(use log_y instead or switch to ranked_bar).\n'
+        f'   - If histogram overlays box-plot marginals, scatter points, or rug plots → REPLACE/DROP.\n'
+        f'   - A histogram with only 1-2 visible bars → REPLACE with ranked_bar.\n\n'
+
+        f'3. TIME-SERIES CONTINUITY:\n'
+        f'   - Date columns must be on the X-axis only. If a datetime is on Y-axis → DROP.\n'
+        f'   - Personal identifying dates (dob, birth_date) as raw axis → DROP.\n\n'
+
+        f'4. CORRELATION & DISTRIBUTION INTEGRITY:\n'
+        f'   - Scatter with non-continuous or text variables → DROP/REPLACE.\n'
+        f'   - Scatter color must be low-cardinality categorical (<=8 values), not numeric → REPLACE.\n'
+        f'   - Box/Violin with only 1 category or >15 categories → DROP.\n'
+        f'   - Heatmap on zero-variance numeric features → DROP.\n\n'
+
+        f'5. PRE-RENDER SELF-AUDIT:\n'
+        f'   - For each chart ask: "Are the labels scientifically accurate? Does this chart reveal a '
+        f'true domain insight, or is it a technical glitch?"\n\n'
+
+        f'6. ADDITIONAL:\n'
+        f'   - A repeated scatter showing the same columns as another chart → DROP.\n'
+        f'   - An empty or near-empty chart → DROP.\n'
+        f'   - A chart plotting a column where all values are identical (zero variance) → DROP.\n'
+        f'   - A chart grouping by a column where >95% of values are the same category → DROP.\n\n'
+
+        f'Respond ONLY with valid JSON:\n'
+        f'{{\n'
+        f'  "evaluations": [\n'
+        f'    {{"key": "<chart_key>", "decision": "KEEP|REPLACE|DROP",\n'
+        f'      "reason": "<one line>",\n'
+        f'      "replacement": {{"chart_type": "ranked_bar", "x": "<col>", "y": "<col>",\n'
+        f'                      "title": "<title>", "agg": "sum", "log_scale": false}}\n'
+        f'      }},\n'
+        f'    ...\n'
+        f'  ]\n'
+        f'}}\n'
+        f'"replacement" is ONLY required when decision is REPLACE. Omit it otherwise.'
+    )
     try:
         client = get_groq_client()
         if not client:
@@ -823,7 +1179,7 @@ def _llm_evaluate_charts(charts: list[Chart], df: pd.DataFrame, cols: dict, stat
                 if replacement_spec and isinstance(replacement_spec, dict):
                     logger.info("[AGENTIC] REPLACE '%s' → %s — %s", key, replacement_spec, reason)
                     new_charts = _execute_plan(df, [replacement_spec], cols, stats)
-                    if new_charts and _chart_has_signal(new_charts[0]):
+                    if new_charts and _passes_pre_render_audit(new_charts[0]):
                         logger.info('[AGENTIC] Replacement built successfully: %s', new_charts[0].key)
                         final_charts.append(new_charts[0])
                     else:
@@ -854,7 +1210,12 @@ def _cols_from_architect(df: pd.DataFrame, col_types: dict, stats: dict) -> dict
         if ctype == 'datetime':
             date_cols.append(col)
         elif ctype == 'numeric':
-            if _is_likert(df[col]):
+            col_lower = col.lower()
+            id_kw = ('id', 'uuid', 'guid', 'key', 'index', '_id', 'pk')
+            is_id_named = any((k in col_lower for k in id_kw)) or col_lower.endswith('id')
+            if is_id_named:
+                cat.append(col)
+            elif _is_likert(df[col]):
                 likert.append(col)
             else:
                 num.append(col)
@@ -891,7 +1252,7 @@ def _select_charts(df: pd.DataFrame, stats: dict, column_types: dict=None) -> di
             fb = _build_freq_bar(df, col) or _build_histogram(df, col)
             if fb is None:
                 fb = _build_freq_bar_loose(df, col)
-            if fb and _chart_has_signal(fb):
+            if fb and _passes_pre_render_audit(fb):
                 all_charts = [fb]
                 break
     if len(all_charts) > MAX_OUTPUT_CHARTS + 2:
