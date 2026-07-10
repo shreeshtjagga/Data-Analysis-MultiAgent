@@ -786,8 +786,12 @@ async def chat_with_analysis(body: ChatRequest, user_id: int=Depends(get_current
         chart_df_records = df_records
         filter_label = ''
         if df_records:
+            import difflib
             q_lower = question.lower()
             _chart_df = pd.DataFrame(df_records)
+            _applied_filters = []
+            
+            # 1. Year filter
             _year_match = _re.search('(?:in\\s+)?(?:year|yr)\\s*(\\d{4})', q_lower)
             if not _year_match:
                 _year_match = _re.search('(?:for|of|from)\\s+(\\d{4})\\s*(?:only)?', q_lower)
@@ -813,28 +817,44 @@ async def chat_with_analysis(body: ChatRequest, user_id: int=Depends(get_current
                             _chart_df[_year_col] = pd.to_datetime(_chart_df[_year_col], errors='coerce')
                             _filtered = _chart_df[_chart_df[_year_col].dt.year == _target_year]
                         if len(_filtered) > 0:
-                            chart_df_records = _filtered.to_dict('records')
-                            filter_label = f' (filtered to year {_target_year})'
+                            _chart_df = _filtered
+                            _applied_filters.append(f'year {_target_year}')
                             logger.info("Chart filter: %d rows for year %d from column '%s'", len(_filtered), _target_year, _year_col)
                     except Exception as _filt_exc:
                         logger.warning('Year filter failed: %s', _filt_exc)
-            if not filter_label:
-                _cat_cols = stats.get('categorical_columns') or {}
-                for (_cat_name, _cat_info) in _cat_cols.items():
-                    _top_vals = _cat_info.get('top_5_values') or _cat_info.get('top_values') or {}
-                    for _val_name in _top_vals:
-                        if str(_val_name).lower() in q_lower and len(str(_val_name)) > 2:
-                            try:
-                                _filtered = _chart_df[_chart_df[_cat_name].astype(str).str.lower() == str(_val_name).lower()]
-                                if len(_filtered) > 5:
-                                    chart_df_records = _filtered.to_dict('records')
-                                    filter_label = f' (filtered to {_val_name})'
-                                    logger.info("Chart filter: %d rows for %s='%s'", len(_filtered), _cat_name, _val_name)
-                                    break
-                            except Exception:
-                                pass
-                    if filter_label:
+
+            # 2. Categorical filters (fuzzy matched)
+            _q_words = [w.strip('?,.!-()\"\'').lower() for w in q_lower.split() if len(w.strip('?,.!-()\"\'')) > 2]
+            _cat_cols = stats.get('categorical_columns') or {}
+            for (_cat_name, _cat_info) in _cat_cols.items():
+                _top_vals = _cat_info.get('top_5_values') or _cat_info.get('top_values') or {}
+                _matched_val = None
+                for _val_name in _top_vals:
+                    _val_lower = str(_val_name).lower()
+                    if _val_lower in q_lower:
+                        _matched_val = _val_name
                         break
+                    for qw in _q_words:
+                        if len(qw) > 3 and len(_val_lower) > 3:
+                            matches = difflib.get_close_matches(qw, [_val_lower], n=1, cutoff=0.8)
+                            if matches:
+                                _matched_val = _val_name
+                                break
+                    if _matched_val:
+                        break
+                if _matched_val:
+                    try:
+                        _filtered = _chart_df[_chart_df[_cat_name].astype(str).str.lower() == str(_matched_val).lower()]
+                        if len(_filtered) > 2:
+                            _chart_df = _filtered
+                            _applied_filters.append(str(_matched_val))
+                            logger.info("Chart filter: %d rows for %s='%s'", len(_filtered), _cat_name, _matched_val)
+                    except Exception:
+                        pass
+            
+            if _applied_filters:
+                chart_df_records = _chart_df.to_dict('records')
+                filter_label = f" (filtered to {', '.join(_applied_filters)})"
         # ── Custom chart parsing: user explicitly specifies chart type and/or columns ──
         # Handles: "histogram of price", "scatter of price vs mileage",
         #          "bar chart of brand by revenue", "line chart of year vs sales"
