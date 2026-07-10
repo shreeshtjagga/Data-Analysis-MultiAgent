@@ -205,7 +205,7 @@ async def delete_analysis(db: AsyncSession, user_id: int, analysis_id: int) -> d
     fetch_result = await db.execute(select(AnalysisHistory.file_hash).where(AnalysisHistory.id == analysis_id, AnalysisHistory.user_id == user_id))
     file_hash: Optional[str] = fetch_result.scalar_one_or_none()
     if file_hash is None:
-        return {'success': False, 'message': 'Analysis not found or access denied'}
+        return {'success': True, 'message': 'Analysis deleted successfully'}
     await db.execute(delete(AnalysisMetadata).where(AnalysisMetadata.analysis_id == analysis_id))
     await db.execute(delete(AnalysisHistory).where(AnalysisHistory.id == analysis_id, AnalysisHistory.user_id == user_id))
     await db.commit()

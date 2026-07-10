@@ -1444,6 +1444,7 @@ export default function DataPulse({ user, onLogout }) {
     setShowHistory(!showHistory);
   };
   const deleteItem = async (id) => {
+    if (deleteLoading !== null) return;
     setDeleteLoading(id);
     setHistoryActionError("");
     try {
