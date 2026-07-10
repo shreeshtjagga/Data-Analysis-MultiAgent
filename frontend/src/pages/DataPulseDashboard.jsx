@@ -1807,7 +1807,7 @@ export default function DataPulse({ user, onLogout }) {
         exclusionPadding={14}
       />
       { }
-      <div style={{ background: 'rgba(6, 9, 18, 0.90)', backdropFilter: 'blur(12px)', WebkitBackdropFilter: 'blur(12px)', padding: '16px 48px', borderBottom: '1px solid var(--border-subtle)', display: 'flex', justifyContent: 'space-between', alignItems: 'center', position: 'sticky', top: 0, zIndex: 100 }}>
+      <div className="top-bar">
         <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
           <div style={{ color: 'var(--primary-500)', fontSize: '24px', textShadow: '0 0 10px rgba(99,102,241,0.4)' }}>◈</div>
           <strong style={{ fontSize: '18px', color: 'var(--text-main)', fontFamily: "'Inter', sans-serif" }}>DATA PULSE</strong>
@@ -1817,12 +1817,12 @@ export default function DataPulse({ user, onLogout }) {
           {result && <button onClick={() => setShowExportModal(true)} className="topbar-btn">Download</button>}
           <button onClick={onLogout} className="topbar-btn" style={{ marginLeft: '12px', background: 'rgba(239, 68, 68, 0.1)', color: 'var(--error)' }}>Logout</button>
         </div>
-        <div style={{ fontSize: '14px', color: 'var(--text-muted)' }}>{user?.email}</div>
+        <div className="user-email" style={{ fontSize: '14px', color: 'var(--text-muted)' }}>{user?.email}</div>
       </div>
       <div className="container" style={{ flex: 1, display: 'flex', flexDirection: 'column', position: 'relative', zIndex: 1, padding: 0, overflow: 'hidden' }}>
         { }
         {phase === "upload" ? (
-          <div className="animate-fade-in" style={{ flex: 1, display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 'clamp(22px, 3vw, 48px)', alignItems: 'center', maxWidth: '1400px', margin: '0 auto', padding: 'clamp(22px, 3vw, 40px) clamp(20px, 4vw, 64px)', height: '100%', overflow: 'hidden' }}>
+          <div className="animate-fade-in upload-grid" style={{ flex: 1 }}>
             { }
             <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center' }}>
               <div style={{ position: 'relative', width: '100%', maxWidth: '390px' }}>
@@ -1879,7 +1879,7 @@ export default function DataPulse({ user, onLogout }) {
                 </div>
               </div>
               { }
-              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '16px', marginTop: '8px' }}>
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(130px, 1fr))', gap: '16px', marginTop: '8px', width: '100%' }}>
                 {[
                   { title: "Neural Logic", desc: "Multi-agent orchestration.", icon: "◈" },
                   { title: "Deep Viz", desc: "Automated vector sets.", icon: "⬢" },
@@ -2091,7 +2091,7 @@ export default function DataPulse({ user, onLogout }) {
                           )}
                         </div>
                       )}
-                      <div className="kpi-grid" style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '16px' }}>
+                      <div className="kpi-grid">
                         {keyMetrics.map(m => (
                           <div key={m.label} className="kpi-card">
                             <strong className="kpi-label">{m.label}</strong>
@@ -2101,7 +2101,7 @@ export default function DataPulse({ user, onLogout }) {
                       </div>
                       <div style={{ padding: '20px', background: 'var(--bg-input)', borderRadius: '12px', border: '1px solid var(--border-subtle)' }}>
                         <strong style={{ fontSize: '15px', display: 'block', marginBottom: '16px', color: 'var(--text-main)', fontFamily: "'Inter', sans-serif" }}>Data Info</strong>
-                        <div className="stats-grid" style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px' }}>
+                        <div className="stats-grid">
                           {[
                             {
                               label: 'Numeric Columns',
@@ -2226,7 +2226,7 @@ export default function DataPulse({ user, onLogout }) {
                   {tab === "charts" && <div className="tab-content-fade-in"><ChartPanel result={result} PlotComponent={PlotComponent} /></div>}
                   {tab === "insights" && (
                     <div className="flex-col gap-24 tab-content-fade-in">
-                      <div className="kpi-grid" style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '16px' }}>
+                      <div className="kpi-grid">
                         <div style={{ padding: '18px', borderRadius: '12px', border: '1px solid var(--border-subtle)', background: 'var(--bg-input)' }}>
                           <strong style={{ fontSize: '12px', color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.08em' }}>Strong Correlations</strong>
                           <div style={{ marginTop: '8px', fontSize: '26px', color: 'var(--text-main)', fontFamily: "'Inter', sans-serif" }}>{(stats?.strong_correlations || []).length}</div>

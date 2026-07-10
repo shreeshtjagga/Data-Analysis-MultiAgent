@@ -41,22 +41,21 @@ def _get_fallback_chain(primary_model: str) -> list[tuple[str, str]]:
     
     if is_70b:
         if has_cerebras:
-            chain.append(('cerebras', 'llama-3.3-70b'))
             chain.append(('cerebras', 'gpt-oss-120b'))
             chain.append(('cerebras', 'gemma-4-31b'))
+            chain.append(('cerebras', 'zai-glm-4.7'))
         
         fallback_model = os.getenv('GROQ_FALLBACK_MODEL', 'llama-3.1-8b-instant')
         chain.append(('groq', fallback_model))
         
         if has_cerebras:
-            chain.append(('cerebras', 'llama3.1-8b'))
             chain.append(('cerebras', 'gemma-4-31b'))
             chain.append(('cerebras', 'gpt-oss-120b'))
     else:
         if has_cerebras:
-            chain.append(('cerebras', 'llama3.1-8b'))
             chain.append(('cerebras', 'gemma-4-31b'))
             chain.append(('cerebras', 'gpt-oss-120b'))
+            chain.append(('cerebras', 'zai-glm-4.7'))
             
     return chain
 

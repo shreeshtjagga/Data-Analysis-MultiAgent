@@ -544,6 +544,46 @@ body {
   }
 }
 
+/* Topbar styling */
+.top-bar {
+  background: rgba(6, 9, 18, 0.90);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  padding: 16px 48px;
+  border-bottom: 1px solid var(--border-subtle);
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  position: sticky;
+  top: 0;
+  z-index: 100;
+}
+
+/* Upload Page Grid */
+.upload-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: clamp(22px, 3vw, 48px);
+  align-items: center;
+  max-width: 1400px;
+  margin: 0 auto;
+  padding: clamp(22px, 3vw, 40px) clamp(20px, 4vw, 64px);
+  height: 100%;
+  overflow: hidden;
+}
+
+/* KPI and Stats grids */
+.kpi-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 16px;
+}
+.stats-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+}
+
 /* Dashboard responsive classes */
 .dashboard-grid {
   align-items: start;
@@ -1373,5 +1413,59 @@ body {
   .chat-input-row {
     flex-direction: row;
     width: 100%;
+  }
+
+  /* Release body/container scroll locks on mobile */
+  body {
+    overflow: auto !important;
+    overflow-y: auto !important;
+  }
+  .dashboard-reveal {
+    height: auto !important;
+    min-height: 100vh !important;
+    overflow: visible !important;
+  }
+  .dashboard-reveal .container {
+    height: auto !important;
+    overflow: visible !important;
+  }
+  
+  /* Topbar responsive adjustments */
+  .top-bar {
+    padding: 12px 16px !important;
+    flex-wrap: wrap !important;
+    gap: 12px !important;
+  }
+  .top-bar .user-email {
+    display: none !important;
+  }
+  .topbar-actions {
+    gap: 8px !important;
+  }
+  .topbar-btn {
+    padding: 4px 10px !important;
+    font-size: 11px !important;
+  }
+
+  /* Upload grid mobile stacking */
+  .upload-grid {
+    grid-template-columns: 1fr !important;
+    height: auto !important;
+    overflow-y: visible !important;
+    padding: 24px 16px !important;
+    gap: 32px !important;
+  }
+  
+  /* Hologram canvas scaling */
+  .ai-hologram-layer canvas {
+    max-width: 100% !important;
+    height: auto !important;
+  }
+  
+  /* Force charts to span full width on mobile */
+  .chart-flip-wrapper {
+    grid-column: 1 / -1 !important;
+    width: 100% !important;
+    max-width: 100% !important;
   }
 }

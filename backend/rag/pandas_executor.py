@@ -147,7 +147,29 @@ def _exec_with_timeout(code: str, namespace: dict, timeout: int = _MAX_EXEC_TIME
 
     def _run():
         try:
-            exec(code, {'__builtins__': {}}, namespace)
+            safe_builtins = {
+                'int': int,
+                'float': float,
+                'str': str,
+                'len': len,
+                'sum': sum,
+                'min': min,
+                'max': max,
+                'abs': abs,
+                'round': round,
+                'list': list,
+                'dict': dict,
+                'set': set,
+                'tuple': tuple,
+                'isinstance': isinstance,
+                'bool': bool,
+                'any': any,
+                'all': all,
+                'range': range,
+                'enumerate': enumerate,
+                'zip': zip,
+            }
+            exec(code, {'__builtins__': safe_builtins}, namespace)
         except Exception as exc:
             tb = traceback.format_exc().split('\n')[-3:]
             error_holder[0] = f"Execution error: {exc}\n{''.join(tb)}"
