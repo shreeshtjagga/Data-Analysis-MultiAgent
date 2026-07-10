@@ -255,6 +255,13 @@ def suggest_novel_chart(df_records: list[dict], existing_chart_keys: list[str], 
             spec_clean = {k: v for (k, v) in spec.items() if k != '_key'}
             reasoning = _generate_grounded_reasoning(spec, df, is_requested=True)
             return {'cannot_plot': False, 'spec': spec_clean, 'reasoning': reasoning}
+            
+    # If the user asked for a specific chart but we couldn't match any columns/types
+    _generic_words = {'generate', 'create', 'make', 'build', 'draw', 'show', 'give', 'need', 'want', 'can', 'you', 'i', 'chart', 'plot', 'graph', 'a', 'me', 'new', 'another', 'different', 'some', 'any', 'one', 'please', 'of', 'for'}
+    meaningful_words = [w for w in user_request.lower().split() if w not in _generic_words]
+    if len(meaningful_words) > 1 and not requested_types and not mentioned_cols:
+        return {'cannot_plot': True, 'reason': f"I couldn't find columns matching '{' '.join(meaningful_words)}' in this dataset. Please use exact column names from the data."}
+
     spec = all_candidates[0]
     spec_clean = {k: v for (k, v) in spec.items() if k != '_key'}
     reasoning = _generate_grounded_reasoning(spec, df, is_requested=False)
