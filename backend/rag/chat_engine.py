@@ -6,7 +6,7 @@ import os
 import time
 from typing import Any, Optional
 logger = logging.getLogger(__name__)
-SYNTHESIS_MODEL = os.getenv('GROQ_SYNTHESIS_MODEL', 'llama-3.3-70b-versatile')
+SYNTHESIS_MODEL = os.getenv('GROQ_SYNTHESIS_MODEL', 'llama-3.1-8b-instant')
 FALLBACK_MODEL = os.getenv('GROQ_FALLBACK_MODEL', 'llama-3.1-8b-instant')
 INTENT_MODEL = os.getenv('GROQ_INTENT_MODEL', 'llama-3.1-8b-instant')
 _MAX_CONTEXT_CHARS = 12000
@@ -58,6 +58,7 @@ def _data_system_prompt(file_name: str, chart_keys: list[str]) -> str:
         'with exact numbers from the real data. These are the ONLY facts you may use.\n',
         '- Use EXACT numbers from CONTEXT or PANDAS RESULT — never estimate\n',
         '- If answer is not in CONTEXT: write one bullet: That is not in this dataset. Then pivot\n',
+        '- Out-of-domain queries: If user asks general knowledge (e.g. "what is today", "who is president"), YOU MUST REFUSE nicely: "I only answer questions about the dataset."\n',
         '- Never fabricate numbers or use training knowledge to fill gaps\n',
         '- Rankings: always name the entity AND its exact value\n',
         '- Correlations: state r value, direction, and plain-English meaning\n',
