@@ -35,7 +35,30 @@ def _build_llm_prompt(slim_stats: dict) -> str:
     col_narrative = _build_column_narrative(slim_stats)
     clean_stats = sanitize_for_json(slim_stats)
     payload_json = json.dumps(clean_stats, ensure_ascii=True)
-    return '\n'.join([f'You are a friendly data analyst. Your job is to explain data findings in plain English that anyone can understand.', f'Dataset: {label} (domain: {domain})', '', 'Column summary:', col_narrative, '', 'Full stats (JSON):', f'<analysis_json>{payload_json}</analysis_json>', '', 'STRICT LANGUAGE RULES:', '- Use everyday words only. No jargon.', "- Say 'average' not 'mean'. Say 'most common' not 'modal'. Say 'spread' not 'variance'.", '- Every finding must include at least one specific number, percentage, or count.', '- Keep each sentence short (under 20 words).', '', 'Respond with ONLY valid JSON (no markdown, no explanation):', '{', '  "headline": "One plain-English conclusion from the data in one short sentence.",', '  "data_info": ["3-5 simple sentences about WHAT this dataset contains: its size, columns, and topic. No analysis here, just facts. EACH sentence is a SEPARATE array element."],', '  "findings": ["Put EACH finding in its OWN array element. 5-8 findings total. One sentence per element. Each must include a specific number. WRONG: one long string with all findings. RIGHT: ["Finding 1.", "Finding 2.", "Finding 3."]"],', '  "recommendations": ["ONLY include items here if a finding is genuinely actionable. Each recommendation is a SEPARATE array element. Examples: a dominant group worth focusing on, an outlier to investigate, a data quality issue, or a pattern with business implications. If nothing is clearly actionable, return an empty array []. Start each item with a verb."]', '}'])
+    return '\n'.join([
+        f'You are a friendly data analyst. Your job is to explain data findings in plain English that anyone can understand.',
+        f'Dataset: {label} (domain: {domain})',
+        '',
+        'Column summary:',
+        col_narrative,
+        '',
+        'Full stats (JSON):',
+        f'<analysis_json>{payload_json}</analysis_json>',
+        '',
+        'STRICT LANGUAGE RULES:',
+        '- Use everyday words only. No jargon.',
+        "- Say 'average' not 'mean'. Say 'most common' not 'modal'. Say 'spread' not 'variance'.",
+        '- Every finding must include at least one specific number, percentage, or count.',
+        '- Keep each sentence short (under 20 words).',
+        '',
+        'Respond with ONLY valid JSON (no markdown, no explanation):',
+        '{',
+        '  "headline": "One plain-English conclusion from the data in one short sentence.",',
+        '  "data_info": ["3-5 simple sentences about WHAT this dataset contains: its size, columns, and topic. No analysis here, just facts. EACH sentence is a SEPARATE array element."],',
+        '  "findings": ["Put EACH finding in its OWN array element. 5-8 findings total. One sentence per element. Each must include a specific number. WRONG: one long string with all findings. RIGHT: ["Finding 1.", "Finding 2.", "Finding 3."]"],',
+        '  "recommendations": ["ALWAYS include 3-5 specific, actionable recommendations based on the findings. Each recommendation MUST be a SEPARATE array element. Start each with a strong action verb (Investigate, Focus, Monitor, Review, Prioritize, Segment, etc.). Base recommendations on actual patterns found: outliers, dominant categories, correlations, data quality issues, or business opportunities."]',
+        '}',
+    ])
 
 def _llm_insights(stats: dict) -> Optional[dict]:
     api_key = os.getenv('GROQ_API_KEY')
@@ -48,7 +71,24 @@ def _llm_insights(stats: dict) -> Optional[dict]:
         client = get_groq_client()
         if not client:
             return None
-        completion = client.chat.completions.create(model=os.getenv('GROQ_MODEL', 'llama-3.1-8b-instant'), messages=[{'role': 'system', 'content': f'You are a friendly data analyst explaining findings about {label} ({domain} domain). Write in plain, simple English — no jargon. Always respond with valid JSON only. No markdown fences.'}, {'role': 'user', 'content': prompt}], temperature=0.1, max_tokens=1200)
+        completion = client.chat.completions.create(
+            model=os.getenv('GROQ_MODEL', 'llama-3.1-8b-instant'),
+            messages=[
+                {
+                    'role': 'system',
+                    'content': (
+                        f'You are a friendly data analyst explaining findings about {label} ({domain} domain). '
+                        'Write in plain, simple English — no jargon. '
+                        'Always respond with valid JSON only. No markdown fences. '
+                        'You MUST include at least 3 specific, actionable recommendations in the recommendations array. '
+                        'Never return an empty recommendations array.'
+                    ),
+                },
+                {'role': 'user', 'content': prompt},
+            ],
+            temperature=0.1,
+            max_tokens=1400,
+        )
         raw = (completion.choices[0].message.content or '').strip()
         if raw.startswith('```'):
             raw = raw.split('\n', 1)[-1].rsplit('```', 1)[0].strip()
@@ -62,7 +102,8 @@ def _llm_insights(stats: dict) -> Optional[dict]:
         if not isinstance(result.get('findings'), list) or len(result['findings']) == 0:
             logger.warning('LLM insights returned empty findings list')
             return None
-        logger.info('LLM insights generated: %d findings, %d data_info', len(result.get('findings', [])), len(result.get('data_info', [])))
+        logger.info('LLM insights generated: %d findings, %d recommendations, %d data_info',
+                    len(result.get('findings', [])), len(result.get('recommendations', [])), len(result.get('data_info', [])))
         return result
     except Exception as exc:
         logger.warning('LLM insights failed, falling back to rules: %s', exc)
@@ -99,7 +140,44 @@ def _rule_based_insights(stats: dict) -> dict:
             findings.append(f"In '{col}', the most common value is '{info['most_common']}' ({pct}% of rows).")
     if not findings:
         findings.append('No strong patterns detected — the dataset may need more varied data for richer insights.')
-    return {'headline': '', 'data_info': data_info, 'findings': findings}
+
+    # Always generate rule-based recommendations so the section is never empty
+    recommendations = []
+    missing_cells = dq.get('missing_cells', 0)
+    if missing_cells > 0:
+        recommendations.append(
+            f"Review and impute the {missing_cells:,} missing values to improve analysis accuracy."
+        )
+    if outliers:
+        outlier_cols = ', '.join(list(outliers.keys())[:3])
+        recommendations.append(
+            f"Investigate outliers in {outlier_cols} — they may indicate data entry errors or rare but important events."
+        )
+    if correlations:
+        best = correlations[0]
+        recommendations.append(
+            f"Explore the relationship between '{best['col1']}' and '{best['col2']}' (r={best['correlation']:.2f}) — this correlation may drive key outcomes."
+        )
+    if categorical_cols:
+        top_cat = categorical_cols[0]
+        recommendations.append(
+            f"Segment analysis by '{top_cat}' to uncover group-level patterns and differences."
+        )
+    if numeric_cols:
+        recommendations.append(
+            f"Monitor the distribution of '{numeric_cols[0]}' over time — sudden shifts may signal important trends."
+        )
+    if completeness < 95:
+        recommendations.append(
+            f"Prioritize data collection to raise completeness above 95% (currently {completeness:.1f}%)."
+        )
+    # Always have at least 2
+    if len(recommendations) < 2:
+        recommendations.append(
+            "Focus on enriching the dataset with additional rows to enable more statistically significant analysis."
+        )
+
+    return {'headline': '', 'data_info': data_info, 'findings': findings, 'recommendations': recommendations}
 
 def _computed_insights(stats: dict) -> dict:
     outliers = stats.get('outliers', {})
@@ -128,7 +206,15 @@ def insights_agent(state: AnalysisState) -> AnalysisState:
         stats = state.stats_summary or {}
         if not stats or not stats.get('row_count'):
             logger.warning('stats_summary is empty or partial — using safe minimal insights.')
-            state.insights = {'headline': 'Dataset was loaded but full statistical analysis could not be completed.', 'data_info': ['The dataset was uploaded successfully.'], 'findings': ['Statistical analysis encountered an issue. The dataset may contain unusual formatting. Try re-uploading or checking for special characters.'], 'outlier_summary': {}, 'correlation_insights': [], 'distribution_insights': []}
+            state.insights = {
+                'headline': 'Dataset was loaded but full statistical analysis could not be completed.',
+                'data_info': ['The dataset was uploaded successfully.'],
+                'findings': ['Statistical analysis encountered an issue. The dataset may contain unusual formatting. Try re-uploading or checking for special characters.'],
+                'recommendations': ['Re-upload the dataset in a clean CSV format to enable full analysis.'],
+                'outlier_summary': {},
+                'correlation_insights': [],
+                'distribution_insights': [],
+            }
             state.completed_agents.append('insights')
             return state
         slim_stats = truncate_stats_for_llm(stats)
@@ -148,16 +234,36 @@ def insights_agent(state: AnalysisState) -> AnalysisState:
                     else:
                         split_findings.append(item)
                 raw_findings = split_findings
-            insights = {'headline': llm_result.get('headline'), 'data_info': llm_result.get('data_info', []), 'findings': raw_findings, 'recommendations': llm_result.get('recommendations', [])}
+            llm_recs = llm_result.get('recommendations', [])
+            # If LLM returned empty recs, fill in with rule-based ones
+            if not llm_recs:
+                rule_insights = _rule_based_insights(stats)
+                llm_recs = rule_insights.get('recommendations', [])
+            insights = {
+                'headline': llm_result.get('headline'),
+                'data_info': llm_result.get('data_info', []),
+                'findings': raw_findings,
+                'recommendations': llm_recs,
+            }
         else:
             insights = _rule_based_insights(stats)
         insights.update(_computed_insights(stats))
         state.insights = insights
-        logger.info('Insights complete. %d data_info, %d findings (LLM=%s)', len(insights.get('data_info', [])), len(insights.get('findings', [])), llm_result is not None)
+        logger.info('Insights complete. %d data_info, %d findings, %d recommendations (LLM=%s)',
+                    len(insights.get('data_info', [])), len(insights.get('findings', [])),
+                    len(insights.get('recommendations', [])), llm_result is not None)
     except Exception as e:
         logger.error('Insights error: %s', e)
         add_pipeline_error(state.errors, code='INSIGHTS_FAILED', message=str(e), agent='insights', error_type='agent')
         if not state.insights:
-            state.insights = {'headline': '', 'data_info': [], 'findings': ['Insights generation encountered an error.'], 'outlier_summary': {}, 'correlation_insights': [], 'distribution_insights': []}
+            state.insights = {
+                'headline': '',
+                'data_info': [],
+                'findings': ['Insights generation encountered an error.'],
+                'recommendations': ['Re-upload the dataset and try again. If the issue persists, check the backend logs.'],
+                'outlier_summary': {},
+                'correlation_insights': [],
+                'distribution_insights': [],
+            }
     state.completed_agents.append('insights')
     return state

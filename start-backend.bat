@@ -22,12 +22,48 @@ if errorlevel 1 (
     exit /b 1
 )
 
-for /f "tokens=2 delims= " %%V in ('python --version 2^>^&1') do set PY_VER=%%V
+set "PY_CMD=python"
+where py >nul 2>&1
+if not errorlevel 1 (
+    py -3.12 --version >nul 2>&1
+    if not errorlevel 1 set "PY_CMD=py -3.12"
+    if "%PY_CMD%"=="python" (
+        py -3.13 --version >nul 2>&1
+        if not errorlevel 1 set "PY_CMD=py -3.13"
+    )
+    if "%PY_CMD%"=="python" (
+        py -3.11 --version >nul 2>&1
+        if not errorlevel 1 set "PY_CMD=py -3.11"
+    )
+)
+
+for /f "tokens=2 delims= " %%V in ('%PY_CMD% --version 2^>^&1') do set PY_VER=%%V
 echo  [OK]  Python %PY_VER% found.
+
+for /f "tokens=1,2 delims=." %%A in ("%PY_VER%") do (
+    set PY_MAJOR=%%A
+    set PY_MINOR=%%B
+)
+
+if "%PY_MAJOR%"=="3" (
+    if %PY_MINOR% GEQ 14 (
+        echo.
+        echo  [ERROR] Python %PY_VER% is not supported by this backend yet.
+        echo.
+        echo          The startup script installs greenlet 3.1.1, and that package
+        echo          does not currently build on Python 3.14.
+        echo.
+        echo          Please install Python 3.11, 3.12, or 3.13 and run this script again.
+        echo          Recommended: Python 3.12
+        echo.
+        pause
+        exit /b 1
+    )
+)
 
 REM ── 2. Check .env file ───────────────────────────────────────────────────────
 set "SCRIPT_DIR=%~dp0"
-if not exist ".env" (
+if not exist ".env" if not exist "..\.env" (
     echo.
     echo  [ERROR] .env file is missing!
     echo.
@@ -44,7 +80,7 @@ echo  [OK]  .env file found.
 REM ── 3. Create virtual environment if needed ──────────────────────────────────
 if not exist ".venv\Scripts\python.exe" (
     echo  [1/3] Creating virtual environment...
-    python -m venv .venv
+    %PY_CMD% -m venv .venv
     if errorlevel 1 (
         echo  [ERROR] Failed to create virtual environment.
         pause

@@ -2,8 +2,8 @@ import logging
 import os
 import ssl
 from urllib.parse import urlparse, urlunparse, parse_qs, urlencode
-from dotenv import load_dotenv
-load_dotenv()
+from dotenv import find_dotenv, load_dotenv
+load_dotenv(find_dotenv(usecwd=True))
 from sqlalchemy import BigInteger, Boolean, Column, DateTime, Float, ForeignKey, Integer, String, Text, UniqueConstraint, func
 from typing import AsyncGenerator
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
@@ -13,6 +13,7 @@ logger = logging.getLogger(__name__)
 # SQLite only auto-increments when the PK type is exactly INTEGER PRIMARY KEY.
 # Use BigInteger elsewhere, but transparently downgrade to Integer on SQLite.
 PK_TYPE = BigInteger().with_variant(Integer, "sqlite")
+
 def _running_in_container() -> bool:
     return os.getenv('RUNNING_IN_DOCKER', 'false').lower() == 'true' or os.path.exists('/.dockerenv')
 
@@ -37,6 +38,7 @@ def _rewrite_local_dev_db_host(database_url: str) -> str:
     rewritten = urlunparse(parsed._replace(netloc=netloc))
     logger.warning("DATABASE_URL host 'db' detected in local dev; using localhost instead")
     return rewritten
+
 DATABASE_URL = os.getenv('DATABASE_URL', 'postgresql+asyncpg://postgres:postgres@localhost:5432/postgres')
 if DATABASE_URL.startswith('postgres://'):
     DATABASE_URL = DATABASE_URL.replace('postgres://', 'postgresql+asyncpg://', 1)
@@ -53,24 +55,40 @@ def _strip_url_params(url: str) -> str:
         params.pop(p, None)
     new_query = urlencode(params, doseq=True)
     return urlunparse(parsed._replace(query=new_query))
+
 DATABASE_URL = _strip_url_params(DATABASE_URL)
+
 _db_ssl_mode = os.getenv('DB_SSL', 'false').lower()
 _connect_args: dict = {}
 if 'postgresql' in DATABASE_URL:
     _connect_args['statement_cache_size'] = 0
 
-if _db_ssl_mode == 'require':
-    _connect_args['ssl'] = 'require'
-elif _db_ssl_mode == 'true':
+# asyncpg does not reliably accept the string 'require'; use a proper SSL
+# context for both 'require' and 'true' modes so Supabase pooler works.
+if _db_ssl_mode in ('require', 'true'):
     _ssl_ctx = ssl.create_default_context()
     _ssl_ctx.check_hostname = False
     _ssl_ctx.verify_mode = ssl.CERT_NONE
     _connect_args['ssl'] = _ssl_ctx
 
 if 'sqlite' in DATABASE_URL:
-    engine = create_async_engine(DATABASE_URL, echo=os.getenv('APP_ENV', 'production') == 'development', pool_pre_ping=True, connect_args=_connect_args)
+    engine = create_async_engine(
+        DATABASE_URL,
+        echo=os.getenv('APP_ENV', 'production') == 'development',
+        pool_pre_ping=True,
+        connect_args=_connect_args,
+    )
 else:
-    engine = create_async_engine(DATABASE_URL, echo=os.getenv('APP_ENV', 'production') == 'development', pool_pre_ping=True, pool_size=3, max_overflow=5, pool_recycle=300, pool_timeout=30, connect_args=_connect_args)
+    engine = create_async_engine(
+        DATABASE_URL,
+        echo=os.getenv('APP_ENV', 'production') == 'development',
+        pool_pre_ping=True,
+        pool_size=3,
+        max_overflow=5,
+        pool_recycle=300,
+        pool_timeout=30,
+        connect_args=_connect_args,
+    )
 
 AsyncSessionLocal = async_sessionmaker(bind=engine, class_=AsyncSession, expire_on_commit=False, autoflush=False, autocommit=False)
 

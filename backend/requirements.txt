@@ -34,6 +34,13 @@ supabase>=2.4.0            # Supabase Python client for auth and DB
 # python-jose        → REMOVED: Supabase manages JWT signing/verification
 # google-auth        → REMOVED: Supabase verifies Google tokens via Dashboard config
 
+# Local auth still uses password hashing and JWT issuance for email/password login.
+# bcrypt MUST stay <4.1 — passlib 1.7.4 (last release) is incompatible with bcrypt 4.x+
+# which removed __about__ and changed the 72-byte truncation API.
+passlib[bcrypt]>=1.7.4
+bcrypt>=3.2.0,<4.1
+python-jose[cryptography]>=3.3.0
+
 # ─── Validation ───────────────────────────────────────────────────────────────
 pydantic>=2.7.0
 email-validator>=2.1.0.post1

@@ -2,7 +2,7 @@ import logging
 import os
 from datetime import datetime, timedelta, timezone
 from typing import Optional
-from dotenv import load_dotenv
+from dotenv import find_dotenv, load_dotenv
 from email_validator import EmailNotValidError, validate_email
 from passlib.context import CryptContext
 from jose import JWTError, jwt
@@ -11,7 +11,7 @@ from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from .db import User
 
-load_dotenv()
+load_dotenv(find_dotenv(usecwd=True))
 logger = logging.getLogger(__name__)
 
 JWT_SECRET = os.getenv('JWT_SECRET', 'datapulse_jwt_secret_change_in_prod_2024')
@@ -20,12 +20,19 @@ JWT_EXPIRE_MINUTES = int(os.getenv('JWT_EXPIRE_MINUTES', '1440'))  # 24h
 REFRESH_SECRET = os.getenv('REFRESH_SECRET', JWT_SECRET)
 REFRESH_EXPIRE_DAYS = int(os.getenv('REFRESH_EXPIRE_DAYS', '7'))
 
+# passlib 1.7.4 + bcrypt 4.x: we manually truncate passwords to 72 bytes
+# in _hash_password / _verify_password to avoid the bcrypt 72-byte limit error.
 pwd_context = CryptContext(schemes=['bcrypt'], deprecated='auto')
 
 
 def _supabase_sign_in(email: str, password: str) -> Optional[dict]:
-    url = os.getenv('SUPABASE_URL')
-    key = os.getenv('SUPABASE_ANON_KEY') or os.getenv('SUPABASE_SERVICE_ROLE_KEY')
+    url = os.getenv('SUPABASE_URL') or os.getenv('VITE_SUPABASE_URL')
+    key = (
+        os.getenv('SUPABASE_ANON_KEY')
+        or os.getenv('VITE_SUPABASE_ANON_KEY')
+        or os.getenv('SUPABASE_SERVICE_ROLE_KEY')
+        or os.getenv('VITE_SUPABASE_SERVICE_ROLE_KEY')
+    )
     if not url or not key:
         return None
     try:
@@ -64,12 +71,16 @@ def normalize_email(email: str, *, check_deliverability: bool = False) -> Option
 
 
 def _hash_password(plain: str) -> str:
-    return pwd_context.hash(plain)
+    # bcrypt has a 72-byte limit; truncate explicitly for consistent behaviour
+    # across all bcrypt/passlib versions.
+    truncated = plain.encode('utf-8')[:72].decode('utf-8', errors='ignore')
+    return pwd_context.hash(truncated)
 
 
 def _verify_password(plain: str, hashed: str) -> bool:
     try:
-        return pwd_context.verify(plain, hashed)
+        truncated = plain.encode('utf-8')[:72].decode('utf-8', errors='ignore')
+        return pwd_context.verify(truncated, hashed)
     except Exception:
         return False
 
@@ -120,6 +131,7 @@ async def register_user(db: AsyncSession, email: str, password: str, name: Optio
                 existing.password_hash = _hash_password(password)
                 if name and not existing.name:
                     existing.name = name
+                # commit first, then refresh so the row is visible on the connection
                 await db.commit()
                 await db.refresh(existing)
                 logger.info('Added local password credentials for existing user: %s (id=%d)', normalized_email, existing.id)
@@ -137,9 +149,10 @@ async def register_user(db: AsyncSession, email: str, password: str, name: Optio
         hashed = _hash_password(password)
         user = User(email=normalized_email, name=name or None, password_hash=hashed)
         db.add(user)
+        # flush to get the auto-generated id, then commit, then refresh
         await db.flush()
-        await db.refresh(user)
         await db.commit()
+        await db.refresh(user)
         logger.info('User registered locally: %s (id=%d)', normalized_email, user.id)
         return {
             'success': True,
@@ -156,7 +169,7 @@ async def register_user(db: AsyncSession, email: str, password: str, name: Optio
     except Exception as exc:
         await db.rollback()
         logger.error('register_user failed: %s', exc)
-        return {'success': False, 'message': 'Registration failed. Please try again.'}
+        return {'success': False, 'message': 'Registration failed. The backend could not save your account. Check the backend terminal for database errors and try again.'}
 
 
 async def login_user(db: AsyncSession, email: str, password: str) -> dict:
@@ -231,7 +244,7 @@ async def login_user(db: AsyncSession, email: str, password: str) -> dict:
         }
     except Exception as exc:
         logger.error('login_user failed for %s: %s', normalized_email, exc)
-        return {'success': False, 'message': 'Login failed. Please try again.'}
+        return {'success': False, 'message': 'Login failed. The backend could not verify your account right now. Check the backend terminal and try again.'}
 
 
 async def request_password_reset(db: AsyncSession, email: str) -> dict:

@@ -81,6 +81,7 @@ function LoginForm({ onLogin, onForgot }) {
           disabled={loading}
           autoComplete="username"
         />
+        <div style={{ fontSize: '12px', color: 'var(--text-muted)' }}>Use your email address here, not your username.</div>
       </div>
       <div className="flex-col gap-12">
         <label style={{ fontSize: '13px', fontWeight: 600, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Password</label>
@@ -296,6 +297,7 @@ function RegisterForm({ onLogin }) {
       <div className="flex-col gap-8">
         <label style={{ fontSize: '13px', fontWeight: 600, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Email address</label>
         <input id="reg-email" className="input-field" style={{ width: "100%", backgroundColor: '#f1f5f9', color: '#0f172a', opacity: loading ? 0.6 : 1 }} type="email" placeholder="you@example.com" value={email} onChange={(e) => setEmail(e.target.value)} disabled={loading} autoComplete="off" />
+        <div style={{ fontSize: '12px', color: 'var(--text-muted)' }}>This must be a real email format like `name@example.com`.</div>
       </div>
       <div className="flex-col gap-8">
         <label style={{ fontSize: '13px', fontWeight: 600, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Secure Password</label>

@@ -10,7 +10,7 @@ Install these once on your machine before running anything:
 
 | Tool | Version | Download |
 |------|---------|----------|
-| **Python** | 3.11 or later | https://www.python.org/downloads/ *(check "Add Python to PATH")* |
+| **Python** | 3.11 to 3.13 | https://www.python.org/downloads/ *(check "Add Python to PATH")* |
 | **Node.js** | 18 or later | https://nodejs.org/ |
 
 ---
@@ -88,7 +88,8 @@ DD PROJECT/
 
 | Problem | Fix |
 |---------|-----|
-| `Python not found` | Reinstall Python and check "Add Python to PATH" |
+| `Python not found` | Reinstall Python 3.11-3.13 and check "Add Python to PATH" |
+| `Failed building wheel for greenlet` | Use Python 3.11, 3.12, or 3.13 instead of Python 3.14 |
 | `npm not found` | Install Node.js from nodejs.org |
 | `.env file is missing` | Ask the project owner for the `.env` file |
 | Backend crashes on start | Check the terminal output — usually a missing dependency |
