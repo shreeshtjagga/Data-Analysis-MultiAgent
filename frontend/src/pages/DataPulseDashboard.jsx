@@ -2385,7 +2385,7 @@ export default function DataPulse({ user, onLogout }) {
               <div>
                 <h2 style={{ fontSize: '18px', fontWeight: 700, margin: 0, color: 'var(--text-main)' }}>Export Dashboard PDF</h2>
                 <p style={{ margin: '4px 0 0', fontSize: '13px', color: 'var(--text-muted)' }}>
-                  {selectedExportKeys.length} of {Object.keys(result?.charts || {}).length} charts selected
+                  {selectedExportKeys.length} of {Object.keys(result?.charts || {}).length} charts selected (Max 6)
                 </p>
               </div>
               <button onClick={() => setShowExportModal(false)} style={{ background: 'none', border: 'none', color: 'var(--text-muted)', cursor: 'pointer', fontSize: '20px', lineHeight: 1, padding: '2px 6px' }}>✕</button>
@@ -2393,13 +2393,21 @@ export default function DataPulse({ user, onLogout }) {
             { }
             <div style={{ display: 'flex', gap: '10px' }}>
               <button
-                onClick={() => setSelectedExportKeys(Object.keys(result?.charts || {}))}
+                onClick={() => {
+                  const keys = Object.keys(result?.charts || {});
+                  if (keys.length > 6) {
+                    setSelectedExportKeys(keys.slice(0, 6));
+                    alert("Maximum limit is 6 charts for PDF export. Only the first 6 charts have been selected.");
+                  } else {
+                    setSelectedExportKeys(keys);
+                  }
+                }}
                 style={{
                   padding: '6px 14px', borderRadius: '8px', fontSize: '12px', fontWeight: 600,
                   border: '1px solid rgba(99,102,241,0.4)', background: 'rgba(99,102,241,0.1)',
                   color: '#818cf8', cursor: 'pointer', letterSpacing: '0.03em',
                 }}
-              >Select All</button>
+              >Select All (Max 6)</button>
               <button
                 onClick={() => setSelectedExportKeys([])}
                 style={{
@@ -2439,11 +2447,17 @@ export default function DataPulse({ user, onLogout }) {
                     <input
                       type="checkbox"
                       checked={isChecked}
-                      onChange={() =>
-                        setSelectedExportKeys(prev =>
-                          isChecked ? prev.filter(k => k !== key) : [...prev, key]
-                        )
-                      }
+                      onChange={() => {
+                        if (isChecked) {
+                          setSelectedExportKeys(prev => prev.filter(k => k !== key));
+                        } else {
+                          if (selectedExportKeys.length >= 6) {
+                            alert("You can select a maximum of 6 charts for PDF export.");
+                            return;
+                          }
+                          setSelectedExportKeys(prev => [...prev, key]);
+                        }
+                      }}
                       style={{ width: '16px', height: '16px', accentColor: '#6366f1', cursor: 'pointer', flexShrink: 0 }}
                     />
                     <div style={{ flex: 1, minWidth: 0 }}>

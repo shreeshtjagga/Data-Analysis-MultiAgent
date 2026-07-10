@@ -134,13 +134,38 @@ async def add_security_headers(request: Request, call_next):
         response.headers['Strict-Transport-Security'] = 'max-age=31536000; includeSubDomains; preload'
     return response
 
+@app.exception_handler(HTTPException)
+async def custom_http_exception_handler(request: Request, exc: HTTPException):
+    headers = getattr(exc, 'headers', None)
+    if headers:
+        response = JSONResponse(status_code=exc.status_code, content={'detail': exc.detail}, headers=headers)
+    else:
+        response = JSONResponse(status_code=exc.status_code, content={'detail': exc.detail})
+    
+    # Manually add CORS headers to prevent browser hiding the error
+    origin = request.headers.get('origin')
+    if origin:
+        response.headers['Access-Control-Allow-Origin'] = origin
+        response.headers['Access-Control-Allow-Credentials'] = 'true'
+    return response
+
 @app.exception_handler(Exception)
 async def catch_all_exception_handler(request: Request, exc: Exception):
     logger.error('Unhandled error on %s %s', request.method, request.url.path, exc_info=exc)
+    content = {'detail': 'Internal Server Error'}
     if os.getenv('APP_ENV', 'production') == 'development':
         error_trace = ''.join(traceback.format_exception(type(exc), exc, exc.__traceback__))
-        return JSONResponse(status_code=500, content={'detail': str(exc), 'trace': error_trace})
-    return JSONResponse(status_code=500, content={'detail': 'Internal Server Error'})
+        content = {'detail': str(exc), 'trace': error_trace}
+    
+    response = JSONResponse(status_code=500, content=content)
+    
+    # Manually add CORS headers
+    origin = request.headers.get('origin')
+    if origin:
+        response.headers['Access-Control-Allow-Origin'] = origin
+        response.headers['Access-Control-Allow-Credentials'] = 'true'
+    return response
+
 security = HTTPBearer()
 
 async def get_current_user_id(credentials: Annotated[HTTPAuthorizationCredentials, Depends(security)], db: AsyncSession=Depends(get_db)) -> int:
