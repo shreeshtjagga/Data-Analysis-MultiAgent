@@ -27,7 +27,7 @@ def _data_system_prompt(file_name: str, chart_keys: list[str]) -> str:
         'Structure EVERY answer exactly like this in JSON format:\n\n',
         '{\n',
         '  "direct_answer": "The key number or fact in one clear sentence.",\n',
-        '  "proactive_insight": "Interestingly, I noticed... [Something they did not ask but should know based on the data]",\n',
+        '  "proactive_insight": "Interestingly, [a fact FROM THE CONTEXT OR PANDAS RESULT that the user did not ask about but is noteworthy]",\n',
         '  "confidence": 98,\n',
         '  "suggestion": "Should we look at the trend over time?"\n',
         '}\n\n',
@@ -40,11 +40,13 @@ def _data_system_prompt(file_name: str, chart_keys: list[str]) -> str:
         'You have a CONTEXT block with pre-computed facts and a PANDAS RESULT block\n',
         'with exact numbers from the real data. These are the ONLY facts you may use.\n',
         '- Use EXACT numbers from CONTEXT or PANDAS RESULT — never estimate\n',
-        '- If the answer is not in CONTEXT or PANDAS RESULT: set the "direct_answer" field to: "That is not in this dataset." Then pivot\n',
-        '- Out-of-domain queries: If user asks general knowledge (e.g. "what is today"), YOU MUST REFUSE nicely. However, you MAY explain general statistical concepts (like "correlation") as long as you relate them to the dataset.\n',
-        '- Never fabricate numbers or use training knowledge to fill gaps\n',
-        '- Rankings: always name the entity AND its exact value\n',
-        '- Correlations: state r value, direction, and plain-English meaning\n',
+        '- CRITICAL: The `proactive_insight` field MUST also ONLY reference facts present in CONTEXT or PANDAS RESULT.\n',
+        '  Do NOT use your training knowledge to fill the proactive_insight. If there is no interesting fact in CONTEXT, set proactive_insight to an empty string "".\n',
+        '- If the answer is not in CONTEXT or PANDAS RESULT: set the "direct_answer" field to: "That is not in this dataset." Then pivot.\n',
+        '- Out-of-domain queries: If user asks general knowledge (e.g. "what is today"), YOU MUST REFUSE nicely. However, you MAY explain general statistical concepts (like "correlation") as long as you relate them to actual numbers from the dataset.\n',
+        '- NEVER fabricate numbers or use training knowledge to fill any gaps — this includes proactive_insight\n',
+        '- Rankings: always name the entity AND its exact value from CONTEXT/PANDAS RESULT\n',
+        '- Correlations: state r value, direction, and plain-English meaning — only if r value is in CONTEXT\n',
         '- Predictions: use TREND DATA slope+R2 to project; cite R2 as confidence\n',
         f'- Greetings: reply Hi! Ask me anything about {file_name}.\n\n',
         '==== STYLE ====\n',
@@ -317,7 +319,7 @@ async def answer_question(question: str, file_hash: str, file_name: str, stats: 
                     raw_ans = await call_groq_with_fallback(
                         messages=messages,
                         primary_model=SYNTHESIS_MODEL,
-                        temperature=0.05,
+                        temperature=0.0,
                         max_tokens=1200
                     )
                     answer = _sanitize_llm_output(raw_ans)
@@ -364,9 +366,13 @@ async def answer_question(question: str, file_hash: str, file_name: str, stats: 
     has_chunks = bool(chunks)
     has_query = data_result is not None
     if not has_chunks and (not has_query) and (not static_ctx.strip()):
-        messages.append({'role': 'system', 'content': "WARNING: No relevant data was found for this question. You MUST respond in the required JSON format with direct_answer: 'That is not in this dataset.' Then suggest what the user CAN ask about in the `suggestion` field."})
+        messages.append({'role': 'system', 'content': "WARNING: No relevant data was found for this question. You MUST respond in the required JSON format with direct_answer: 'That is not in this dataset.' Set proactive_insight to empty string. Do NOT include any numbers or statistics you may know from training — they are not verified against this dataset."})
+    elif not has_query and has_chunks:
+        # Context only from RAG chunks, no computed result — extra caution
+        messages.append({'role': 'system', 'content': "CAUTION: No computed PANDAS RESULT is available for this question. Only use facts explicitly stated in the CONTEXT above. If the CONTEXT does not contain a direct answer with specific numbers, say so honestly. Set proactive_insight to empty string or a fact explicitly in CONTEXT."})
     try:
-        temp = 0.05 if data_result is not None else 0.1
+        # Use near-zero temperature to minimize creativity and hallucinations
+        temp = 0.0 if data_result is not None else 0.05
         answer = await _call_groq_with_retry(groq_client, messages, SYNTHESIS_MODEL, temperature=temp, max_tokens=1500)
         answer = _sanitize_llm_output(answer)
     except Exception as exc:
