@@ -8,9 +8,9 @@ from typing import Any, Optional
 from ..core.llm_client import call_groq_with_fallback
 
 logger = logging.getLogger(__name__)
-SYNTHESIS_MODEL = 'llama-3.1-8b-instant'
-FALLBACK_MODEL = 'llama-3.1-8b-instant'
-INTENT_MODEL = 'llama-3.1-8b-instant'
+SYNTHESIS_MODEL = os.getenv('GROQ_SYNTHESIS_MODEL', 'llama-3.3-70b-versatile')
+FALLBACK_MODEL = os.getenv('GROQ_FALLBACK_MODEL', 'llama-3.1-8b-instant')
+INTENT_MODEL = os.getenv('GROQ_INTENT_MODEL', 'llama-3.1-8b-instant')
 _MAX_CONTEXT_CHARS = 12000
 _TOP_K_CHUNKS = 8
 
@@ -246,11 +246,35 @@ def _extract_chart_facts(fig_data: Any, chart_key: str) -> str:
         logger.warning("extract_chart_facts failed for '%s': %s", chart_key, exc)
         return f"Could not read data from chart '{chart_key}'."
 
+def _fix_json_values(text: str) -> str:
+    """Quote any unquoted string values for the four known keys so JSON.parse works."""
+    import re as _re
+    KEYS = ['direct_answer', 'proactive_insight', 'suggestion']
+    for key in KEYS:
+        # Match:  "key"  :  something not starting with " ' { [ number or true/false/null
+        # and quote it up to the next comma+newline or closing brace
+        pattern = _re.compile(
+            r'("?' + key + r'"?\s*:\s*)([^"\'\[{{\d\n][^\n}]*?)(\s*(?:,\s*\n|\n\s*"|\n\s*}|\s*}))',
+            _re.DOTALL
+        )
+        def _quote_val(m):
+            # If already quoted, skip
+            val = m.group(2).strip().rstrip(',')
+            return m.group(1) + '"' + val.replace('"', '\\"') + '"' + m.group(3)
+        text = pattern.sub(_quote_val, text)
+    return text
+
 def _sanitize_llm_output(text: str) -> str:
     import re as _re
+    text = text.strip()
     if '{' in text and '}' in text:
-        return text.strip()
-    text = _re.sub('[=]{3,}[^=\\n]*[=]{3,}', '', text)
+        # Try to repair unquoted string values before returning
+        try:
+            text = _fix_json_values(text)
+        except Exception:
+            pass
+        return text
+    text = _re.sub('[=]{3,}[^=\n]*[=]{3,}', '', text)
     text = _re.sub('RULE \\d+\\s*\\([^)]*\\)[^.]*\\.', '', text)
     text = _re.sub('RULE \\d+:', '', text)
     text = _re.sub('CONTEXT:\\s*', '', text, flags=_re.IGNORECASE)

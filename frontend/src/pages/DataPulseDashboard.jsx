@@ -565,27 +565,71 @@ const ChatBubble = memo(({ m, PlotComponent, result, stopPageZoomOnCtrlWheel, on
           let cleanText = m.text;
           let parsedJson = null;
           try {
+            // ── Step 1: Strip markdown code fences ──────────────────────────
             let maybeJson = cleanText.replace(/```json/g, '').replace(/```/g, '').trim();
-            // Try to parse the full JSON first
-            if (maybeJson.startsWith('{')) {
-              if (maybeJson.endsWith('}')) {
-                try { parsedJson = JSON.parse(maybeJson); } catch (_) { /* try repair below */ }
-              }
-              // If JSON is truncated (no closing }), try to repair it so we don't show raw JSON
-              if (!parsedJson) {
-                // Extract direct_answer at minimum
-                const daMatch = maybeJson.match(/"direct_answer"\s*:\s*"((?:[^"\\]|\\.)*?)"/);
-                const piMatch = maybeJson.match(/"proactive_insight"\s*:\s*"((?:[^"\\]|\\.)*?)"/);
-                const confMatch = maybeJson.match(/"confidence"\s*:\s*(\d+)/);
-                const suggMatch = maybeJson.match(/"suggestion"\s*:\s*"((?:[^"\\]|\\.)*?)"/);
-                if (daMatch) {
-                  parsedJson = {
-                    direct_answer: daMatch[1],
-                    proactive_insight: piMatch ? piMatch[1] : undefined,
-                    confidence: confMatch ? parseInt(confMatch[1]) : undefined,
-                    suggestion: suggMatch ? suggMatch[1] : undefined,
-                  };
+
+            // ── Step 2: Attempt standard JSON.parse on the whole block ───────
+            // Isolate the outermost { … } so that any surrounding prose is ignored
+            const firstBrace = maybeJson.indexOf('{');
+            const lastBrace  = maybeJson.lastIndexOf('}');
+            if (firstBrace !== -1 && lastBrace > firstBrace) {
+              const jsonPart = maybeJson.substring(firstBrace, lastBrace + 1);
+              try { parsedJson = JSON.parse(jsonPart); } catch (_) { /* fall through */ }
+            }
+
+            // ── Step 3: Robust line-by-line key:value extraction ─────────────
+            // Handles unquoted values, single-quoted values, trailing commas,
+            // multiline values, and any other LLM formatting quirks.
+            if (!parsedJson) {
+              const KNOWN_KEYS = ['direct_answer', 'proactive_insight', 'confidence', 'suggestion'];
+
+              // Build a map of key → raw value string by scanning lines
+              const extracted = {};
+              let currentKey = null;
+              let currentLines = [];
+
+              const flushCurrent = () => {
+                if (!currentKey) return;
+                let val = currentLines.join(' ').trim();
+                // Strip trailing comma
+                val = val.replace(/,\s*$/, '').trim();
+                // Strip surrounding quotes (double or single)
+                if ((val.startsWith('"') && val.endsWith('"')) ||
+                    (val.startsWith("'") && val.endsWith("'"))) {
+                  val = val.slice(1, -1).trim();
                 }
+                extracted[currentKey] = val;
+                currentKey = null;
+                currentLines = [];
+              };
+
+              const lines = maybeJson.split('\n');
+              for (const rawLine of lines) {
+                const line = rawLine.trim();
+                if (!line || line === '{' || line === '}') { flushCurrent(); continue; }
+
+                // Try to match   "key"  :  value   (key may or may not be quoted)
+                const keyMatch = line.match(/^["']?([\w_]+)["']?\s*:\s*(.*)/);
+                if (keyMatch && KNOWN_KEYS.includes(keyMatch[1])) {
+                  flushCurrent();              // save previous key
+                  currentKey = keyMatch[1];
+                  currentLines = [keyMatch[2].trim()];
+                } else if (currentKey) {
+                  // Continuation of a multiline value
+                  currentLines.push(line);
+                }
+              }
+              flushCurrent(); // flush last key
+
+              if (extracted.direct_answer) {
+                const rawConf = extracted.confidence || '';
+                const confNum = parseInt(rawConf.replace(/[^\d]/g, ''), 10);
+                parsedJson = {
+                  direct_answer:    extracted.direct_answer,
+                  proactive_insight: extracted.proactive_insight || '',
+                  confidence:        Number.isFinite(confNum) && confNum > 0 ? confNum : undefined,
+                  suggestion:        extracted.suggestion || undefined,
+                };
               }
             }
           } catch (e) {

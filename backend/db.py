@@ -69,7 +69,7 @@ def _strip_url_params(url: str) -> str:
     return urlunparse(parsed._replace(query=new_query))
 DATABASE_URL = _strip_url_params(DATABASE_URL)
 _db_ssl_mode = os.getenv('DB_SSL', 'false').lower()
-_connect_args: dict = {'statement_cache_size': 0, 'timeout': 5}
+_connect_args: dict = {'statement_cache_size': 0, 'timeout': 15}
 if _db_ssl_mode == 'require':
     _connect_args['ssl'] = 'require'
 elif _db_ssl_mode == 'true':
@@ -77,7 +77,7 @@ elif _db_ssl_mode == 'true':
     _ssl_ctx.check_hostname = False
     _ssl_ctx.verify_mode = ssl.CERT_NONE
     _connect_args['ssl'] = _ssl_ctx
-engine = create_async_engine(DATABASE_URL, echo=os.getenv('APP_ENV', 'production') == 'development', pool_pre_ping=True, pool_size=3, max_overflow=5, pool_recycle=300, pool_timeout=5, connect_args=_connect_args)
+engine = create_async_engine(DATABASE_URL, echo=os.getenv('APP_ENV', 'production') == 'development', pool_pre_ping=True, pool_size=3, max_overflow=5, pool_recycle=300, pool_timeout=15, connect_args=_connect_args)
 AsyncSessionLocal = async_sessionmaker(bind=engine, class_=AsyncSession, expire_on_commit=False, autoflush=False, autocommit=False)
 
 class Base(DeclarativeBase):
