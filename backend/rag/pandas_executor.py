@@ -77,14 +77,52 @@ def _validate_ast(code: str) -> Optional[str]:
 
 async def classify_question(question: str) -> str:
     q = question.lower().strip()
-    _ANALYTICAL_SIGNALS = ('how many', 'how much', 'total', 'count of', 'number of', 'average', 'sum of', 'maximum', 'minimum', 'what is the', 'what are the', 'list all', 'show all', 'top ', 'bottom ', 'highest', 'lowest', 'most', 'least', 'sales report', 'report of', 'report for', 'bikes in', 'sold in', 'made in', 'manufactured in', 'built in', 'registered in', 'price of')
-    if any((sig in q for sig in _ANALYTICAL_SIGNALS)):
+    # Meta/structural questions about the dataset are best answered from pre-computed
+    # stats context (outliers, missing values, dtypes, distributions) — route to reasoning
+    # so the RAG + static context path is used instead of pandas code generation.
+    _META_SIGNALS = (
+        'outlier', 'which column', 'which columns', 'missing value', 'missing values',
+        'null value', 'null values', 'skewness', 'kurtosis', 'skewed', 'data type',
+        'dtype', 'data quality', 'completeness', 'duplicate', 'anomal',
+        'what columns', 'what column', 'column type', 'column types',
+        'which feature', 'which features', 'what features', 'what are the columns',
+        'list the columns', 'show the columns', 'how complete', 'how clean',
+        'highest skew', 'most skewed', 'most missing', 'most null',
+        'number of missing', 'number of null', 'number of outliers',
+        'count of outlier', 'count of missing', 'how many outlier', 'how many missing',
+        'how many null', 'how many duplicate', 'distribution of', 'spread of',
+        'variance of', 'standard deviation', 'interquartile', 'iqr',
+    )
+    if any(sig in q for sig in _META_SIGNALS):
+        return 'reasoning'
+    _ANALYTICAL_SIGNALS = (
+        'how many', 'how much', 'total', 'count of', 'number of', 'average',
+        'sum of', 'maximum', 'minimum', 'what is the', 'what are the',
+        'list all', 'show all', 'top ', 'bottom ', 'highest', 'lowest',
+        'most', 'least', 'sales report', 'report of', 'report for',
+        'bikes in', 'sold in', 'made in', 'manufactured in', 'built in',
+        'registered in', 'price of', 'find all', 'filter by', 'which row',
+        'which rows', 'show me all', 'give me all',
+    )
+    if any(sig in q for sig in _ANALYTICAL_SIGNALS):
         return 'analytical'
-    _REASONING_SIGNALS = ('why', 'explain', 'what does', 'what do you think', 'compare', 'vs', 'versus', 'relationship between', 'correlat', 'suggest', 'recommend', 'insight', 'what should', 'what can we', 'interpret')
-    if any((sig in q for sig in _REASONING_SIGNALS)):
+    _REASONING_SIGNALS = (
+        'why', 'explain', 'what does', 'what do you think', 'compare',
+        'vs', 'versus', 'relationship between', 'correlat', 'suggest',
+        'recommend', 'insight', 'what should', 'what can we', 'interpret',
+        'trend', 'pattern', 'analysis', 'summary', 'overview',
+    )
+    if any(sig in q for sig in _REASONING_SIGNALS):
         return 'reasoning'
     try:
-        prompt = f'Classify this data question into ONE category:\n"analytical" — needs exact numbers: counts, sums, averages, filters, specific values, lookups, reports\n"reasoning" — needs interpretation: trends, comparisons, explanations, suggestions, why questions\n\nQuestion: "{question}"\n\nReply with ONLY one word: analytical or reasoning'
+        prompt = (
+            'Classify this data question into ONE category:\n'
+            '"analytical" — needs exact numbers computed from the raw data: counts, sums, averages, filters, specific row lookups, reports\n'
+            '"reasoning" — needs interpretation OR is a structural/meta question about the dataset: '
+            'outliers, missing values, data types, skewness, correlations, trends, explanations, suggestions\n\n'
+            f'Question: "{question}"\n\n'
+            'Reply with ONLY one word: analytical or reasoning'
+        )
         result = await call_groq_with_fallback(
             messages=[{'role': 'user', 'content': prompt}],
             primary_model='llama-3.1-8b-instant',
@@ -101,7 +139,36 @@ async def classify_question(question: str) -> str:
     return 'analytical'
 
 def _build_codegen_prompt(question: str, columns: list[str], dtypes: dict[str, str], sample_values: dict[str, list]) -> str:
-    return f'You are a pandas expert. Write ONLY executable Python/pandas code.\n\nDATASET INFO:\n- DataFrame is already loaded as `df`\n- Columns: {columns}\n- Dtypes: {json.dumps(dtypes, default=str)}\n- Sample values per column: {json.dumps(sample_values, default=str)}\n\nQUESTION: "{question}"\n\nRULES:\n1. Store the final answer in a variable called `result`\n2. Use EXACT column names from the list above (case-sensitive)\n3. Do NOT import anything — `pd` and `np` are already available\n4. `result` must be a scalar, dict, Series, or small DataFrame\n5. For counts: use .shape[0] or .value_counts() or .groupby().size()\n6. For filters: match dtypes exactly. If a year column is int64, compare with int not string\n7. Always .head(20) on large results to prevent memory issues\n8. If the question asks about a specific entity (brand, model, state), FILTER for it\n9. For "sales report" or "report of X": compute count, average price, top models/states\n10. Never use print() — just assign to `result`\n11. If the question asks about "sales", "volume", "count", or "sold" by year, prefer grouping/filtering by "Year of Manufacture" (or similar manufacture year column) rather than "Registration Year".\n\nReturn ONLY the code. No markdown fences. No explanation.'
+    return (
+        f'You are a pandas expert. Write ONLY executable Python/pandas code.\n\n'
+        f'DATASET INFO:\n'
+        f'- DataFrame is already loaded as `df`\n'
+        f'- Columns: {columns}\n'
+        f'- Dtypes: {json.dumps(dtypes, default=str)}\n'
+        f'- Sample values per column: {json.dumps(sample_values, default=str)}\n\n'
+        f'QUESTION: "{question}"\n\n'
+        f'RULES:\n'
+        f'1. Store the final answer in a variable called `result`\n'
+        f'2. Use EXACT column names from the list above (case-sensitive)\n'
+        f'3. Do NOT import anything — `pd` and `np` are already available\n'
+        f'4. `result` must be a scalar, dict, Series, or small DataFrame\n'
+        f'5. For counts: use .shape[0] or .value_counts() or .groupby().size()\n'
+        f'6. For filters: match dtypes exactly. If a year column is int64, compare with int not string\n'
+        f'7. Always .head(20) on large results to prevent memory issues\n'
+        f'8. If the question asks about a specific entity (brand, model, state), FILTER for it\n'
+        f'9. For "sales report" or "report of X": compute count, average price, top models/states\n'
+        f'10. Never use print() — just assign to `result`\n'
+        f'11. If the question asks about "sales", "volume", "count", or "sold" by year, prefer '
+        f'grouping/filtering by "Year of Manufacture" (or similar manufacture year column) rather than "Registration Year".\n'
+        f'12. For outlier detection: use IQR method — '
+        f'Q1=df[col].quantile(0.25), Q3=df[col].quantile(0.75), IQR=Q3-Q1, '
+        f'outliers = df[(df[col] < Q1-1.5*IQR) | (df[col] > Q3+1.5*IQR)]\n'
+        f'13. For missing value counts: use df.isnull().sum() or df[col].isnull().sum()\n'
+        f'14. For data type summary: use df.dtypes.to_dict() or df.dtypes.astype(str).to_dict()\n'
+        f'15. Available builtins: int, float, str, len, sum, min, max, abs, round, '
+        f'list, dict, set, tuple, isinstance, bool, any, all, range, enumerate, zip, sorted\n\n'
+        f'Return ONLY the code. No markdown fences. No explanation.'
+    )
 
 async def generate_pandas_code(question: str, df: pd.DataFrame) -> str:
     columns = df.columns.tolist()

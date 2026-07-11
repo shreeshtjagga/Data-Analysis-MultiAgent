@@ -189,11 +189,44 @@ def _build_static_context(stats: dict, insights: dict) -> str:
         parts.append(f'  {headline}')
     outliers = stats.get('outliers') or {}
     if outliers:
-        outlier_items = [(col, info.get('count', 0)) for (col, info) in outliers.items() if info.get('count', 0) > 0]
+        outlier_items = [
+            (col, info) for (col, info) in outliers.items() if info.get('count', 0) > 0
+        ]
+        clean_items = [
+            col for (col, info) in outliers.items() if info.get('count', 0) == 0
+        ]
         if outlier_items:
+            parts.append('=== OUTLIER SUMMARY (IQR method, 1.5×IQR rule) ===')
+            for (col, info) in outlier_items[:12]:
+                cnt = info.get('count', 0)
+                lower = info.get('lower_fence') or info.get('lower_bound')
+                upper = info.get('upper_fence') or info.get('upper_bound')
+                pct = info.get('percentage') or info.get('pct')
+                detail = f'  {col}: {cnt} outlier(s) detected'
+                if lower is not None and upper is not None:
+                    try:
+                        detail += f' (IQR fence: [{float(lower):.3g}, {float(upper):.3g}])'
+                    except (TypeError, ValueError):
+                        pass
+                if pct is not None:
+                    try:
+                        detail += f' — {float(pct):.1f}% of rows'
+                    except (TypeError, ValueError):
+                        pass
+                parts.append(detail)
+            if clean_items:
+                parts.append(f'  Columns with NO outliers: {clean_items[:10]}')
+        else:
             parts.append('=== OUTLIER SUMMARY ===')
-            for (col, cnt) in outlier_items[:8]:
-                parts.append(f'  {col}: {cnt} outliers detected')
+            parts.append('  No outliers detected in any numeric column (IQR method).')
+    # Include missing value detail per column if available in data_quality
+    dq = stats.get('data_quality') or {}
+    missing_by_col = dq.get('missing_by_column') or dq.get('missing_per_column') or {}
+    if missing_by_col:
+        parts.append('=== MISSING VALUES PER COLUMN ===')
+        for (col, cnt) in list(missing_by_col.items())[:12]:
+            if cnt and int(cnt) > 0:
+                parts.append(f'  {col}: {cnt} missing')
     return '\n'.join(parts)
 
 def _assemble_context(chunks: list[dict], data_result: Optional[dict], static_ctx: str='') -> str:
