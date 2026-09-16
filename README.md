@@ -202,7 +202,3 @@ Data-Analysis-MultiAgent/
 ```
 
 ---
-
-## License
-
-Proprietary / Enterprise Local Deployment.
