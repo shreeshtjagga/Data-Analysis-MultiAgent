@@ -465,22 +465,22 @@ body {
   }
 }
 .pull-quote {
-  font-size: 22px;
-  line-height: 1.5;
-  color: #fff;
+  font-size: 17px;
+  line-height: 1.55;
+  color: var(--text-main);
   font-family: "Inter", sans-serif;
-  font-weight: 700;
-  border-left: 4px solid var(--primary-500);
-  padding-left: 20px;
-  margin-bottom: 24px;
+  font-weight: 600;
+  border-left: 3px solid var(--primary-500);
+  padding-left: 16px;
+  margin-bottom: 20px;
   background: linear-gradient(
     90deg,
-    rgba(99, 102, 241, 0.1) 0%,
+    rgba(99, 102, 241, 0.08) 0%,
     transparent 100%
   );
-  padding-top: 12px;
-  padding-bottom: 12px;
-  border-radius: 0 12px 12px 0;
+  padding-top: 10px;
+  padding-bottom: 10px;
+  border-radius: 0 8px 8px 0;
 }
 .tab-content-fade-in {
   animation: fade-in-up 0.4s ease-out forwards;
@@ -544,7 +544,6 @@ body {
   }
 }
 
-/* Topbar styling */
 .top-bar {
   background: rgba(6, 9, 18, 0.90);
   backdrop-filter: blur(12px);
@@ -559,7 +558,6 @@ body {
   z-index: 100;
 }
 
-/* Upload Page Grid */
 .upload-grid {
   display: grid;
   grid-template-columns: 1fr 1fr;
@@ -572,7 +570,6 @@ body {
   overflow: hidden;
 }
 
-/* KPI and Stats grids */
 .kpi-grid {
   display: grid;
   grid-template-columns: repeat(3, 1fr);
@@ -584,7 +581,6 @@ body {
   gap: 10px;
 }
 
-/* Dashboard responsive classes */
 .dashboard-grid {
   align-items: start;
   width: 100%;
@@ -1084,7 +1080,6 @@ body {
   margin-top: 20px;
 }
 
-/* ── Auth Page ─────────────────────────────────────────────────────────── */
 .auth-page {
   min-height: 100vh;
   display: flex;
@@ -1315,7 +1310,6 @@ body {
 }
 .auth-link-btn:hover { opacity: 0.75; }
 
-/* History Delete Button */
 .history-delete-btn {
   display: inline-flex;
   align-items: center;
@@ -1346,9 +1340,6 @@ body {
   cursor: not-allowed;
 }
 
-/* =========================================
-   Mobile Responsive Adjustments
-   ========================================= */
 @media (max-width: 900px) {
   .grid-12 {
     grid-template-columns: 1fr;
@@ -1367,17 +1358,17 @@ body {
     flex-direction: column;
   }
   
-  /* Make KPI Cards stack or wrap */
+  
   .kpi-grid {
     grid-template-columns: 1fr !important;
   }
   
-  /* Data Info 2-column grid to 1-column */
+  
   .stats-grid {
     grid-template-columns: 1fr !important;
   }
   
-  /* Modal responsive constraints */
+  
   .auth-modal-container, 
   .history-modal-container,
   .export-modal-container,
@@ -1387,12 +1378,12 @@ body {
     padding: 24px !important;
   }
   
-  /* Hide text on small primary buttons if necessary or let them shrink */
+  
   .btn-primary {
     padding: 0 16px;
   }
   
-  /* Make tabs scroll horizontally on mobile */
+  
   .tabs-nav {
     flex-wrap: nowrap;
     overflow-x: auto;
@@ -1409,13 +1400,13 @@ body {
     border-radius: 4px;
   }
   
-  /* Make sure the chat input flex doesn't overflow */
+  
   .chat-input-row {
     flex-direction: row;
     width: 100%;
   }
 
-  /* Release body/container scroll locks on mobile */
+  
   body {
     overflow: auto !important;
     overflow-y: auto !important;
@@ -1430,7 +1421,7 @@ body {
     overflow: visible !important;
   }
   
-  /* Topbar responsive adjustments */
+  
   .top-bar {
     padding: 12px 16px !important;
     flex-wrap: wrap !important;
@@ -1447,7 +1438,7 @@ body {
     font-size: 11px !important;
   }
 
-  /* Upload grid mobile stacking */
+  
   .upload-grid {
     grid-template-columns: 1fr !important;
     height: auto !important;
@@ -1456,16 +1447,16 @@ body {
     gap: 32px !important;
   }
   
-  /* Hologram canvas scaling */
+  
   .ai-hologram-layer canvas {
     max-width: 100% !important;
     height: auto !important;
   }
   
-  /* Force charts to span full width on mobile */
+  
   .chart-flip-wrapper {
     grid-column: 1 / -1 !important;
     width: 100% !important;
     max-width: 100% !important;
   }
-}
+}

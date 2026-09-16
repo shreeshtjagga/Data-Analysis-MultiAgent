@@ -22,8 +22,8 @@ export default defineConfig({
     assetsInlineLimit: 4096,
     cssCodeSplit: true,
     minify: "esbuild",
-    // Let Vite handle chunking automatically — manual chunks were causing
-    // React to be loaded from two different bundles, crashing the app.
+    
+    
     chunkSizeWarningLimit: 12000,
   },
 });

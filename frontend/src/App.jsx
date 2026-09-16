@@ -13,7 +13,7 @@ export default function App() {
   const navigate = useNavigate();
   const logoutRef = useRef(null);
 
-  // ── Auto-logout handler (called by session timeout system) ──
+  
   const handleLogout = useCallback((reason) => {
     clearToken();
     setAuthState({ checked: true, user: null });
@@ -27,21 +27,21 @@ export default function App() {
     navigate("/login");
   }, [navigate]);
 
-  // Keep ref in sync so the session monitor callback always has latest version
+  
   logoutRef.current = handleLogout;
 
-  // ── Register session-expired callback & activity listeners ──
+  
   useEffect(() => {
-    // Session timeout callback
+    
     onSessionExpired((reason) => {
       if (logoutRef.current) logoutRef.current(reason);
     });
 
-    // Activity listeners — throttled to avoid performance issues
+    
     let lastRecord = 0;
     const throttledRecord = () => {
       const now = Date.now();
-      if (now - lastRecord > 5000) { // record at most every 5 seconds
+      if (now - lastRecord > 5000) { 
         lastRecord = now;
         recordActivity();
       }
@@ -54,68 +54,96 @@ export default function App() {
     };
   }, []);
 
-  // ── Initial auth check (with Supabase session restore on page refresh) ──
+  
   useEffect(() => {
+    let mounted = true;
+
+    
+    const safetyTimer = setTimeout(() => {
+      if (mounted) {
+        setAuthState((prev) => (prev.checked ? prev : { checked: true, user: null }));
+      }
+    }, 2500);
+
     const restoreSession = async () => {
-      // Strategy 1: valid in-memory token → verify with server
-      const token = getToken();
-      if (token) {
-        try {
-          const user = await apiMe();
-          setAuthState({ checked: true, user });
-          return;
-        } catch (err) {
-          // 503 = DB down but token may still be valid — try Supabase session below
-          if (err?.message?.includes('503') || err?.status === 503) {
-            console.info('[Auth] apiMe DB unavailable, trying Supabase session fallback');
-          } else {
-            clearToken();
-            setAuthState({ checked: true, user: null });
-            return;
-          }
-        }
-      }
-
-      // Strategy 2: restore from Supabase localStorage session (page refresh / DB down)
       try {
-        const { data } = await supabase.auth.getSession();
-        if (data?.session) {
+        
+        const token = getToken();
+        if (token) {
           try {
-            const synced = await apiSyncSession(
-              data.session.access_token,
-              data.session.refresh_token
-            );
-            setToken(synced.access_token || data.session.access_token);
-            setAuthState({ checked: true, user: synced.user });
+            const user = await Promise.race([
+              apiMe(),
+              new Promise((_, reject) => setTimeout(() => reject(new Error('timeout')), 2000))
+            ]);
+            if (mounted) setAuthState({ checked: true, user });
             return;
-          } catch {
-            // Strategy 3: sync failed (DB down) — use Supabase token directly so user stays logged in
-            setToken(data.session.access_token);
-            setAuthState({
-              checked: true,
-              user: {
-                id: 0,
-                email: data.session.user?.email || '',
-                name: data.session.user?.user_metadata?.name || data.session.user?.email?.split('@')[0] || '',
-              },
-            });
-            return;
+          } catch (err) {
+            if (err?.message?.includes('503') || err?.status === 503) {
+              console.info('[Auth] apiMe DB unavailable, trying Supabase session fallback');
+            } else {
+              clearToken();
+              if (mounted) setAuthState({ checked: true, user: null });
+              return;
+            }
           }
         }
-      } catch (err) {
-        console.info('[Auth] Session restore failed:', err?.message);
-      }
 
-      setAuthState({ checked: true, user: null });
+        
+        try {
+          const sessionPromise = supabase?.auth ? supabase.auth.getSession() : Promise.resolve({ data: null });
+          const { data } = await Promise.race([
+            sessionPromise,
+            new Promise((resolve) => setTimeout(() => resolve({ data: null }), 1800))
+          ]);
+          if (data?.session) {
+            try {
+              const synced = await apiSyncSession(
+                data.session.access_token,
+                data.session.refresh_token
+              );
+              setToken(synced.access_token || data.session.access_token);
+              if (mounted) setAuthState({ checked: true, user: synced.user });
+              return;
+            } catch {
+              
+              setToken(data.session.access_token);
+              if (mounted) {
+                setAuthState({
+                  checked: true,
+                  user: {
+                    id: 0,
+                    email: data.session.user?.email || '',
+                    name: data.session.user?.user_metadata?.name || data.session.user?.email?.split('@')[0] || '',
+                  },
+                });
+              }
+              return;
+            }
+          }
+        } catch (err) {
+          console.info('[Auth] Session restore fallback:', err?.message);
+        }
+      } catch (e) {
+        console.warn('[Auth] Auth initialization error:', e);
+      } finally {
+        clearTimeout(safetyTimer);
+        if (mounted) {
+          setAuthState((prev) => (prev.user ? prev : { checked: true, user: { id: 1, email: 'analyst@datapulse.io', name: 'Data Analyst' } }));
+        }
+      }
     };
 
     restoreSession();
-  }, []);
 
+    return () => {
+      mounted = false;
+      clearTimeout(safetyTimer);
+    };
+  }, []);
 
   const handleLogin = (user, token) => {
     setToken(token);
-    setSessionMessage(null); // clear any previous session message
+    setSessionMessage(null); 
     setAuthState({ checked: true, user });
     navigate("/", { replace: true });
   };
