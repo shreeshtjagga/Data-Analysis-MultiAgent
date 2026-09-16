@@ -4,18 +4,18 @@ An enterprise-grade, multi-agent AI data intelligence platform that ingests raw 
 
 ---
 
-## 💡 Overview & Problem Solved
+## Overview & Problem Solved
 
 **DataPulse** turns raw tabular data (`.csv`, `.xlsx`) into actionable intelligence in seconds using a multi-agent AI pipeline.
 
-- ⏱️ **Eliminates the Analyst Bottleneck:** Replaces hours of manual Python/SQL querying and Excel pivot-tables with instant automated profiling.
-- 💬 **Replaces Rigid Dashboards:** Allows business users to chat directly with their dataset in natural language to answer ad-hoc questions on the fly.
-- 🎯 **Zero-Hallucination Math:** Decouples AI reasoning from mathematical computations — all calculations are executed deterministically on the dataset for 100% numerical accuracy.
-- 🔒 **Privacy-First & Self-Hostable:** Can run completely offline and locally (`USE_LOCAL_DB=true`) so sensitive company data never leaves your environment.
+- **Eliminates the Analyst Bottleneck:** Replaces hours of manual Python/SQL querying and Excel pivot-tables with instant automated profiling.
+- **Replaces Rigid Dashboards:** Allows business users to chat directly with their dataset in natural language to answer ad-hoc questions on the fly.
+- **Zero-Hallucination Math:** Decouples AI reasoning from mathematical computations — all calculations are executed deterministically on the dataset for 100% numerical accuracy.
+- **Privacy-First & Self-Hostable:** Can run completely offline and locally (`USE_LOCAL_DB=true`) so sensitive company data never leaves your environment.
 
 ---
 
-## ⚡ Architecture & How It Works
+## Architecture & How It Works
 
 DataPulse orchestrates a modular pipeline of specialized AI agents to process, analyze, and visualize data in seconds:
 
@@ -42,7 +42,7 @@ DataPulse orchestrates a modular pipeline of specialized AI agents to process, a
 
 ---
 
-## ✨ Key Features
+## Key Features
 
 - **Automated Instant Profiling:** Upload datasets to generate full reports, key KPIs, and distribution metrics automatically.
 - **Natural Language Data Chat:** Chat with your data to run ad-hoc calculations, filter rows, aggregate values, and get answers in plain English.
@@ -53,7 +53,7 @@ DataPulse orchestrates a modular pipeline of specialized AI agents to process, a
 
 ---
 
-## ⚙️ Environment Configuration
+## Environment Configuration
 
 DataPulse uses environment variables to configure authentication, databases, and AI models.
 
@@ -102,12 +102,12 @@ VITE_SUPABASE_ANON_KEY=your_supabase_anon_key
 VITE_API_BASE=/api
 ```
 
-> 🔒 **Enterprise / Local Offline Setup:**  
+> **Enterprise / Local Offline Setup:**  
 > To run completely offline or on a local network without cloud services, set `USE_LOCAL_DB=true` in `.env`. The backend will automatically use local SQLite storage and mock authentication.
 
 ---
 
-## 🚀 Quickstart (Running Without Scripts)
+## Quickstart (Running Without Scripts)
 
 ### 1. Prerequisites
 - **Python:** 3.11+ ([python.org](https://www.python.org/downloads/))
@@ -157,7 +157,7 @@ npm run dev
 
 ---
 
-## 📁 Repository Structure
+## Repository Structure
 
 ```
 Data-Analysis-MultiAgent/
@@ -203,6 +203,6 @@ Data-Analysis-MultiAgent/
 
 ---
 
-## 🛡️ License
+## License
 
 Proprietary / Enterprise Local Deployment.
