@@ -1,6 +1,6 @@
 # DataPulse — Multi-Agent AI Data Analysis Platform
 
-An enterprise-grade, multi-agent AI data intelligence platform that ingests raw tabular datasets (CSV/XLSX) and automatically produces deep statistical analyses, interactive visualizations, conversational natural-language querying, and executive AI insights.
+A multi-agent AI data intelligence platform that ingests raw tabular datasets (CSV/XLSX) and automatically produces deep statistical analyses, interactive visualizations, conversational natural-language querying, and executive AI insights.
 
 ---
 
@@ -9,9 +9,9 @@ An enterprise-grade, multi-agent AI data intelligence platform that ingests raw 
 **DataPulse** turns raw tabular data (`.csv`, `.xlsx`) into actionable intelligence in seconds using a multi-agent AI pipeline.
 
 - **Eliminates the Analyst Bottleneck:** Replaces hours of manual Python/SQL querying and Excel pivot-tables with instant automated profiling.
-- **Replaces Rigid Dashboards:** Allows business users to chat directly with their dataset in natural language to answer ad-hoc questions on the fly.
+- **Replaces Rigid Dashboards:** Allows users to chat directly with their dataset in natural language to answer ad-hoc questions on the fly.
 - **Zero-Hallucination Math:** Decouples AI reasoning from mathematical computations — all calculations are executed deterministically on the dataset for 100% numerical accuracy.
-- **Privacy-First & Self-Hostable:** Can run completely offline and locally (`USE_LOCAL_DB=true`) so sensitive company data never leaves your environment.
+- **Privacy-First & Self-Hostable:** Can run completely offline and locally (`USE_LOCAL_DB=true`) so sensitive data never leaves your environment.
 
 ---
 
@@ -47,7 +47,7 @@ DataPulse orchestrates a modular pipeline of specialized AI agents to process, a
 - **Automated Instant Profiling:** Upload datasets to generate full reports, key KPIs, and distribution metrics automatically.
 - **Natural Language Data Chat:** Chat with your data to run ad-hoc calculations, filter rows, aggregate values, and get answers in plain English.
 - **Interactive Visualizations:** Zoomable, filterable Plotly charts with auto-selected visual dimensions.
-- **Enterprise-Ready Security & Auth:** Supabase Auth with Google OAuth & Email/Password, JWT validation, and session inactivity monitors.
+- **Secure Authentication & Sessions:** Supabase Auth with Google OAuth & Email/Password, JWT validation, and session inactivity monitors.
 - **Flexible Data Tier:** Works with external managed PostgreSQL (Supabase / AWS RDS / Neon) or isolated local fallback mode.
 - **High-Performance Caching:** Upstash / Redis query caching with graceful in-memory and Parquet storage fallbacks.
 
@@ -102,7 +102,7 @@ VITE_SUPABASE_ANON_KEY=your_supabase_anon_key
 VITE_API_BASE=/api
 ```
 
-> **Enterprise / Local Offline Setup:**  
+> **Local / Offline Setup:**  
 > To run completely offline or on a local network without cloud services, set `USE_LOCAL_DB=true` in `.env`. The backend will automatically use local SQLite storage and mock authentication.
 
 ---
@@ -200,5 +200,3 @@ Data-Analysis-MultiAgent/
 ├── sample_sales_data.csv     # Sample dataset for testing
 └── README.md                 # Project documentation
 ```
-
----
