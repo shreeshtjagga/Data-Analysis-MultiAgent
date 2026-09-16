@@ -25,11 +25,11 @@ from .llm_client import call_groq_with_fallback
 
 logger = logging.getLogger(__name__)
 
-SYNTHESIS_MODEL = os.getenv('GROQ_SYNTHESIS_MODEL', 'llama-3.3-70b-versatile')
+SYNTHESIS_MODEL = os.getenv('GROQ_SYNTHESIS_MODEL', os.getenv('GROQ_MODEL', 'qwen/qwen3.8-27b'))
 
-FALLBACK_MODEL = os.getenv('GROQ_FALLBACK_MODEL', 'llama-3.1-8b-instant')
+FALLBACK_MODEL = os.getenv('GROQ_FALLBACK_MODEL', os.getenv('GROQ_MODEL', 'qwen/qwen3.8-27b'))
 
-INTENT_MODEL = os.getenv('GROQ_INTENT_MODEL', 'llama-3.1-8b-instant')
+INTENT_MODEL = os.getenv('GROQ_INTENT_MODEL', os.getenv('GROQ_MODEL', 'qwen/qwen3.8-27b'))
 
 _MAX_CONTEXT_CHARS = 12000
 
@@ -50,28 +50,14 @@ def _data_system_prompt(file_name: str, chart_keys: list[str]) -> str:
         'You talk like a real analyst - confident, precise, and direct.\n\n',
 
         '==== ANSWER FORMAT (MANDATORY) ====\n',
-
         'Structure EVERY answer exactly like this in JSON format:\n\n',
-
         '{\n',
-
-        '  "direct_answer": "The key number or fact in one clear sentence.",\n',
-
-        '  "proactive_insight": "Interestingly, [a fact FROM THE CONTEXT OR PANDAS RESULT that the user did not ask about but is noteworthy]",\n',
-
-        '  "confidence": 98,\n',
-
-        '  "suggestion": "Should we look at the trend over time?"\n',
-
+        '  "direct_answer": "The key number, ranking, or metric in one or two clear, authoritative sentences.",\n',
+        '  "proactive_insight": "Interestingly, [a relevant noteworthy fact from the real data or empty string if none]"\n',
         '}\n\n',
-
         'FORMAT RULES:\n',
-
-        '- Output MUST be valid JSON and nothing else.\n',
-
-        '- The `confidence` must be an integer 1-100 based on data completeness.\n',
-
-        '- When mentioning any number, metric, or percentage, wrap it in **bold**.\n',
+        '- Output MUST be valid JSON with ONLY "direct_answer" and "proactive_insight". Nothing else.\n',
+        '- When mentioning any number, metric, percentage, or entity name, wrap it in **bold**.\n',
 
         '- NEVER use LaTeX math notation. Write: r = 0.85, not $r$ or $R^2$. Write: R-squared = 85%, not $R^2 = 0.85$.\n',
 
@@ -545,73 +531,72 @@ def _extract_chart_facts(fig_data: Any, chart_key: str) -> str:
 
         return f"Could not read data from chart '{chart_key}'."
 
+def _clean_field_str(val: str) -> str:
+    if not val:
+        return ""
+    s = str(val).strip()
+    while (s.startswith('"') and s.endswith('"')) or (s.startswith("'") and s.endswith("'")):
+        s = s[1:-1].strip()
+    s = s.strip('"\' \t\n')
+    return s
+
 def _fix_json_values(text: str) -> str:
-
-    
-
     import re as _re
-
-    KEYS = ['direct_answer', 'proactive_insight', 'suggestion']
-
+    KEYS = ['direct_answer', 'proactive_insight']
     for key in KEYS:
-
         pattern = _re.compile(
-
             r'("?' + key + r'"?\s*:\s*)([^"\'\[{{\d\n][^\n}]*?)(\s*(?:,\s*\n|\n\s*"|\n\s*}|\s*}))',
-
             _re.DOTALL
-
         )
-
         def _quote_val(m):
-
             val = m.group(2).strip().rstrip(',')
-
             return m.group(1) + '"' + val.replace('"', '\\"') + '"' + m.group(3)
-
         text = pattern.sub(_quote_val, text)
-
     return text
 
 def _sanitize_llm_output(text: str) -> str:
-
     import re as _re
+    import json as _json
 
     text = text.strip()
-
     if '{' in text and '}' in text:
-
+        start = text.find('{')
+        end = text.rfind('}') + 1
+        json_sub = text[start:end]
         try:
-
-            text = _fix_json_values(text)
-
+            parsed = _json.loads(json_sub)
+            if isinstance(parsed, dict) and ('direct_answer' in parsed or 'answer' in parsed):
+                da = _clean_field_str(parsed.get('direct_answer') or parsed.get('answer') or '')
+                pi = _clean_field_str(parsed.get('proactive_insight') or parsed.get('insight') or '')
+                return _json.dumps({'direct_answer': da, 'proactive_insight': pi})
         except Exception:
-
             pass
 
-        return text
+        da_match = _re.search(r'"direct_answer"\s*:\s*"((?:[^"\\]|\\.)*)"', json_sub, _re.DOTALL)
+        pi_match = _re.search(r'"proactive_insight"\s*:\s*"((?:[^"\\]|\\.)*)"', json_sub, _re.DOTALL)
+        if da_match:
+            try:
+                da = _clean_field_str(da_match.group(1).encode().decode('unicode_escape', errors='replace'))
+            except Exception:
+                da = _clean_field_str(da_match.group(1))
+            try:
+                pi = _clean_field_str(pi_match.group(1).encode().decode('unicode_escape', errors='replace')) if pi_match else ""
+            except Exception:
+                pi = _clean_field_str(pi_match.group(1)) if pi_match else ""
+            return _json.dumps({'direct_answer': da, 'proactive_insight': pi})
 
-    text = _re.sub('[=]{3,}[^=\n]*[=]{3,}', '', text)
-
-    text = _re.sub('RULE \\d+\\s*\\([^)]*\\)[^.]*\\.', '', text)
-
-    text = _re.sub('RULE \\d+:', '', text)
-
-    text = _re.sub('CONTEXT:\\s*', '', text, flags=_re.IGNORECASE)
-
-    text = _re.sub('As an AI[^.]*\\.\\s*', '', text, flags=_re.IGNORECASE)
-
-    text = _re.sub('As a (language|AI|data)[^.]*\\.\\s*', '', text, flags=_re.IGNORECASE)
-
-    text = _re.sub('(?:GROUNDING CONTRACT|CHART DISPLAY RULES|MANDATORY)[^.]*\\.?', '', text, flags=_re.IGNORECASE)
-
-    text = _re.sub('\\[?(NUMERIC|CATEGORICAL|DATASET|CORRELATION|DATA QUALITY)\\s*\\w*\\s*\\w*\\]?', '', text)
-
-    text = _re.sub('\\n{3,}', '\n\n', text)
-
-    text = _re.sub('  +', ' ', text)
-
-    return text.strip()
+    text = _re.sub(r'[=]{3,}[^=\n]*[=]{3,}', '', text)
+    text = _re.sub(r'RULE \d+\s*\([^)]*\)[^.]*\.', '', text)
+    text = _re.sub(r'RULE \d+:', '', text)
+    text = _re.sub(r'CONTEXT:\s*', '', text, flags=_re.IGNORECASE)
+    text = _re.sub(r'As an AI[^.]*\.\s*', '', text, flags=_re.IGNORECASE)
+    text = _re.sub(r'As a (language|AI|data)[^.]*\.\s*', '', text, flags=_re.IGNORECASE)
+    text = _re.sub(r'(?:GROUNDING CONTRACT|CHART DISPLAY RULES|MANDATORY)[^.]*\.?', '', text, flags=_re.IGNORECASE)
+    text = _re.sub(r'\[?(NUMERIC|CATEGORICAL|DATASET|CORRELATION|DATA QUALITY)\s*\w*\s*\w*\]?', '', text)
+    text = _re.sub(r'\n{3,}', '\n\n', text)
+    text = _re.sub(r'  +', ' ', text)
+    clean_da = _clean_field_str(text)
+    return _json.dumps({'direct_answer': clean_da, 'proactive_insight': ''})
 
 def _build_trend_forecast_chart(df: pd.DataFrame, time_col: Optional[str], val_col: str, slope: float, intercept: float, n_future: int = 5) -> Optional[dict]:
 
@@ -748,24 +733,53 @@ _DATA_ABBREVIATIONS: dict[str, list[str]] = {
     'mrr': ['monthly recurring revenue', 'recurring', 'revenue'],
 
     'cac': ['customer acquisition cost'],
-
     'nps': ['net promoter score', 'promoter'],
-
     'qty': ['quantity', 'units', 'volume'],
-
     'pct': ['percentage', 'percent', 'rate', 'ratio'],
-
     'temp': ['temperature'],
-
     'dept': ['department', 'division'],
-
-    'amt': ['amount', 'total', 'sales'],
-
+    'amt': ['amount', 'total', 'sales', 'revenue'],
     'vol': ['volume'],
-
     'attr': ['attrition', 'churn', 'turnover', 'leaving', 'departure'],
-
+    'yr': ['year', 'date'],
+    'yrs': ['years', 'date'],
+    'price': ['cheap', 'cheaper', 'cheapest', 'priciest', 'expensive', 'cost', 'sale', 'listing', 'amount', 'rate', 'revenue', 'rent'],
+    'cost': ['cheap', 'cheaper', 'cheapest', 'priciest', 'expensive', 'price', 'sale', 'listing', 'amount', 'rate', 'revenue', 'rent'],
+    'sale': ['cheap', 'cheaper', 'cheapest', 'priciest', 'expensive', 'price', 'selling_price', 'sales', 'revenue', 'cost'],
+    'sales': ['cheap', 'cheaper', 'cheapest', 'priciest', 'expensive', 'price', 'selling_price', 'sale', 'revenue', 'cost'],
+    'rate': ['cheap', 'cheaper', 'cheapest', 'priciest', 'expensive', 'price', 'cost', 'percentage', 'ratio'],
+    'sqft': ['square', 'feet', 'area', 'size', 'dimension'],
+    'bp': ['blood', 'pressure', 'systolic', 'diastolic'],
+    'milage': ['mileage', 'kmpl', 'efficiency'],
+    'mileage': ['milage', 'kmpl', 'efficiency'],
+    'kmpl': ['mileage', 'efficiency'],
+    'brad': ['brand', 'company', 'make'],
 }
+
+_TYPO_MAP: dict[str, str] = {
+    'wat': 'what',
+    'wats': 'what is',
+    'hieghest': 'highest',
+    'higest': 'highest',
+    'cheeper': 'cheaper',
+    'checpest': 'cheapest',
+    'chepest': 'cheapest',
+    'wich': 'which',
+    'tel': 'tell',
+    'yr': 'year',
+    'yrs': 'years',
+    'saels': 'sales',
+    'milage': 'mileage',
+    'outliner': 'outlier',
+    'outliners': 'outliers',
+    'pls': 'please',
+    'plz': 'please',
+}
+
+def _normalize_query_typos(text: str) -> str:
+    words = re.sub(r'[^a-zA-Z0-9\s]', ' ', text).split()
+    normalized = [_TYPO_MAP.get(w.lower(), w) for w in words]
+    return ' '.join(normalized)
 
 def _clean_tokens(s: str) -> list[str]:
 
@@ -997,7 +1011,7 @@ def _generate_offline_answer(question: str, df: Optional[pd.DataFrame], stats: d
 
     
 
-    q = question.lower().strip()
+    q = _normalize_query_typos(question).lower().strip()
 
     num_cols = list((stats.get('numeric_columns') or {}).keys())
 
@@ -1035,7 +1049,7 @@ def _generate_offline_answer(question: str, df: Optional[pd.DataFrame], stats: d
 
         return ans, None
 
-    if any(w in q for w in ('outlier', 'outliers', 'anomaly', 'anomalies', 'extreme value', 'extreme values')):
+    if any(w in q for w in ('outlier', 'outliers', 'outliner', 'outliners', 'anomaly', 'anomalies', 'extreme value', 'extreme values')):
 
         outliers = stats.get('outliers') or {}
 
@@ -1355,7 +1369,7 @@ def _generate_offline_answer(question: str, df: Optional[pd.DataFrame], stats: d
 
                     v_str = str(val).lower()
 
-                    if len(v_str) >= 2 and re.search(r'\b' + re.escape(v_str) + r'\b', q):
+                    if len(v_str) >= 2 and (re.search(r'\b' + re.escape(v_str) + r'\b', q) or any(difflib.SequenceMatcher(None, w, v_str).ratio() >= 0.78 for w in q.split() if len(w) >= 3)):
 
                         matched_val = val
 
@@ -1363,9 +1377,16 @@ def _generate_offline_answer(question: str, df: Optional[pd.DataFrame], stats: d
 
                         break
 
-                if matched_val is not None:
-
-                    break
+        if matched_val is None:
+            year_match = re.search(r'\b(19\d\d|20\d\d)\b', q)
+            if year_match:
+                year_val = year_match.group(1)
+                for col in all_cols:
+                    if any(yk in col.lower() for yk in ('year', 'date', 'yr')):
+                        if df[col].astype(str).str.contains(year_val).any():
+                            matched_val = year_val
+                            matched_filter_col = col
+                            break
 
         if matched_val is not None and matched_filter_col is not None:
 
@@ -1373,7 +1394,21 @@ def _generate_offline_answer(question: str, df: Optional[pd.DataFrame], stats: d
 
             sub_count = len(sub_df)
 
-            matched_num = _find_best_column_match(num_cols, question, df) or (num_cols[0] if num_cols else None)
+            matched_num = _find_best_column_match(num_cols, q, df) or (num_cols[0] if num_cols else None)
+
+            is_count_only = any(w in q for w in ('how many', 'count of', 'number of', 'total entries', 'how much count')) and not any(w in q for w in ('average', 'avg', 'mean', 'sum', 'total price', 'max', 'min', 'milage', 'mileage'))
+
+            if is_count_only:
+
+                ans = json.dumps({
+
+                    'direct_answer': f"There are **{sub_count}** {matched_filter_col} records for **'{matched_val}'** ({sub_count/len(df)*100:.1f}% of all {len(df):,} total records).",
+
+                    'proactive_insight': f"Total dataset contains **{len(df):,}** observations across **{df[matched_filter_col].nunique()}** {matched_filter_col} categories."
+
+                })
+
+                return ans, None
 
             if matched_num and matched_num in sub_df.columns:
 
@@ -1423,47 +1458,58 @@ def _generate_offline_answer(question: str, df: Optional[pd.DataFrame], stats: d
 
                 return ans, None
 
-    matched_cat = _find_best_column_match(cat_cols, question, df)
+    matched_cat = _find_best_column_match(cat_cols, q, df)
+    matched_num = _find_best_column_match(num_cols, q, df)
 
-    matched_num = _find_best_column_match(num_cols, question, df)
+    if not matched_cat and any(yk in q for yk in ('year', 'yr', 'date', 'period')):
+        for c in (stats.get('datetime_columns') or stats.get('date_columns') or all_cols):
+            if any(yk in str(c).lower() for yk in ('year', 'date', 'yr')):
+                matched_cat = str(c)
+                break
 
-    if df is not None and matched_cat and matched_cat in df.columns and (any(w in q for w in ('by', 'breakdown', 'per', 'across', 'group', 'each', 'ranking', 'highest', 'top', 'compare')) or matched_num):
-
+    if df is not None and matched_cat and matched_cat in df.columns and (
+        any(w in q for w in ('by', 'breakdown', 'per', 'across', 'group', 'each', 'ranking', 'highest', 'top', 'compare', 'cheapest', 'cheaper', 'cheap', 'lowest', 'least', 'priciest', 'expensive', 'which', 'what')) or matched_num
+    ):
         target_num = matched_num or (num_cols[0] if num_cols else None)
-
+        if target_num == matched_cat:
+            remaining_nums = [c for c in num_cols if c != matched_cat]
+            if remaining_nums:
+                target_num = remaining_nums[0]
         if target_num and target_num in df.columns:
-
             try:
-
+                is_lowest = any(w in q for w in ('cheaper', 'cheapest', 'cheap', 'lowest', 'least', 'min', 'bottom', 'worst', 'affordable'))
                 is_sum = any(w in q for w in ('total', 'sum', 'volume', 'gross'))
-
                 agg_func = 'sum' if is_sum else 'mean'
-
-                grouped = df.groupby(matched_cat, observed=True)[target_num].agg(agg_func).dropna().sort_values(ascending=False)
-
+                grouped = df.groupby(matched_cat, observed=True)[target_num].agg(agg_func).dropna().sort_values(ascending=is_lowest)
                 if not grouped.empty:
-
                     top_name = grouped.index[0]
-
                     top_val = grouped.iloc[0]
-
                     items_formatted = [f"**{k}**: **{v:,.2f}**" for k, v in grouped.head(4).items()]
-
-                    func_label = 'Total' if is_sum else 'Average'
-
+                    func_label = 'Lowest / Most Affordable' if is_lowest else ('Total' if is_sum else 'Average')
+                    adj_label = 'cheapest / lowest' if is_lowest else 'highest / top'
                     ans = json.dumps({
-
-                        'direct_answer': f"{func_label} **{target_num}** by **{matched_cat}**: Top segment is **'{top_name}'** with **{top_val:,.2f}**.\nBreakdown: {'; '.join(items_formatted)}.",
-
-                        'proactive_insight': f"Across all **{len(grouped)}** {matched_cat} categories, **'{top_name}'** leads the ranking."
-
+                        'direct_answer': f"{func_label} **{target_num}** by **{matched_cat}**: **'{top_name}'** is {adj_label} at **{top_val:,.2f}**.\nBreakdown: {'; '.join(items_formatted)}.",
+                        'proactive_insight': f"Across all **{len(grouped)}** {matched_cat} categories, **'{top_name}'** ranks first for {adj_label} {target_num}."
                     })
-
                     return ans, None
-
             except Exception as grp_exc:
-
                 logger.debug("Groupby evaluation fallback: %s", grp_exc)
+
+    top_n_match = re.search(r'top\s*(\d+)', q)
+    if top_n_match and df is not None:
+        top_n_num = min(int(top_n_match.group(1)), len(df))
+        target_num = matched_num or (num_cols[0] if num_cols else None)
+        if target_num and target_num in df.columns:
+            is_lowest = any(w in q for w in ('cheapest', 'lowest', 'bottom', 'least', 'cheaper'))
+            s_sorted = df.sort_values(by=target_num, ascending=is_lowest).head(top_n_num)
+            desc_col = cat_cols[0] if cat_cols else (df.columns[0])
+            items = [f"**{row[desc_col]}**: **{row[target_num]:,.2f}**" for _, row in s_sorted.iterrows()]
+            order_label = "lowest / cheapest" if is_lowest else "highest / priciest"
+            ans = json.dumps({
+                'direct_answer': f"Top **{top_n_num}** {order_label} **{target_num}** entries:\n" + "\n".join([f"• {it}" for it in items]),
+                'proactive_insight': f"These top {top_n_num} records represent {s_sorted[target_num].sum()/max(df[target_num].sum(),1)*100:.1f}% of overall {target_num} volume."
+            })
+            return ans, None
 
     if any(w in q.split() for w in ('total', 'sum', 'volume', 'gross', 'aggregate')):
 
@@ -1661,7 +1707,7 @@ def _generate_offline_answer(question: str, df: Optional[pd.DataFrame], stats: d
 
 async def answer_question(question: str, file_hash: str, file_name: str, stats: dict, insights: dict, chart_keys: list[str], conversation_history: list[dict], groq_client, redis_client=None, df=None) -> dict:
 
-    from .pandas_executor import classify_question, generate_pandas_code, safe_execute, format_result, build_rich_context, is_challenge
+    from .pandas_executor import classify_question, generate_pandas_code, fix_pandas_code, safe_execute, format_result, build_rich_context, is_challenge
 
     from .data_agent import _load_df
 
@@ -1750,55 +1796,42 @@ async def answer_question(question: str, file_hash: str, file_name: str, stats: 
     if q_type == 'analytical' and df is not None and (not df.empty):
 
         try:
-
-            code = await generate_pandas_code(question=question, df=df)
-
+            code = await generate_pandas_code(question=question, df=df, conversation_history=conversation_history)
             logger.info('Generated pandas code:\n%s', code)
-
             exec_result = safe_execute(code, df)
+            if exec_result.get('error'):
+                logger.warning('Initial pandas code failed: %s. Running self-healing retry...', exec_result['error'])
+                try:
+                    fixed_code = await fix_pandas_code(question=question, df=df, failed_code=code, error_message=exec_result['error'])
+                    fixed_exec = safe_execute(fixed_code, df)
+                    if fixed_exec.get('error') is None:
+                        code = fixed_code
+                        exec_result = fixed_exec
+                        logger.info('Self-healing code fix succeeded!')
+                except Exception as fix_exc:
+                    logger.warning('Self-healing retry failed: %s', fix_exc)
 
-            if exec_result['error'] is None:
-
+            if exec_result.get('error') is None and exec_result.get('result') is not None:
                 formatted = format_result(exec_result['result'])
-
                 rich_ctx = build_rich_context(exec_result['result'], df, question)
-
                 messages = [{'role': 'system', 'content': _data_system_prompt(file_name, chart_keys)}, {'role': 'system', 'content': f'PANDAS RESULT (computed from the REAL dataset - trust these numbers 100%):\n{formatted}\n\nQUERY CODE RUN:\n{code}\n\nADDITIONAL CONTEXT:\n{json.dumps(rich_ctx, default=str)}\n\nDATASET OVERVIEW:\n{static_ctx[:12000]}'}]
-
                 _SAFE_ROLES = {'assistant', 'ai', 'user', 'human'}
-
                 for msg in (conversation_history or [])[-4:]:
-
                     raw_role = str(msg.get('role', '')).lower()
-
                     if raw_role not in _SAFE_ROLES:
-
                         continue
-
                     role = 'assistant' if raw_role in ('assistant', 'ai') else 'user'
-
                     messages.append({'role': role, 'content': str(msg.get('content', ''))[:800]})
-
                 messages.append({'role': 'user', 'content': question})
-
                 raw_ans = await call_groq_with_fallback(
-
                     messages=messages,
-
                     primary_model=SYNTHESIS_MODEL,
-
                     temperature=0.0,
-
-                    max_tokens=1200
-
+                    max_tokens=1000
                 )
-
                 answer = _sanitize_llm_output(raw_ans)
-
                 return {'answer': answer, 'data_queried': True, 'new_chart': forecast_chart}
-
         except Exception as exc:
-
             logger.warning('Analytical path failed, falling back to reasoning: %s', exc)
 
     col_types: dict[str, str] = {}
@@ -1820,14 +1853,32 @@ async def answer_question(question: str, file_hash: str, file_name: str, stats: 
         col_metadata[c] = {'type': 'categorical', 'unique_count': info.get('unique_values') or info.get('nunique'), 'top_values': list(top_vals.keys())[:5] if isinstance(top_vals, dict) else []}
 
     for c in stats.get('datetime_columns') or stats.get('date_columns') or []:
-
         col_name = c if isinstance(c, str) else str(c)
-
         if col_name not in col_types:
-
             col_types[col_name] = 'datetime'
-
             col_metadata[col_name] = {'type': 'datetime'}
+
+    if df is not None and not df.empty and (not col_types or len(col_types) == 0):
+        for c in df.select_dtypes(include='number').columns:
+            col_types[c] = 'numeric'
+            s = df[c].dropna()
+            col_metadata[c] = {
+                'type': 'numeric',
+                'min': float(s.min()) if not s.empty else None,
+                'max': float(s.max()) if not s.empty else None,
+                'mean': float(s.mean()) if not s.empty else None
+            }
+        for c in df.select_dtypes(include='object').columns:
+            col_types[c] = 'categorical'
+            vc = df[c].value_counts().head(5)
+            col_metadata[c] = {
+                'type': 'categorical',
+                'unique_count': int(df[c].nunique()),
+                'top_values': list(vc.index)
+            }
+        for c in df.select_dtypes(include=['datetime64', 'datetimetz']).columns:
+            col_types[c] = 'datetime'
+            col_metadata[c] = {'type': 'datetime'}
 
     data_result = None
 
