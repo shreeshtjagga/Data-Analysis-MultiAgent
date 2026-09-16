@@ -6,7 +6,7 @@ import ParticleBackground from "../components/ParticleBackground";
 
 export default function AuthCallback({ onLogin }) {
   const navigate = useNavigate();
-  const [status, setStatus] = useState("loading"); // "loading" | "error"
+  const [status, setStatus] = useState("loading"); 
   const [errorMsg, setErrorMsg] = useState("");
   const [isRecovery, setIsRecovery] = useState(false);
   const handledRef = useRef(false);
@@ -22,7 +22,7 @@ export default function AuthCallback({ onLogin }) {
 
       if (urlError) {
         const msg = urlErrorDesc || urlError;
-        // provider_email_needs_verification is a common non-fatal error
+        
         if (msg.toLowerCase().includes("email") && msg.toLowerCase().includes("verif")) {
           setErrorMsg("Please verify your email address first, then try signing in again.");
         } else {
@@ -53,7 +53,7 @@ export default function AuthCallback({ onLogin }) {
               onLogin(synced.user, synced.access_token);
               navigate("/", { replace: true });
             } catch {
-              // Sync failed but token is valid — log in with token anyway
+              
               onLogin({ email: data?.user?.email || "", id: 0 }, session.access_token);
               navigate("/", { replace: true });
             }
@@ -61,7 +61,7 @@ export default function AuthCallback({ onLogin }) {
           }
         }
 
-        // Fallback: check for existing session
+        
         const { data: sessionData, error: sessionError } = await supabase.auth.getSession();
         if (sessionError) throw sessionError;
 
@@ -85,7 +85,7 @@ export default function AuthCallback({ onLogin }) {
           return;
         }
 
-        // Listen for auth state change
+        
         const { data: listener } = supabase.auth.onAuthStateChange(async (event, newSession) => {
           if (event === "PASSWORD_RECOVERY") {
             listener.subscription.unsubscribe();
@@ -132,7 +132,7 @@ export default function AuthCallback({ onLogin }) {
       <ParticleBackground />
       <div style={{ position: "relative", zIndex: 1, textAlign: "center", width: "100%", maxWidth: "420px", padding: "0 24px" }}>
 
-        {/* Logo */}
+        {}
         <div style={{ color: "var(--primary-500)", fontSize: "40px", marginBottom: "12px", textShadow: "0 0 20px rgba(99,102,241,0.7)" }}>◈</div>
         <h2 style={{ fontFamily: "'Inter', sans-serif", fontSize: "24px", fontWeight: 700, color: "var(--text-main)", marginBottom: "8px" }}>
           DATA PULSE
@@ -140,7 +140,7 @@ export default function AuthCallback({ onLogin }) {
 
         {status === "loading" ? (
           <div style={{ marginTop: "32px" }}>
-            {/* Spinner */}
+            {}
             <div style={{ display: "flex", justifyContent: "center", marginBottom: "24px" }}>
               <div style={{
                 width: "48px", height: "48px",
@@ -157,7 +157,7 @@ export default function AuthCallback({ onLogin }) {
             <p className="caption" style={{ color: "var(--text-muted)" }}>
               {isRecovery ? "Preparing your password reset session" : "Securely connecting your account"}
             </p>
-            {/* Progress dots */}
+            {}
             <div style={{ display: "flex", justifyContent: "center", gap: "6px", marginTop: "24px" }}>
               {[0, 1, 2].map(i => (
                 <div key={i} style={{

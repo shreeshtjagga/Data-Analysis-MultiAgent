@@ -3,8 +3,6 @@ import { useLocation, useNavigate } from "react-router-dom";
 import { apiLogin, apiRegister, apiForgotPassword, supabase } from "../api.js";
 import ParticleBackground from "../components/ParticleBackground.jsx";
 
-// ── Shared sub-components ─────────────────────────────────────────────────────
-
 function Alert({ type, children }) {
   if (!children) return null;
   return <div className={`auth-alert ${type}`}>{children}</div>;
@@ -84,8 +82,6 @@ function GoogleButton({ loading, setError }) {
   );
 }
 
-// ── Forms ─────────────────────────────────────────────────────────────────────
-
 function LoginForm({ onLogin, onForgot }) {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -108,7 +104,7 @@ function LoginForm({ onLogin, onForgot }) {
 
   return (
     <form className="auth-form" autoComplete="off" onSubmit={(e) => { e.preventDefault(); submit(); }}>
-      {/* Honeypot fields */}
+      {}
       <input type="text" style={{ display: "none" }} tabIndex={-1} autoComplete="off" />
       <input type="password" style={{ display: "none" }} tabIndex={-1} autoComplete="off" />
 
@@ -183,7 +179,7 @@ function RegisterForm({ onLogin }) {
 
   return (
     <form className="auth-form" autoComplete="off" onSubmit={(e) => { e.preventDefault(); submit(); }}>
-      {/* Honeypot fields */}
+      {}
       <input type="text" style={{ display: "none" }} tabIndex={-1} autoComplete="off" />
       <input type="password" style={{ display: "none" }} tabIndex={-1} autoComplete="off" />
 
@@ -418,14 +414,14 @@ export default function Login({ onLogin, sessionMessage }) {
       <ParticleBackground />
 
       <div className="auth-card">
-        {/* Logo */}
+        {}
         <div className="auth-logo">
           <div className="auth-logo-icon">◈</div>
           <h1 className="auth-logo-title">DataPulse</h1>
           <p className="auth-logo-sub">Secure Analytics Portal</p>
         </div>
 
-        {/* Session warning */}
+        {}
         {sessionMessage && tab === "login" && (
           <div className="auth-alert warning" style={{ marginBottom: 20 }}>
             <span>⏱</span>
@@ -433,7 +429,7 @@ export default function Login({ onLogin, sessionMessage }) {
           </div>
         )}
 
-        {/* Tabs — only show on login / register */}
+        {}
         {showTabs && (
           <div className="auth-tabs">
             <button id="tab-login" className={`auth-tab ${tab === "login" ? "active" : ""}`} onClick={goToLogin}>
@@ -445,7 +441,7 @@ export default function Login({ onLogin, sessionMessage }) {
           </div>
         )}
 
-        {/* Form panels */}
+        {}
         {tab === "login"    && <LoginForm key="login" onLogin={onLogin} onForgot={goToForgot} />}
         {tab === "register" && <RegisterForm key="register" onLogin={onLogin} />}
         {tab === "forgot"   && <ForgotPasswordForm onBackToLogin={goToLogin} />}

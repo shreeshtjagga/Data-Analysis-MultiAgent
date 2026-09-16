@@ -8,15 +8,14 @@ export const supabase = createClient(supabaseUrl, supabaseAnonKey)
 
 const BASE = import.meta.env.VITE_API_BASE ?? "/api";
 
-
-const SESSION_TIMEOUT_MS = 60 * 60 * 1000;        // 1 hour — matches Supabase JWT default expiry
-const INACTIVITY_TIMEOUT_MS = 30 * 60 * 1000;     // 30 minutes of no activity → auto-logout
+const SESSION_TIMEOUT_MS = 60 * 60 * 1000;        
+const INACTIVITY_TIMEOUT_MS = 30 * 60 * 1000;     
 
 let accessToken = null;
-let _sessionSetAt = null;        // timestamp when token was set
-let _lastActivityAt = Date.now(); // timestamp of last user interaction
-let _onSessionExpired = null;    // callback set by App.jsx for auto-logout
-let _inactivityTimer = null;     // interval for checking inactivity
+let _sessionSetAt = null;        
+let _lastActivityAt = Date.now(); 
+let _onSessionExpired = null;    
+let _inactivityTimer = null;     
 
 export function onSessionExpired(callback) {
   _onSessionExpired = callback;
@@ -44,7 +43,7 @@ function _startInactivityMonitor() {
       if (_onSessionExpired) _onSessionExpired('inactivity');
       return;
     }
-  }, 15_000); // check every 15 seconds
+  }, 15_000); 
 }
 
 function _stopInactivityMonitor() {
