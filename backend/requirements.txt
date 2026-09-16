@@ -41,9 +41,6 @@ groq>=0.9.0
 # ─── Config ───────────────────────────────────────────────────────────────────
 python-dotenv>=1.0.0
 
-# ─── RAG ──────────────────────────────────────────────────────────────────────
-pinecone>=5.0.0            # serverless vector DB for RAG chunk retrieval
-
 # REMOVED (with reasons):
 # scipy            → NOT directly imported anywhere; was only a transitive dep of statsmodels
 # xlrd             → NOT used; .xlsx files use openpyxl, .csv files need no engine
