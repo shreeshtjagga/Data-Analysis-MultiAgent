@@ -9,6 +9,8 @@ import json
 
 import logging
 
+import os
+
 import re
 
 import threading
@@ -160,21 +162,20 @@ async def classify_question(question: str) -> str:
         return 'reasoning'
 
     _ANALYTICAL_SIGNALS = (
-
         'how many', 'how much', 'total', 'count of', 'number of', 'average',
-
-        'sum of', 'maximum', 'minimum', 'what is the', 'what are the',
-
+        'sum of', 'maximum', 'minimum', 'what is the', 'what are the', 'what is',
         'list all', 'show all', 'top ', 'bottom ', 'highest', 'lowest',
-
         'most', 'least', 'sales report', 'report of', 'report for',
-
         'bikes in', 'sold in', 'made in', 'manufactured in', 'built in',
-
         'registered in', 'price of', 'find all', 'filter by', 'which row',
-
-        'which rows', 'show me all', 'give me all',
-
+        'which rows', 'show me all', 'give me all', 'cheapest', 'cheaper',
+        'cheap', 'expensive', 'priciest', 'costliest', 'which brand',
+        'which year', 'which model', 'which company', 'which category',
+        'which product', 'which state', 'which country', 'which city',
+        'which customer', 'which month', 'which day', 'what year',
+        'what brand', 'what model', 'what product', 'highest sale',
+        'lowest sale', 'best seller', 'top seller', 'largest', 'smallest',
+        'rank', 'ranking', 'difference between', 'in 19', 'in 20',
     )
 
     if any(sig in q for sig in _ANALYTICAL_SIGNALS):
@@ -219,7 +220,7 @@ async def classify_question(question: str) -> str:
 
             messages=[{'role': 'user', 'content': prompt}],
 
-            primary_model='llama-3.1-8b-instant',
+            primary_model=os.getenv('GROQ_MODEL', 'qwen/qwen3.8-27b'),
 
             temperature=0,
 
@@ -243,110 +244,76 @@ async def classify_question(question: str) -> str:
 
     return 'analytical'
 
-def _build_codegen_prompt(question: str, columns: list[str], dtypes: dict[str, str], sample_values: dict[str, list]) -> str:
+def _build_codegen_prompt(question: str, columns: list[str], dtypes: dict[str, str], sample_values: dict[str, list], conversation_history: Optional[list[dict]] = None) -> str:
+    context_str = ""
+    if conversation_history:
+        recent_msgs = []
+        for msg in conversation_history[-4:]:
+            role = str(msg.get('role', '')).capitalize()
+            content = str(msg.get('content', '')).strip()[:300]
+            if content:
+                recent_msgs.append(f"{role}: {content}")
+        if recent_msgs:
+            context_str = f"PREVIOUS CONVERSATION CONTEXT (use to resolve pronouns like 'its', 'this', 'that', 'that model'):\n" + "\n".join(recent_msgs) + "\n\n"
 
     return (
-
         f'You are a pandas expert. Write ONLY executable Python/pandas code.\n\n'
-
+        f'{context_str}'
         f'DATASET INFO:\n'
-
         f'- DataFrame is already loaded as `df`\n'
-
         f'- Columns: {columns}\n'
-
         f'- Dtypes: {json.dumps(dtypes, default=str)}\n'
-
         f'- Sample values per column: {json.dumps(sample_values, default=str)}\n\n'
-
         f'QUESTION: "{question}"\n\n'
-
         f'RULES:\n'
-
         f'1. Store the final answer in a variable called `result`\n'
-
         f'2. Use EXACT column names from the list above (case-sensitive)\n'
-
         f'3. Do NOT import anything — `pd` and `np` are already available\n'
-
         f'4. `result` must be a scalar, dict, Series, or small DataFrame\n'
-
         f'5. For counts: use .shape[0] or .value_counts() or .groupby().size()\n'
-
         f'6. For filters: match dtypes exactly. If a year column is int64, compare with int not string\n'
-
         f'7. Always .head(20) on large results to prevent memory issues\n'
-
         f'8. If the question asks about a specific entity (brand, model, state), FILTER for it\n'
-
         f'9. For "sales report" or "report of X": compute count, average price, top models/states\n'
-
         f'10. Never use print() — just assign to `result`\n'
-
         f'11. If the question asks about "sales", "volume", "count", or "sold" by year, prefer '
-
         f'grouping/filtering by "Year of Manufacture" (or similar manufacture year column) rather than "Registration Year".\n'
-
-        f'12. For outlier detection: use IQR method — '
-
+        f'12. For "which [brand/category] is cheaper / cheapest / most expensive overall": compute average or median price grouped by that category, e.g. df.groupby("Brand")["Price"].mean().sort_values()\n'
+        f'13. For "highest / lowest [metric] in [year]": filter by year first, e.g. df[df["Year"] == 2021], then find max/min or top rows.\n'
+        f'14. For "which year had highest / lowest sales": group by year, sum/count sales, sort descending, e.g. df.groupby("Year")["Sales"].sum().idxmax()\n'
+        f'15. For outlier detection: use IQR method — '
         f'Q1=df[col].quantile(0.25), Q3=df[col].quantile(0.75), IQR=Q3-Q1, '
-
         f'outliers = df[(df[col] < Q1-1.5*IQR) | (df[col] > Q3+1.5*IQR)]\n'
-
-        f'13. For missing value counts: use df.isnull().sum() or df[col].isnull().sum()\n'
-
-        f'14. For data type summary: use df.dtypes.to_dict() or df.dtypes.astype(str).to_dict()\n'
-
-        f'15. Available builtins: int, float, str, len, sum, min, max, abs, round, '
-
-        f'list, dict, set, tuple, isinstance, bool, any, all, range, enumerate, zip, sorted\n\n'
-
+        f'16. For missing value counts: use df.isnull().sum() or df[col].isnull().sum()\n'
+        f'17. For data type summary: use df.dtypes.to_dict() or df.dtypes.astype(str).to_dict()\n'
+        f'18. Available builtins: int, float, str, len, sum, min, max, abs, round, '
+        f'list, dict, set, tuple, isinstance, bool, any, all, range, enumerate, zip, sorted\n'
+        f'19. Pronoun / Follow-up Resolution: If the question uses pronouns like "its", "it", "this model", "its cost", "what is its price" and refers to an entity named in previous conversation (e.g. "Meteor 350"), filter df for that specific entity (e.g. df[df["Model"].astype(str).str.lower().str.contains("meteor 350", na=False)]) and extract its metric/price.\n\n'
         f'Return ONLY the code. No markdown fences. No explanation.'
-
     )
 
-async def generate_pandas_code(question: str, df: pd.DataFrame) -> str:
-
+async def generate_pandas_code(question: str, df: pd.DataFrame, conversation_history: Optional[list[dict]] = None) -> str:
     columns = df.columns.tolist()
-
     dtypes = {col: str(df[col].dtype) for col in columns}
-
     sample_values = {}
-
     for col in columns:
-
         if df[col].dtype == 'object' or str(df[col].dtype) == 'category':
-
             top = df[col].value_counts().head(5).index.tolist()
-
             sample_values[col] = [str(v) for v in top]
-
         elif pd.api.types.is_numeric_dtype(df[col]):
-
             sample_values[col] = [f'min={df[col].min()}', f'max={df[col].max()}']
 
-    prompt = _build_codegen_prompt(question, columns, dtypes, sample_values)
-
+    prompt = _build_codegen_prompt(question, columns, dtypes, sample_values, conversation_history)
     sys_msg = {'role': 'system', 'content': 'You are a pandas code generator. Output ONLY valid Python code. No markdown. No explanation. No ```.'}
-
     user_msg = {'role': 'user', 'content': prompt}
-
     code = await call_groq_with_fallback(
-
         messages=[sys_msg, user_msg],
-
-        primary_model='llama-3.3-70b-versatile',
-
+        primary_model=os.getenv('GROQ_PLANNER_MODEL', os.getenv('GROQ_MODEL', 'qwen/qwen3.8-27b')),
         temperature=0,
-
         max_tokens=500,
-
     )
-
     if code.startswith('```'):
-
         code = code.split('\n', 1)[-1].rsplit('```', 1)[0].strip()
-
     return code
 
 def _validate_code(code: str) -> Optional[str]:
@@ -451,28 +418,56 @@ def _exec_with_timeout(code: str, namespace: dict, timeout: int = _MAX_EXEC_TIME
 
     return error_holder[0]
 
+async def fix_pandas_code(question: str, df: pd.DataFrame, failed_code: str, error_message: str) -> str:
+    columns = df.columns.tolist()
+    sample_preview = {c: [str(v) for v in df[c].dropna().head(3)] for c in columns[:8]}
+    prompt = (
+        f"You are a pandas expert. The following python code failed with error:\n"
+        f"ERROR: {error_message}\n"
+        f"FAILED CODE:\n{failed_code}\n\n"
+        f"ORIGINAL QUESTION: \"{question}\"\n"
+        f"ACTUAL DATAFRAME COLUMNS: {columns}\n"
+        f"SAMPLE VALUES: {json.dumps(sample_preview, default=str)}\n\n"
+        f"Fix the code and store the final answer in variable `result`.\n"
+        f"Return ONLY the fixed python code. No markdown fences. No explanation."
+    )
+    sys_msg = {'role': 'system', 'content': 'You are a pandas code generator. Output ONLY valid Python code. No markdown. No explanation. No ```.'}
+    user_msg = {'role': 'user', 'content': prompt}
+    code = await call_groq_with_fallback(
+        messages=[sys_msg, user_msg],
+        primary_model=os.getenv('GROQ_PLANNER_MODEL', os.getenv('GROQ_MODEL', 'qwen/qwen3.8-27b')),
+        temperature=0,
+        max_tokens=500,
+    )
+    if code.startswith('```'):
+        code = code.split('\n', 1)[-1].rsplit('```', 1)[0].strip()
+    return code
+
+def _prepare_execution_df(df: pd.DataFrame) -> pd.DataFrame:
+    df_copy = df.copy()
+    existing_cols = list(df_copy.columns)
+    for col in existing_cols:
+        col_str = str(col)
+        lower_col = col_str.lower()
+        if lower_col not in df_copy.columns:
+            df_copy[lower_col] = df_copy[col]
+        clean_col = re.sub(r'[^a-z0-9]', '', lower_col)
+        if clean_col and clean_col not in df_copy.columns:
+            df_copy[clean_col] = df_copy[col]
+    return df_copy
+
 def safe_execute(code: str, df: pd.DataFrame) -> dict:
-
     error = _validate_code(code)
-
     if error:
-
         return {'result': None, 'error': error, 'code': code}
-
-    namespace = {'df': df.copy(), 'pd': pd, 'np': np}
-
+    prepared_df = _prepare_execution_df(df)
+    namespace = {'df': prepared_df, 'pd': pd, 'np': np}
     exec_error = _exec_with_timeout(code, namespace)
-
     if exec_error:
-
         return {'result': None, 'error': exec_error, 'code': code}
-
     result = namespace.get('result')
-
     if result is None:
-
         return {'result': None, 'error': "Code ran but 'result' was None", 'code': code}
-
     return {'result': result, 'error': None, 'code': code}
 
 def format_result(result: Any) -> str:
