@@ -1,202 +1,221 @@
-# DataPulse — Multi-Agent AI Data Analysis Platform
+# DataPulse: Agentic AI Data Analysis Platform
 
-A multi-agent AI data intelligence platform that ingests raw tabular datasets (CSV/XLSX) and automatically produces deep statistical analyses, interactive visualizations, conversational natural-language querying, and executive AI insights.
+DataPulse is a full-stack Agentic AI platform that transforms raw CSV and Excel files into interactive data analysis dashboards.
 
----
+It automatically cleans data, calculates statistics, generates visualizations, and produces insights using a coordinated multi-agent pipeline. Users can also chat with their dataset, request charts, and ask questions about existing visualizations.
 
-## Overview & Problem Solved
+## Features
 
-**DataPulse** turns raw tabular data (`.csv`, `.xlsx`) into actionable intelligence in seconds using a multi-agent AI pipeline.
+- Multi-agent data analysis pipeline
+- Automatic data cleaning and preprocessing
+- Statistical analysis, correlations, and outlier detection
+- Automatic Plotly chart generation
+- AI-generated insights and recommendations
+- Natural-language chat with datasets
+- On-demand chart generation through chat
+- Grounded answers using real pandas computations
+- LLM fallback handling
+- Analysis history and caching
+- CSV and XLSX support
 
-- **Eliminates the Analyst Bottleneck:** Replaces hours of manual Python/SQL querying and Excel pivot-tables with instant automated profiling.
-- **Replaces Rigid Dashboards:** Allows users to chat directly with their dataset in natural language to answer ad-hoc questions on the fly.
-- **Zero-Hallucination Math:** Decouples AI reasoning from mathematical computations — all calculations are executed deterministically on the dataset for 100% numerical accuracy.
-- **Privacy-First & Self-Hostable:** Can run completely offline and locally (`USE_LOCAL_DB=true`) so sensitive data never leaves your environment.
+## Technologies
 
----
+- Python
+- FastAPI
+- React
+- Pandas
+- NumPy
+- SciPy
+- Plotly
+- Groq API
+- PostgreSQL / SQLite
+- Redis
+- Supabase
+- Docker
 
-## Architecture & How It Works
+## Architecture
 
-DataPulse orchestrates a modular pipeline of specialized AI agents to process, analyze, and visualize data in seconds:
-
-```
-┌─────────────────┐       ┌────────────────────────────────────────────────────────┐       ┌─────────────────┐
-│                 │       │                     FastAPI Engine                     │       │                 │
-│  User Dataset   │ ────► │  1. Architect Agent   (Schema, profiling & anomalies)  │ ────► │  React / Vite   │
-│   (CSV / XLSX)  │       │  2. Statistician      (Distributions, metrics & trends)│       │    Dashboard    │
-│                 │       │  3. Visualizer Agent  (Plotly interactive chart engine)│       │  & AI Data Chat │
-└─────────────────┘       │  4. Insights Agent    (Groq LLM executive synthesis)   │       └─────────────────┘
-                          └────────────────────────────────────────────────────────┘
-                                     │                              │
-                            ┌─────────────────┐            ┌─────────────────┐
-                            │ PostgreSQL / DB │            │   Redis Cache   │
-                            └─────────────────┘            └─────────────────┘
-```
-
-### Specialized Agents:
-- **Architect Agent:** Inspects schema types, validates missing values, evaluates data cleanliness, and infers semantic column roles.
-- **Statistician Agent:** Computes central tendencies, skewness, variance, correlations, and dataset distributions.
-- **Visualizer Agent:** Recommends optimal chart representations and compiles reactive, interactive Plotly visualization specs.
-- **Insights Agent:** Powered by high-throughput Groq LLMs to produce strategic summaries, actionable opportunities, and executive takeaways.
-- **Conversational Chat Engine:** Enables natural language querying over active datasets with real-time numeric calculations and query resolution.
-
----
-
-## Key Features
-
-- **Automated Instant Profiling:** Upload datasets to generate full reports, key KPIs, and distribution metrics automatically.
-- **Natural Language Data Chat:** Chat with your data to run ad-hoc calculations, filter rows, aggregate values, and get answers in plain English.
-- **Interactive Visualizations:** Zoomable, filterable Plotly charts with auto-selected visual dimensions.
-- **Secure Authentication & Sessions:** Supabase Auth with Google OAuth & Email/Password, JWT validation, and session inactivity monitors.
-- **Flexible Data Tier:** Works with external managed PostgreSQL (Supabase / AWS RDS / Neon) or isolated local fallback mode.
-- **High-Performance Caching:** Upstash / Redis query caching with graceful in-memory and Parquet storage fallbacks.
-
----
-
-## Environment Configuration
-
-DataPulse uses environment variables to configure authentication, databases, and AI models.
-
-Create a `.env` file in the **project root** (see [`.env.example`](file:///.env.example)):
-
-```env
-# ------------------------------------------------------------------------------
-# 1. High-Performance LLM (Groq API)
-# ------------------------------------------------------------------------------
-GROQ_API_KEY=gsk_your_groq_api_key_here
-GROQ_MODEL=qwen/qwen3.8-27b
-
-# ------------------------------------------------------------------------------
-# 2. Authentication & Google OAuth (Supabase)
-# ------------------------------------------------------------------------------
-# Set USE_LOCAL_DB=true for offline local testing without Supabase/Cloud DB
-USE_LOCAL_DB=false
-SUPABASE_URL=https://your-project-id.supabase.co
-SUPABASE_ANON_KEY=your_supabase_anon_key
-SUPABASE_SERVICE_ROLE_KEY=your_supabase_service_role_key
-
-# ------------------------------------------------------------------------------
-# 3. External Database (PostgreSQL / Supabase / Neon / AWS RDS)
-# ------------------------------------------------------------------------------
-DATABASE_URL=postgresql://postgres:your_password@your_host:5432/postgres
-DB_SSL=require
-
-# ------------------------------------------------------------------------------
-# 4. Caching Layer (Redis / Upstash) [Optional]
-# ------------------------------------------------------------------------------
-REDIS_URL=rediss://default:your_redis_password@your_redis_host:6379
-
-# ------------------------------------------------------------------------------
-# 5. App & CORS Settings
-# ------------------------------------------------------------------------------
-APP_ENV=development
-CORS_ORIGINS=http://localhost:5173,http://localhost:3000
-MAX_UPLOAD_BYTES=26214400
+```text
+CSV / Excel Upload
+        |
+        v
++-------------------+
+| Architect Agent   |
+| Cleaning + Schema |
++---------+---------+
+          |
+          v
++-------------------+
+| Statistician      |
+| Statistics +      |
+| Outliers +        |
+| Correlations      |
++---------+---------+
+          |
+       +--+--+
+       |     |
+       v     v
++----------+ +----------+
+|Visualizer| | Insights |
+|  Agent   | |  Agent   |
++----+-----+ +----+-----+
+     |            |
+     +-----+------+
+           |
+           v
+       Dashboard
+           |
+           v
+      Chat Engine
 ```
 
-### Frontend Configuration
-Create `frontend/.env` (see [`frontend/.env.example`](file:///frontend/.env.example)):
-```env
-VITE_SUPABASE_URL=https://your-project-id.supabase.co
-VITE_SUPABASE_ANON_KEY=your_supabase_anon_key
-VITE_API_BASE=/api
-```
+## Project Structure
 
-> **Local / Offline Setup:**  
-> To run completely offline or on a local network without cloud services, set `USE_LOCAL_DB=true` in `.env`. The backend will automatically use local SQLite storage and mock authentication.
-
----
-
-## Quickstart (Running Without Scripts)
-
-### 1. Prerequisites
-- **Python:** 3.11+ ([python.org](https://www.python.org/downloads/))
-- **Node.js:** 18+ ([nodejs.org](https://nodejs.org/))
-
----
-
-### 2. Backend Setup
-Open a terminal in the project root:
-
-```bash
-# 1. Navigate to backend
-cd backend
-
-# 2. Create and activate a Python virtual environment
-python -m venv .venv
-
-# On Windows:
-.venv\Scripts\activate
-# On macOS / Linux:
-source .venv/bin/activate
-
-# 3. Install dependencies
-pip install -r requirements.txt
-
-# 4. Launch FastAPI server
-uvicorn api:app --reload --host 0.0.0.0 --port 8000
-```
-> Backend API will be available at: **http://localhost:8000** (Interactive Docs: `http://localhost:8000/docs`)
-
----
-
-### 3. Frontend Setup
-Open a second terminal in the project root:
-
-```bash
-# 1. Navigate to frontend
-cd frontend
-
-# 2. Install Node dependencies
-npm install
-
-# 3. Start development server
-npm run dev
-```
-> Web Dashboard will be available at: **http://localhost:5173**
-
----
-
-## Repository Structure
-
-```
+```text
 Data-Analysis-MultiAgent/
 ├── backend/
-│   ├── agents/               # Multi-agent analysis pipeline
-│   │   ├── architect.py      # Schema inference & dataset profiling
-│   │   ├── statistician.py   # Statistical & numerical computations
-│   │   ├── visualizer.py     # Plotly visualization generator
-│   │   ├── plot_generator.py # Chart engine utilities
-│   │   └── insights.py       # Groq LLM executive synthesis
-│   ├── core/                 # Shared chat engine, LLM client, cache & utils
-│   │   ├── chat_engine.py    # Natural language data query engine
-│   │   ├── llm_client.py     # Groq client & retry handler
-│   │   ├── cache.py          # Redis / memory cache manager
-│   │   └── constants.py      # System prompts & configurations
-│   ├── models/               # Pydantic schemas & state models
-│   ├── storage/              # Parquet caching & persistent file helpers
-│   ├── api.py                # FastAPI route controllers & middleware
-│   ├── auth.py               # Supabase JWT & OAuth verification
-│   ├── db.py                 # SQLAlchemy async PostgreSQL engine & models
-│   ├── analysis_history.py   # Analysis record management
-│   ├── requirements.txt      # Backend Python dependencies
-│   └── Dockerfile            # Container deployment configuration
-│
+│   ├── agents/
+│   │   ├── architect.py
+│   │   ├── statistician.py
+│   │   ├── visualizer.py
+│   │   ├── plot_generator.py
+│   │   └── insights.py
+│   ├── core/
+│   │   ├── graph.py
+│   │   ├── chat_engine.py
+│   │   ├── data_agent.py
+│   │   ├── pandas_executor.py
+│   │   ├── llm_client.py
+│   │   ├── cache.py
+│   │   ├── upload_parsing.py
+│   │   ├── utils.py
+│   │   ├── state.py
+│   │   ├── constants.py
+│   │   ├── errors.py
+│   │   └── logging_config.py
+│   ├── models/
+│   ├── storage/
+│   ├── api.py
+│   ├── auth.py
+│   ├── db.py
+│   ├── analysis_history.py
+│   ├── requirements.txt
+│   └── Dockerfile
 ├── frontend/
 │   ├── src/
-│   │   ├── components/       # UI components, visualizers & error boundaries
-│   │   ├── pages/            # Dashboard & Auth views
-│   │   ├── api.js            # Axios client, Supabase auth & API helpers
-│   │   ├── App.jsx           # Application routing & state
-│   │   ├── main.jsx          # React DOM entrypoint
-│   │   └── index.css         # Global design system & theme
-│   ├── index.html            # Single page application HTML template
-│   ├── package.json          # Frontend dependencies & scripts
-│   ├── vite.config.js        # Vite bundler & proxy configuration
-│   └── .env.example          # Frontend environment template
-│
-├── .env.example              # Root environment variables template
-├── .gitignore                # Git ignore rules (secrets, venvs, caches)
-├── sample_sales_data.csv     # Sample dataset for testing
-└── README.md                 # Project documentation
+│   │   ├── components/
+│   │   ├── pages/
+│   │   ├── App.jsx
+│   │   ├── api.js
+│   │   ├── main.jsx
+│   │   └── index.css
+│   ├── index.html
+│   ├── package.json
+│   ├── package-lock.json
+│   ├── vite.config.js
+│   └── .env.example
+└── images/
+    ├── dashboard.png
+    ├── overview.png
+    ├── charts.png
+    └── chat.png
 ```
+
+## Requirements
+
+- Python 3.11+
+- Node.js 18+
+- PostgreSQL or SQLite
+- Redis (optional)
+- Groq API key
+
+## How to Run
+
+### 1. Clone the repository
+
+```bash
+git clone https://github.com/shreeshtjagga/Data-Analysis-MultiAgent.git
+cd Data-Analysis-MultiAgent
+```
+
+### 2. Create environment files
+
+```bash
+cp .env.example .env
+cp frontend/.env.example frontend/.env
+```
+
+### 3. Start the Backend
+
+Open a terminal:
+
+```bash
+cd backend
+
+python -m venv .venv
+```
+
+Activate the environment.
+
+**macOS / Linux:**
+
+```bash
+source .venv/bin/activate
+```
+
+**Windows:**
+
+```bash
+.venv\Scripts\activate
+```
+
+Install dependencies:
+
+```bash
+pip install -r requirements.txt
+```
+
+Start the backend:
+
+```bash
+uvicorn api:app --reload --host 0.0.0.0 --port 8000
+```
+
+### 4. Start the Frontend
+
+Open a **second terminal**:
+
+```bash
+cd frontend
+
+npm install
+npm run dev
+```
+
+### 5. Open the Application
+
+```text
+Frontend:   http://localhost:5173
+Backend:    http://localhost:8000
+API Docs:   http://localhost:8000/docs
+```
+
+Upload a CSV or XLSX file and start analyzing your data.
+
+## Screenshots
+
+### Dashboard
+
+![DataPulse Dashboard](images/dashboard.png)
+
+### Data Overview
+
+![Data Overview](images/overview.png)
+
+### Generated Charts
+
+![Generated Charts](images/charts.png)
+
+### AI Data Chat
+
+![AI Data Chat](images/chat.png)
